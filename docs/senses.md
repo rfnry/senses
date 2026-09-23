@@ -244,8 +244,10 @@ await session.unmute(triggered_by=host)
 ```
 
 `mute` is the output gate: while muted, no audio reaches the person, and anything being said is
-stopped and cut as an interruption would be. The session still hears and sees. A product's floor
-policy or mandate gate is built on these two verbs.
+stopped and cut as an interruption would be. A `say` or `prompt` while muted returns at once with
+nothing heard, and a response a live model starts on its own is cut before a word of it plays. The
+session still hears and sees. A product's floor policy or mandate gate is built on these two
+verbs.
 
 ### Seeing
 
@@ -259,8 +261,8 @@ With `video=True` the session keeps the camera's frames for a short window — `
 and `window_bytes` (8 MB), whichever is smaller — and drops the oldest by its own clock, so a client
 that stalls leaves an empty window rather than a stale picture. Senses never samples, describes or
 transcodes a frame; the client sends JPEG at the rate models consume (1 frame per second by
-default). In a live session every frame also streams to the model, the newest first when the model
-falls behind.
+default). In a live session every frame also streams to the model; when the model falls behind it
+gets the newest frame and the ones in between are skipped.
 
 `look` returns the newest frames, oldest first, each an `Image` followed by the `Text` of when it was
 taken — `frame at 12:03:04.200` — ready to hand any model that sees. With nothing in the window it
@@ -491,17 +493,19 @@ Everything the package exports, by role.
 
 `ConfigurationError` for a session that cannot do what is asked: a live model given with
 transcription, speech or turn models; `tools=` or `instructions=` without a live model; `turns=`
-without `transcription=`; `say` or `interrupt`
-without a voice, `prompt` or `inform` without a live model, `look` without `video=True`; a
-`window`, `window_bytes`, `turn_timeout` or `tool_timeout` that is not positive, a
-`turn_threshold` outside `(0, 1]`. `InputError` for a call the library refuses: empty text, `frames`
-below 1, a media part with both or neither of `data` and `url`, an audio frame whose bytes do not
-fill its samples, a tool called with bad arguments. `NotFoundError` when `look` finds no frame in the
-window. `ModelError` when an adapter breaks the contract — a decision answer that does not fit, a
-response ended before it started — or reports `LiveFailed`; a `say` or `prompt` waiting on the
-model raises it. `TransportError` for a verb on a closed session and for a `say` or `prompt` whose
-session closed before it was spoken. A client that sends a malformed frame after its hello has the
-frame dropped with a warning, never the session.
+without `transcription=`; `say` or `interrupt` without a voice, `prompt` or `inform` without a live
+model, `look` without `video=True`; a `window`, `window_bytes`, `turn_timeout` or `tool_timeout`
+that is not positive, a `turn_threshold` outside `(0, 1]`. `InputError` for a call the library
+refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
+audio frame whose bytes do not fill its samples, a tool called with bad arguments, an
+`authenticate` that returns an empty scope. `NotFoundError` when `look` finds no frame in the
+window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
+that ends before it starts, or starts before the last one is done — and the session closes; a
+`say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the
+one `say` that needed it; a turn check that fails is logged and the turn ends. `TransportError`
+for a verb on a closed session, for a `say` or `prompt` whose session closed before it was
+spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after
+its hello has the frame dropped with a warning, never the session.
 
 All under `SensesException` — the root takes the `Exception` suffix, every child ends in `Error`,
 the family's shape. Every message names the module that raised it, then says what went wrong in
