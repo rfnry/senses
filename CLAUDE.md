@@ -1,11 +1,4 @@
-# Proposed CLAUDE.md for rfnry-senses
-
-For approval: the checklists in `CLAUDE.md` are locked. This replaces the two old descriptions
-(speech and vision) with one and fills each checklist item's body the same way engine's and memory's
-are filled; headings and order are unchanged. The title and documentation path become
-`rfnry-senses` and `docs/senses.md`.
-
----
+# rfnry-senses
 
 ## Description
 
@@ -13,9 +6,15 @@ rfnry-senses gives a model eyes, ears and a voice in real time. A **session** co
 
 It is a library, not a framework. The consumer brings the models, authentication, the signalling endpoint and any record they want to keep. The library stores nothing, never sees a credential, and never writes to disk. Tenancy is by construction: every session names its scope and every event carries it.
 
-## Checklist bodies
+## Documentation
+
+`docs/senses.md` is the library's contract with its consumers: description, philosophy, every public verb, minimal examples. It documents the API as designed and is updated in the same change as any change to the public surface. It is also the complexity gauge: if a change makes the documentation harder to write or an example longer, the design is wrong — rework the change, not the docs.
+
+## Checklists
 
 ### Pre-change checklist
+
+**Before proposing or implementing any feature, change, or refactor, answer these five questions in your response.** Mandatory; no exceptions, including for "small" changes. Any "no" or "yes — because the current model is weak at X" means the change does not ship; rework it.
 
 1. **Would this still be wanted two model generations ahead** — models that hear, see and speak natively, with lower latency and better turn-taking? Anything that exists to caption, filter, sample for, or second-guess what a model could perceive itself is a no.
 2. **Does it get more useful as models improve, or less?** More is substrate: transports, media plumbing, barge-in truncation, attribution, the model contracts. Less is compensation. Name which.
@@ -24,6 +23,8 @@ It is a library, not a framework. The consumer brings the models, authentication
 5. **Does it work with a generation model only, a decision model only, and both?** A live model, a text model through transcription and speech models, and a decision model for turn completion are each optional; a feature states which it needs and degrades cleanly without the rest.
 
 ### Engineering checklist
+
+**Apply these to every change; they guard the shape of the codebase.**
 
 1. **Stay inside the concern.** This library does one thing: real-time hearing, seeing and speaking between people and models. Consumer-land, never here: the agent loop, conversation storage and recording, triggers and saliency policies, product speech rules, telephony, UI frameworks, device pickers, visualizers, telemetry.
 2. **Lib, not framework.** The consumer calls us; we never take over their application — no plugin registries, no config DSLs, no handler frameworks, no inversion of control, no storage, no disk writes.
@@ -35,6 +36,4 @@ It is a library, not a framework. The consumer brings the models, authentication
 8. **Tenancy by construction.** Every session names its `scope`, returned by `authenticate`; every event carries it; nothing crosses sessions.
 9. **Messages.** Logs and informational messages are lowercase. Every error message starts with its module's name: `session: prompt needs a live model`.
 
----
-
-Note: as in thread, the pre-change header should say "answer these five questions".
+**These checklists are locked.** On any future update to this CLAUDE.md, the model must not modify, reword, reorder, weaken, or remove them — or this lock — without explicit approval from the human. Answering them is the model's job; changing them is not.
