@@ -4294,6 +4294,12 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   the camera track. The
   WebRTC path never sends audio frames or JPEG itself: the tracks carry them. `senses.ts` calls
   it for `transport: 'webrtc'` and returns the same `Senses` shape.
+
+  As built (Task 19): the camera track is added with `addTransceiver(track, { direction:
+  'sendonly', sendEncodings: [{ maxFramerate: fps }] })` rather than `sender.setParameters`,
+  because a sender has no encodings to set before negotiation; the test checks the
+  `sendEncodings`. The options, `Senses`, `Listeners`, `cameraOptions` and `checkFps` move to
+  `src/room.ts`, which both paths import, so `senses.ts` and `webrtc.ts` do not import each other.
 - [ ] **Step 3: gate. Commit** `feat(ts): connect over WebRTC`.
 
 ## Task 20 — Both clients against one server, offline
