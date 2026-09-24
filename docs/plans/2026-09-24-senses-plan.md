@@ -220,7 +220,10 @@ addopts = "-m 'not integration and not webrtc and not live'"
   Poe tasks as the engine's, with `"test:integration" = "pytest -q -m integration"`, `"test:webrtc"
   = "pytest -q -m webrtc"`, `"test:e2e" = "pytest -q -m live"`. `[tool.mypy] files =
   ["src/rfnry_senses", "tests"]`, overrides `ignore_missing_imports` for `aiortc.*` and `av.*`.
-  Ruff `line-length = 100` (the decision-model block's formatting depends on it).
+  Ruff `line-length = 100` (the decision-model block's formatting depends on it), and
+  `[tool.ruff.format] exclude = ["src/rfnry_senses/models.py", "src/rfnry_senses/tools.py"]`: the
+  siblings keep the family blocks' long lines unformatted, so formatting the copies would break
+  byte-identity (found in Task 2).
 - [ ] **Step 2: `.gitignore`** — `__pycache__/`, `.venv/`, `*.egg-info/`, `node_modules/`,
   `packages/typescript/dist/`, `examples/**/uv.lock`, `.env*`.
 - [ ] **Step 3: failing test** — `tests/unit/test_errors.py`:
@@ -284,7 +287,7 @@ BLOCKS = {
     "answers like": ("models.py", "class ChoiceAnswerLike(Protocol):", "    def model(self) -> str | None: ...\n", ("engine", "memory")),
     "decision model": ("models.py", "class DecisionModel(Protocol):", "| DecidedLike: ...\n", ("engine",)),
     "tools": ("tools.py", "Result = ", "if n not in names})\n", ("engine", "memory", "thread")),
-    "identity": ("models.py", "class Identity(BaseModel):", "\n\n\n", ("thread",)),
+    "identity": ("models.py", "class Identity(BaseModel):", "    metadata: dict[str, Any] = {}\n", ("thread",)),
 }
 
 SOURCES = {
@@ -385,7 +388,10 @@ class Identity(BaseModel):
     metadata: dict[str, Any] = {}
 ```
 
-  If rfnry-thread has landed by now, copy its `Identity` instead and keep the test green.
+  If rfnry-thread has landed by now, copy its `Identity` instead and keep the test green. The
+  identity block ends at its `metadata` line, the marker rfnry-thread's own family test uses (a
+  `"\n\n\n"` end would cut to the end of this file, where `Identity` is last, and never match a
+  sibling that has code after it).
 - [ ] **Step 3: implement `tools.py`.** Copy `../engine/packages/python/src/rfnry_engine/tools/tools.py`
   whole, changing only the two import lines to `rfnry_senses.errors` and `rfnry_senses.models`.
 - [ ] **Step 4: gate** (the family tests pass against engine and memory; thread skips until it
