@@ -20,6 +20,7 @@ from rfnry_senses.contracts import (
     LiveDone,
     LiveFailed,
     LiveHeard,
+    LiveInterrupted,
     LiveModel,
     LiveSaid,
     LiveStarted,
@@ -35,7 +36,18 @@ from rfnry_senses.errors import (
     SensesException,
     TransportError,
 )
-from rfnry_senses.events import Closed, Event, Heard, Informed, Said, Silent, Speaking, ToolCalled
+from rfnry_senses.events import (
+    Closed,
+    Event,
+    Heard,
+    Informed,
+    Interrupted,
+    Muted,
+    Said,
+    Silent,
+    Speaking,
+    ToolCalled,
+)
 from rfnry_senses.models import Content, DecisionModel, Identity, Image, Part, ToolSpec
 from rfnry_senses.tools import ToolsLike
 from rfnry_senses.transport import Played, Transport
@@ -196,6 +208,9 @@ class Session:
         self._ready(text)
         done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
         u = Utterance(triggered_by, text, verbatim=True, done=done)
+        if self._muted:
+            await self._finish(u, "", interrupted=True)
+            return await done
         if self._connection is not None:
             connection = self._connection
             return await self._ask(u, lambda: connection.say(text))
@@ -206,6 +221,9 @@ class Session:
         connection = self._need_live("prompt")
         done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
         u = Utterance(triggered_by, done=done)
+        if self._muted:
+            await self._finish(u, "", interrupted=True)
+            return await done
         return await self._ask(u, lambda: connection.send_text(text, respond=True))
 
     async def inform(self, text: str, *, triggered_by: Identity) -> None:
@@ -217,6 +235,59 @@ class Session:
 
     async def close(self) -> None:
         await self._close("closed", None, None)
+
+    async def interrupt(self, *, triggered_by: Identity) -> Interrupted | None:
+        self._check_open()
+        if not self._voice:
+            raise ConfigurationError("session: interrupt needs a live model or a speech model")
+        return await self._cut(triggered_by)
+
+    async def mute(self, *, triggered_by: Identity) -> None:
+        self._check_open()
+        if self._muted:
+            return
+        self._muted = True
+        await self._emit(Muted(scope=self.scope, muted=True, triggered_by=triggered_by))
+        await self._drop_waiting()
+        await self._cut(triggered_by)
+
+    async def unmute(self, *, triggered_by: Identity) -> None:
+        self._check_open()
+        if not self._muted:
+            return
+        self._muted = False
+        await self._emit(Muted(scope=self.scope, muted=False, triggered_by=triggered_by))
+
+    async def _cut(self, cause: Identity) -> Interrupted | None:
+        u = self._utterance
+        if u is None:
+            return None
+        self._utterance = None
+        if self._playing is not None:
+            self._playing.cancel()
+        self._transport.clear_audio()
+        played = 0.0
+        if u.spoke:
+            await self._transport.send_control({"type": "stop", "utterance": u.number})
+            played = await self._await_played(u, PLAYED_GRACE, None)
+        heard = u.ledger.heard(played) if u.spoke else ""
+        if self._connection is not None:
+            await self._interrupt_model(round(played))
+        cut = Interrupted(scope=self.scope, heard=heard, triggered_by=cause)
+        await self._emit(cut)
+        await self._finish(u, heard, interrupted=True)
+        return cut
+
+    async def _interrupt_model(self, played_ms: int) -> None:
+        assert self._connection is not None
+        try:
+            await self._connection.interrupt(played_ms)
+        except Exception as exc:
+            log.warning("session: the live model could not cut its context: %s", exc)
+
+    async def _drop_waiting(self) -> None:
+        while self._waiting:
+            await self._finish(self._waiting.popleft(), "", interrupted=True)
 
     def _check_open(self) -> None:
         if self._closed:
@@ -309,6 +380,8 @@ class Session:
                 await self._response_done()
             elif isinstance(event, LiveToolCall):
                 self._spawn(self._call(event))
+            elif isinstance(event, LiveInterrupted):
+                await self._cut(self.person)
             elif isinstance(event, LiveFailed):
                 raise ModelError(f"session: the live model failed: {event.message}")
         raise ModelError("session: the live connection ended")
@@ -321,7 +394,12 @@ class Session:
         if previous is not None:
             self._utterance = None
             await self._finish(previous, previous.ledger.heard(None), interrupted=False)
-        self._start(self._causes.popleft() if self._causes else Utterance(None))
+        u = self._causes.popleft() if self._causes else Utterance(None)
+        self._start(u)
+        if self._muted:
+            self._utterance = None
+            await self._interrupt_model(0)
+            await self._finish(u, "", interrupted=True)
 
     async def _response_done(self) -> None:
         if not self._responding:
