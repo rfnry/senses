@@ -3685,6 +3685,12 @@ def test_no_vendor_is_named_in_the_library_or_its_contract() -> None:
     run as they are; a new block that cannot run this way must be added to one set, never
     skipped silently: `test_every_named_block_is_in_the_docs` asserts the set names all exist and
     first lines are unique, as the engine's test does.
+  Found while running it (Task 15): `session` is opened with `video=True` over a link shown one
+  frame, because the `SensesTools` block dispatches `look`; the harness's `link` is a `Loopback`
+  whose `send_control` yields once, so a frame shown before `async with` is in the window when the
+  `Seeing` block calls `look` (a real transport yields there too); and
+  `tests/integration/socket_adapter.py` joins the ruff format exclusions, since it is pinned to
+  the docs' block verbatim.
 - [ ] **Step 3: gate. Commit** `feat: the public surface, pinned by the docs`.
 
 ## Task 16 — The TypeScript package and its wire
