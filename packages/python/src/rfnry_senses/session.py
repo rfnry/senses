@@ -552,6 +552,9 @@ class Session:
                 if self._hold is not None:
                     self._hold.cancel()
                     self._hold = None
+                if self._utterance is not None or self._waiting:
+                    await self._cut(self.person)
+                    await self._drop_waiting()
                 await self._emit(
                     Heard(scope=self.scope, text=event.text, final=event.final, speaker=self.person)
                 )
