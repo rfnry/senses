@@ -4043,7 +4043,9 @@ export class Playback {
 
   `close()` must not report `MAX_SAFE_INTEGER`: `speaking` adds it to `played` — guard `stop` so
   it only calls `speaking(utterance)` when `utterance !== Number.MAX_SAFE_INTEGER`, or give
-  `close` its own loop; the executor picks the smaller change and covers it with a test.
+  `close` its own loop; the executor picks the smaller change and covers it with a test. (Done
+  in Task 17: `stop` skips `speaking` for `MAX_SAFE_INTEGER`; test `closing reports what was
+  playing and nothing more`.)
 
   `src/microphone.ts` — adapt `capture-worklet.ts` and `capture.ts` from
   `../rfnry-speech/packages/client-react/src/audio/`: the worklet source (a `LinearStreamResampler`
