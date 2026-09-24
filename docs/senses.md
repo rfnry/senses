@@ -36,8 +36,8 @@ speaks on its own, or answers what it heard, nothing is invented: the cause is e
 endpoint, and any record you want to keep. There is no handler registry, no background loop of
 ours in your application, no storage. Every verb is a function you call.
 
-**Tenancy by construction.** Every session belongs to the scope `authenticate` returned, every
-event carries it, and nothing crosses sessions.
+**Tenancy by construction.** Every session belongs to the scope your endpoint names, every event
+carries it, and nothing crosses sessions.
 
 ## Models
 
@@ -135,9 +135,9 @@ script and whose other methods record what they were given.
 
 ```python
 @app.websocket("/senses")
-async def senses(ws: WebSocket) -> None:
+async def senses(ws: WebSocket, user: User = Depends(signed_in)) -> None:
     await ws.accept()
-    link = await serve(Socket(ws), authenticate=authenticate)
+    link = await serve(Socket(ws), identity=user.identity, scope=user.org)
     if link is None:
         return
     async with Session(link, transcription=stt, speech=tts) as session:
@@ -147,13 +147,15 @@ async def senses(ws: WebSocket) -> None:
                 await session.say(run.reply, triggered_by=event.speaker)
 ```
 
-`serve` answers the browser's hello: `authenticate` receives what the client sent and returns who
-the person is and their scope, or `None` to refuse. The session hears the person, emits a
-`TurnEnded` when they finish, and your loop — here an engine agent — decides what to say. `Socket`
-adapts FastAPI's socket in a few lines ([Transports](#transports)). In the browser:
+Authentication is yours, on the upgrade: your framework knows who opened the socket — a cookie, a
+header, a token — before senses sees it, and `serve` takes the person and their scope from you. It
+reads the browser's hello, which carries only the protocol version, and returns the transport. The
+session hears the person, emits a `TurnEnded` when they finish, and your loop — here an engine
+agent — decides what to say. `Socket` adapts FastAPI's socket in a few lines
+([Transports](#transports)). In the browser:
 
 ```ts
-const senses = await connect({ url: 'wss://example.com/senses', hello: { token }, transport: 'websocket' })
+const senses = await connect({ url: 'wss://example.com/senses', transport: 'websocket' })
 ```
 
 ## Core features
@@ -297,7 +299,7 @@ gets the newest frame and the ones in between are skipped.
 
 That stream is how a live model sees as video. Today's live models take video as a sequence of
 image frames, so seeing as video is frames arriving continuously at the rate you set — the client's
-`camera.fps`. Over a WebSocket each frame is a JPEG: light, and ideal at 1–2 frames a second. Over
+`camera.fps`, changed while it runs with `setFps`. Over a WebSocket each frame is a JPEG: light, and ideal at 1–2 frames a second. Over
 WebRTC the camera is a real video track, with inter-frame compression and adaptive bitrate — the
 right path when your product raises the frame rate; the `webrtc` extra turns it back into JPEG
 frames on the server. A model that takes true video input would add `send_video` to the live
@@ -367,14 +369,23 @@ built on `mute`, `unmute`, `interrupt` and tools of your own.
 A session runs on a `Transport`. Two ship: a WebSocket, in the core, and WebRTC, with the `webrtc`
 extra. The transport is your choice per endpoint, never negotiated.
 
-`serve(connection, authenticate=)` takes any object with four methods — `receive()` returning text
-or bytes, `send_text`, `send_bytes`, `close` — reads the hello within `timeout` (10 s), and returns
-the transport, or `None` after telling the client why it was refused. `authenticate` sees only the
-hello — never headers or cookies, as in rfnry-thread. Browsers send cookies on a cross-site WebSocket
-upgrade and WebSockets have no CORS, so a socket that trusts cookies can be opened by any site the
-person visits (cross-site WebSocket hijacking); a token in the hello is something another site
-cannot read. If your application signs in with cookies, mint a short-lived token from your own
-endpoint and pass it as `hello`. FastAPI's socket adapts like this:
+`serve(connection, identity=, scope=)` takes any object with four methods — `receive()` returning
+text or bytes, `send_text`, `send_bytes`, `close` — and the person and scope your endpoint
+authenticated. It reads the hello, checks its protocol version, and returns the transport, or
+`None` after telling the client why it was refused. Senses never sees a credential: who opened the
+socket is decided by your framework on the upgrade, as in rfnry-thread. Authenticating a WebSocket
+is yours, and a short checklist covers it:
+
+- Serve it over `wss://` only.
+- If you authenticate with cookies, check the `Origin` header on the upgrade against your own
+  origins. Browsers send cookies on a cross-site upgrade and WebSockets have no CORS, so without
+  the check any site the person visits can open the socket as them (cross-site WebSocket
+  hijacking).
+- Prefer short-lived tokens: a browser cannot set headers on a WebSocket, so a token rides as a
+  subprotocol (`connect({ protocols: ['bearer', token] })`, accepted with
+  `ws.accept(subprotocol="bearer")`) or in a cookie.
+
+FastAPI's socket adapts like this:
 
 ```python
 class Socket:
@@ -389,28 +400,27 @@ class Socket:
 ```
 
 Media has its own socket, apart from any thread socket. Audio and camera frames are binary, each
-behind a small header; control frames are JSON: `hello` and `played` from the client; `ready`,
-`speaking`, `silent`, `stop`, `event` and `error` from the server. The frames are pinned by golden
-fixtures both clients' tests read.
+behind a small header; control frames are JSON: `hello` (the protocol version) and `played` from
+the client; `ready`, `speaking`, `silent`, `stop`, `event` and `error` from the server. The frames
+are pinned by golden fixtures both clients' tests read.
 
 WebRTC is the transport for browser voice: Opus bandwidth, loss concealment, and the echo
 cancellation that lets the person interrupt over speakers. One peer connection carries the audio,
 an optional camera track at the client's `fps` and a data channel for the control frames. You host
-the signalling endpoint — your own HTTP endpoint; the client posts its offer and hello to it, and
-`accept_offer` authenticates the offer with the hello's token, through the same `authenticate`:
+the signalling endpoint — your own HTTP endpoint, authenticated like any other; the client posts
+its offer to it, and `accept_offer` answers it for the person and scope you name:
 
 ```python
 @app.post("/senses/offer")
-async def offer(body: dict) -> dict:
-    link = await accept_offer(body["sdp"], hello=body["hello"], authenticate=authenticate)
-    if link is None:
-        raise HTTPException(status_code=401)
+async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
+    link = await accept_offer(body["sdp"], identity=user.identity, scope=user.org)
     asyncio.create_task(converse(link))
     return {"sdp": link.answer}
 ```
 
 `accept_offer` lives in `rfnry_senses.webrtc` and returns a `WebRTCTransport`; `converse` is the
-same function the WebSocket endpoint runs over its `link`. The inbound audio is resampled to
+same function the WebSocket endpoint runs over its `link`. The client sends its hello on the data
+channel, and a refused one ends the transport. The inbound audio is resampled to
 `sample_rate` (16 kHz) and camera frames are encoded to JPEG at the client's rate, inside the extra.
 
 `Loopback` is an in-process transport for tests — and for anything that is not a browser:
@@ -436,11 +446,12 @@ a robot's microphone is a `Transport` of your own: an `identity`, a `scope`, `in
 ```ts
 import { connect } from '@rfnry/senses'
 
-const senses = await connect({ url: 'wss://example.com/senses', hello: { token }, transport: 'websocket', camera: { fps: 1 } })
+const senses = await connect({ url: 'wss://example.com/senses', transport: 'websocket', camera: { fps: 1 } })
 const unsubscribe = senses.subscribe((event) => {
   if (event.kind === 'heard' && event.final) show(event.speaker, event.text)
   if (event.kind === 'said') show('assistant', event.heard)
 })
+senses.setFps(4)
 senses.mute()
 senses.pauseCamera()
 await senses.close()
@@ -448,10 +459,14 @@ await senses.close()
 
 It captures the microphone with echo cancellation and noise suppression and sends 16 kHz PCM, or an
 Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer endpoint and optional
-`iceServers`). With `camera` it sends frames at `fps` for as long as the camera runs: JPEG over a
-WebSocket, a video track capped at `fps` over WebRTC. It plays the voice, counts what it
-played, and answers `stop` with it on its own. `mute()`/`unmute()` silence the microphone,
-`pauseCamera()`/`resumeCamera()` the camera; `subscribe` receives the session's events and
+`iceServers`). It authenticates as your endpoint expects: cookies go with the request on their own,
+a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`. With
+`camera` it sends frames at `fps` for as long as the camera runs: JPEG over a WebSocket, a video
+track capped at `fps` over WebRTC. `setFps(fps)` changes the rate while it runs — the sampling
+interval over a WebSocket, the camera track's frame rate over WebRTC; without a camera it throws.
+It plays the voice, counts what it played, and answers `stop` with it on its own.
+`mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the camera;
+`subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`. Device pickers, visualizers and framework bindings
 are yours.
 
@@ -518,7 +533,7 @@ Post `heard`, not `text`: the record should hold what the person heard.
 
 ## Tenancy
 
-`scope` is the tenant: `authenticate` returns it with the person, the transport carries it, the
+`scope` is the tenant: your endpoint names it with the person, the transport carries it, the
 session takes it from the transport (`session.scope`), and every event carries it. Nothing is
 shared between sessions: each has its own model connections, window and queues. Tools pinned to a
 tenant — a thread, a memory corpus, an engine agent — are built for the session's scope.
@@ -543,7 +558,7 @@ model, `look` without `video=True`; a `window`, `window_bytes`, `turn_timeout` o
 that is not positive, a `turn_threshold` outside `(0, 1]`. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
 audio frame whose bytes do not fill its samples, a tool called with bad arguments, an
-`authenticate` that returns an empty scope. `NotFoundError` when `look` finds no frame in the
+empty scope given to `serve` or `accept_offer`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the

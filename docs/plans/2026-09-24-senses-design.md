@@ -53,8 +53,8 @@ Byte-identical with the other libraries, pinned by `test_family.py`:
 Errors: root `SensesException`; children `InputError`, `ConfigurationError`, `ModelError`,
 `TransportError`, `NotFoundError`. Rule-9 messages.
 
-Tenancy: `scope: str`, the engine's word. A session belongs to one scope, returned by
-`authenticate`. Senses stores nothing, so tenancy is carried on the session and its events rather
+Tenancy: `scope: str`, the engine's word. A session belongs to one scope, named by the consumer's
+authenticated endpoint and handed to `serve` or `accept_offer`. Senses stores nothing, so tenancy is carried on the session and its events rather
 than enforced in storage.
 
 ## 3. The model contracts
@@ -248,9 +248,10 @@ async with Session(link, live=live_model, tools=consult + ThreadTools(client, th
 
 One public `Transport` protocol, the same shape for both (`identity`, `scope`, `inbound()`,
 `send_audio(frame, utterance)`, `send_control(dict)`, `clear_audio()`, `close()`), so a consumer's own
-line — telephony, a meeting bridge — is a transport of theirs. `serve(connection, authenticate=)`
-reads the hello, calls the required `authenticate(hello) -> (Identity, scope) | None`, and returns
-the transport (or `None`, after an `error` frame); the consumer then builds the `Session` on it. The
+line — telephony, a meeting bridge — is a transport of theirs. `serve(connection, identity=,
+scope=)` takes the person and scope the consumer authenticated on the upgrade, reads the hello
+(the protocol version, nothing else), and returns the transport (or `None`, after an `error`
+frame); the consumer then builds the `Session` on it. The
 connection has four methods — `receive() -> str | bytes`, `send_text`, `send_bytes`, `close` —
 not the family's `receive_text`/`receive_bytes` pair: a media socket interleaves text and binary
 frames, and a caller cannot know which `receive_*` to await next (Starlette's `receive_text`
@@ -260,14 +261,15 @@ callback.)
 
 - **WebSocket** (core): binary frames with a small header — audio `[1][channels u8][sample_rate
   u32 LE][utterance u32 LE][PCM16 LE]`, camera `[2][JPEG]` — plus JSON control frames: `hello
-  {protocol, auth}` and `played {utterance, ms}` from the client; `ready`, `speaking
+  {protocol}` and `played {utterance, ms}` from the client; `ready`, `speaking
   {utterance}`, `silent {utterance}`, `stop {utterance}`, `event {event}` and `error {message}` from
   the server. The client answers `stop`, and the natural end of an utterance (`silent`), with
   `played`. Media uses its own socket, separate from any thread socket.
 - **WebRTC** (extra `rfnry-senses[webrtc]`, aiortc): one peer connection with an audio track and an
-  optional video track at the client's `fps`; controls on the data channel; `accept_offer(sdp, hello=,
-  authenticate=)` returns the transport with its `answer` SDP (the consumer hosts the signalling
-  endpoint; the client posts `{sdp, hello}` and reads `{sdp}`). The extra resamples inbound audio to
+  optional video track at the client's `fps`; controls on the data channel, the client's `hello`
+  first; `accept_offer(sdp, identity=, scope=)` returns the transport with its `answer` SDP (the
+  consumer hosts and authenticates the signalling endpoint; the client posts `{sdp}` and reads
+  `{sdp}`). The extra resamples inbound audio to
   `sample_rate` and encodes the camera track's frames to JPEG at the client's rate with the `av`
   aiortc already brings — the stripped item in §1 is the old general-purpose rgb24 wrapper, not
   this. Recommended for browser voice: Opus bandwidth, loss concealment, and echo cancellation that
@@ -278,14 +280,18 @@ callback.)
 The transport is an explicit choice, never negotiated. Camera-only sessions use WebSocket JPEG at the
 rate models consume (default 1 frame/s).
 
-**Authentication is the hello's token, nothing else.** As in rfnry-thread, `authenticate(hello)`
-sees only what the client put in its hello — never headers or cookies. Browsers send cookies on a
-cross-site WebSocket upgrade and WebSockets have no CORS, so a cookie-authenticated socket can be
-opened by any site the person visits (cross-site WebSocket hijacking); a token in the hello is
-something another site cannot read. An application that signs in with cookies mints a short-lived
-token from its own endpoint and passes it as the hello. The WebRTC offer endpoint is the consumer's
-own HTTP endpoint: the client posts `{sdp, hello}` and `accept_offer` authenticates the offer with
-the same token, through the same `authenticate`.
+**Authentication lives entirely at the consumer** (as in rfnry-thread; superseding the hello-token
+design of commit 7462388). There is no `authenticate` callback, no credential in the hello and no
+authentication deadline. The consumer authenticates the WebSocket upgrade with their own framework
+— cookies, headers or a token, over TLS — and hands the accepted socket to `serve(connection,
+identity=, scope=)`. The WebRTC offer endpoint is the consumer's own HTTP endpoint, authenticated the
+same way, which calls `accept_offer(sdp, identity=, scope=)`. The TypeScript client connects with
+whatever the endpoint expects: cookies on their own, a WebSocket token as a subprotocol
+(`protocols`), headers on the WebRTC offer request (`headers`); Python clients and tests pass
+`headers=`. The docs carry the consumer's checklist: `wss://`; with cookies, check the upgrade's
+`Origin` (cross-site WebSocket hijacking); prefer short-lived tokens. `identity` and `scope` are
+keyword-only on both (decided while folding this in: the call reads as who and where, and a
+positional swap of two plain values is not caught by types when `Identity` is built inline).
 
 **Seeing as video.** Today's live models take video as a sequence of image frames. "Seeing as
 video" is frames streaming to the live model continuously, at the rate the consumer sets (`fps` on
@@ -300,12 +306,16 @@ the live contract, additively; nothing here changes.
 
 Framework-free:
 
-- `connect({url, hello, transport: "websocket" | "webrtc"})`.
+- `connect({url, transport: "websocket" | "webrtc", protocols?, headers?})` — `protocols` are the
+  WebSocket subprotocols (a token, when the endpoint takes one), `headers` go on the WebRTC offer
+  request; cookies need neither.
 - Microphone capture with `getUserMedia` echo cancellation and noise suppression; camera frames
   sampled at `camera.fps` (default 1) as JPEG over WebSocket, or a video track capped at `fps` over
   WebRTC — sent continuously while the camera runs, which is how a live session sees as video.
 - Playback that tracks `played_ms` and reports it on interruption automatically.
-- `mute()` / `unmute()`, `pauseCamera()` / `resumeCamera()`.
+- `mute()` / `unmute()`, `pauseCamera()` / `resumeCamera()`, `setFps(fps)` — the WebSocket path
+  changes the sampling interval, the WebRTC path calls `applyConstraints({ frameRate })` on the
+  camera track; without a camera it throws.
 - `subscribe(listener) -> unsubscribe` for the session's events (every one but `Informed` and
   `ToolCalled`) and `{kind: "status", status: "open" | "closed"}`.
 
@@ -365,5 +375,8 @@ Integration: the WebSocket transport against a real socket; the WebRTC transport
 | `serve` returns the transport; the consumer builds the session | no session-factory callback; the loop stays the consumer's |
 | A four-method media connection (`receive() -> str \| bytes`) | text and binary frames interleave on one socket |
 | The utterance number rides in the audio header | stale frames are dropped in the client as well as the server |
-| Authentication is the hello's token only; the WebRTC offer carries the same hello | cookies ride cross-site WebSocket upgrades with no CORS (cross-site WebSocket hijacking); another site cannot read a token; mirrors rfnry-thread |
+| ~~Authentication is the hello's token only~~ — superseded by the next row | |
+| Authentication lives at the consumer: `serve(connection, identity=, scope=)` and `accept_offer(sdp, identity=, scope=)`; the hello carries only the protocol version; no `authenticate`, no deadline | the consumer's framework already authenticates HTTP and upgrades; senses never sees a credential; the cross-site hijacking risk is closed by the consumer's `Origin` check or tokens, documented as a checklist; mirrors rfnry-thread |
+| The WebRTC client sends its `hello` on the data channel | the protocol version is checked on both transports; the offer body stays `{sdp}` |
+| `setFps(fps)` on the TypeScript connection | a product raises or lowers the rate models see while the camera runs, without reconnecting |
 | Video is frames at the client's `fps`: JPEG over WebSocket, a video track over WebRTC | live models take video as image frames; WebRTC's inter-frame compression serves higher rates; true video input would add `send_video` additively |

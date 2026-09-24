@@ -27,7 +27,8 @@ for both clients — the thread plan should adopt it or name its difference.
 
 **Spec:** `docs/plans/2026-09-24-senses-design.md` (as corrected in commit "docs: senses.md — the
 contract, from the design", then "docs: senses — streamed say, hello-token auth, video path
-explained") and `docs/senses.md`. Depends on: the content parts, landed in
+explained", then "docs: senses — auth at the consumer's upgrade; setFps; OpenAI transcription in
+examples") and `docs/senses.md`. Depends on: the content parts, landed in
 rfnry-engine and rfnry-memory; `engine.tool(agent, *, scope, …) -> Tools`
 (`../engine/docs/plans/2026-09-24-engine-tool-plan.md`, engine commit 79af329) for the two-minds
 examples; rfnry-thread's `Identity` block and `ThreadTools` for `test_family.py` and the
@@ -79,10 +80,19 @@ examples; rfnry-thread's `Identity` block and `ThreadTools` for `test_family.py`
     the cause joins the FIFO then. A cut stops reading the stream and `aclose()`s it. An empty
     stream returns an empty `Said`; a stream that raises fails only its `say`, with its own error.
     `SensesTools`' `say` stays text (a model's tool arguments are a string).
-11. **Authentication is the hello's token only**, as in rfnry-thread. `authenticate` receives the
-    hello's `auth` over the WebSocket and the posted `hello` on the WebRTC offer — the same value,
-    the client's `hello` option — and nothing else: `Connection` exposes no headers or cookies, by
-    design (cross-site WebSocket hijacking; docs, Transports).
+11. **Authentication lives at the consumer** (superseding the hello-token decision), as in
+    rfnry-thread. `serve(connection, *, identity, scope)` and `accept_offer(sdp, *, identity, scope)`
+    take who the person is and their scope from the consumer's authenticated endpoint; there is no
+    `authenticate` callback, no credential in the hello (it carries only `protocol`) and no hello
+    deadline. `Connection` still exposes no headers or cookies: the consumer's framework reads them
+    on the upgrade, before senses. The WebRTC client sends its `hello` as the first data-channel
+    message; a wrong protocol there gets an `error` frame and ends the transport. The TypeScript
+    client takes `protocols` (WebSocket subprotocols) and `headers` (the WebRTC offer request);
+    cookies need neither.
+12. **`setFps(fps)`** on the TypeScript connection: the WebSocket path restarts the camera's
+    sampling interval at the new rate; the WebRTC path calls `applyConstraints({ frameRate: fps })`
+    on the camera track. A non-positive `fps` throws `senses: fps must be positive`; no camera
+    throws `senses: setFps needs a camera`.
 
 ## Pre-change checklist
 
@@ -109,7 +119,7 @@ examples; rfnry-thread's `Identity` block and `ThreadTools` for `test_family.py`
   Vendor names appear only in `examples/*/providers.py`, their `pyproject.toml` and this plan.
 - Every error message starts with its module's file stem — `session:`, `wire:`, `transport:`,
   `contracts:`, `models:`, `tools:`, `senses_tools:` — then lowercase (rule 9); logs are lowercase.
-- `scope` comes from `authenticate` through the transport; every event carries it (rule 8).
+- `scope` comes from the consumer's endpoint through the transport; every event carries it (rule 8).
 - The library writes nothing to disk; tests that write golden fixtures do so only under
   `RFNRY_WRITE_FIXTURES=1`.
 - `docs/senses.md` changes in the same commit as any change to the public surface (rule 5).
@@ -165,7 +175,7 @@ generator, and `_play`'s `finally` closes it either way
 | WS framing | fresh (the old ws-pcm hid a JSON+base64 frame inside the channel and ws-frames had no header); hello handling adapted from `transport/ws_pcm.py` `wrap_ws_for_pcm` and `ws_frames.py` |
 | WebSocket outbound queue, `clear` | adapted: `rfnry_speech_server/transport/websocket.py` `_outbound`, `clear_outbound`; controls now share the queue so order holds |
 | aiortc outbound voice track: 20 ms rechunk, pacing, prebuffer | adapted: `rfnry_speech_server/transport/webrtc.py` `_PCMOutboundTrack` (numpy removed) |
-| aiortc inbound resample, data-channel controls, `accept_offer` | adapted: same file; `authenticate` and the `answer` attribute are fresh |
+| aiortc inbound resample, data-channel controls, `accept_offer` | adapted: same file; the data-channel hello and the `answer` attribute are fresh |
 | camera track → JPEG | adapted: `rfnry_vision_server/transport/convert.py` `_codec_for`/`_encode` (input is already an `av.VideoFrame`) |
 | capture worklet, stream resampler, PCM16 | adapted: `../rfnry-speech/packages/client-react/src/audio/capture-worklet.ts`, `capture.ts`, `resampler.ts` |
 | playback with played ms | adapted: `client-react/src/audio/playback.ts` (`flush`, `_inFlightMs`); per-utterance epochs and the fence are fresh |
@@ -2854,7 +2864,6 @@ _AUDIO = struct.Struct("<BBII")
 class Hello(BaseModel):
     type: Literal["hello"]
     protocol: int
-    auth: dict[str, Any] = Field(default_factory=dict)
 
 
 class _Played(BaseModel):
@@ -2945,13 +2954,13 @@ def controls() -> dict[str, dict[str, Any]]:
         "closed": Closed(scope="acme", at=AT, reason="hung_up"),
     }
     return {
-        "hello": {"type": "hello", "protocol": 1, "auth": {"token": "t0k3n"}},
+        "hello": {"type": "hello", "protocol": 1},
         "ready": {"type": "ready"},
         "played": {"type": "played", "utterance": 3, "ms": 1200},
         "speaking": {"type": "speaking", "utterance": 3},
         "silent": {"type": "silent", "utterance": 3},
         "stop": {"type": "stop", "utterance": 3},
-        "error": {"type": "error", "message": "transport: not authenticated"},
+        "error": {"type": "error", "message": "transport: protocol 2 is not supported; this server speaks 1"},
         **{f"event-{kind}": {"type": "event", "event": event.model_dump(mode="json")} for kind, event in events.items()},
     }
 
@@ -2981,7 +2990,7 @@ def test_frames_decode_to_what_was_encoded() -> None:
     assert isinstance(frame, AudioFrame) and frame.sample_rate == 16000 and frame.data == b"\x00\x01\xff\x7f"
     image = decode(BINARY["image"])
     assert isinstance(image, Image) and image.data == b"\xff\xd8\xff\xd9"
-    assert parse_hello(json.dumps(controls()["hello"])).auth == {"token": "t0k3n"}
+    assert parse_hello(json.dumps(controls()["hello"])).protocol == 1
     assert parse_played(json.dumps(controls()["played"])) == Played(utterance=3, ms=1200)
 
 
@@ -3018,15 +3027,13 @@ def test_bad_control_frames_are_refused() -> None:
 **Interfaces:**
 
 ```python
-Authenticate = Callable[[dict[str, Any]], Awaitable[tuple[Identity, str] | None]]
-
 class Connection(Protocol):
     async def receive(self) -> str | bytes: ...
     async def send_text(self, data: str) -> None: ...
     async def send_bytes(self, data: bytes) -> None: ...
     async def close(self) -> None: ...
 
-async def serve(connection: Connection, *, authenticate: Authenticate, timeout: float = 10.0) -> WebSocketTransport | None
+async def serve(connection: Connection, *, identity: Identity, scope: str) -> WebSocketTransport | None
 
 class WebSocketTransport:            # a Transport
     identity: Identity
@@ -3051,11 +3058,11 @@ from rfnry_senses.wire import decode, encode_audio
 
 from .fakes import ANA, HOST, ScriptedTranscription, Tone, next_of, pcm, until
 
-HELLO = json.dumps({"type": "hello", "protocol": 1, "auth": {"token": "ok"}})
+HELLO = json.dumps({"type": "hello", "protocol": 1})
 
 
 class Socket:
-    def __init__(self, *messages: str | bytes) -> None:
+    def __init__(self, *messages: str | bytes | None) -> None:
         self.inbox: asyncio.Queue[str | bytes | None] = asyncio.Queue()
         for message in messages:
             self.inbox.put_nowait(message)
@@ -3086,48 +3093,39 @@ class Socket:
         return [json.loads(m) for m in self.sent if isinstance(m, str)]
 
 
-async def authenticate(auth: dict[str, Any]) -> tuple[Any, str] | None:
-    return (ANA, "acme") if auth.get("token") == "ok" else None
-
-
-async def test_serve_answers_the_hello_with_the_person_and_their_scope() -> None:
+async def test_serve_reads_the_hello_and_carries_the_person_and_their_scope() -> None:
     socket = Socket(HELLO)
     assert isinstance(socket, Connection)
-    link = await serve(socket, authenticate=authenticate)
-    assert link is not None and link.identity == ANA and link.scope == "acme"
+    link = await serve(socket, identity=ANA, scope="acme")
+    assert link is not None and link.identity == ANA and link.scope == "acme" and socket.sent == []
 
 
 @pytest.mark.parametrize(
     ("first", "message"),
     [
-        (json.dumps({"type": "hello", "protocol": 1, "auth": {"token": "no"}}), "transport: not authenticated"),
         (json.dumps({"type": "hello", "protocol": 2}), "transport: protocol 2 is not supported; this server speaks 1"),
         (b"\x01", "wire: the first frame must be a hello"),
     ],
 )
 async def test_serve_refuses_and_says_why(first: str | bytes, message: str) -> None:
     socket = Socket(first)
-    assert await serve(socket, authenticate=authenticate) is None
+    assert await serve(socket, identity=ANA, scope="acme") is None
     assert socket.texts() == [{"type": "error", "message": message}] and socket.closed
 
 
-async def test_serve_waits_for_the_hello_no_longer_than_its_timeout() -> None:
-    socket = Socket()
-    assert await serve(socket, authenticate=authenticate, timeout=0.01) is None
-    assert socket.texts() == [{"type": "error", "message": "transport: no hello within 0.01 s"}]
+async def test_a_client_gone_before_its_hello_is_no_transport() -> None:
+    socket = Socket(None)
+    assert await serve(socket, identity=ANA, scope="acme") is None
 
 
 async def test_an_empty_scope_is_the_consumers_bug() -> None:
-    async def scopeless(auth: dict[str, Any]) -> tuple[Any, str]:
-        return ANA, ""
-
-    with pytest.raises(InputError, match="^transport: authenticate returned an empty scope$"):
-        await serve(Socket(HELLO), authenticate=scopeless)
+    with pytest.raises(InputError, match="^transport: scope is empty$"):
+        await serve(Socket(HELLO), identity=ANA, scope="")
 
 
 async def test_a_session_runs_over_the_socket(caplog: pytest.LogCaptureFixture) -> None:
     socket, stt, tts = Socket(HELLO), ScriptedTranscription(), Tone()
-    link = await serve(socket, authenticate=authenticate)
+    link = await serve(socket, identity=ANA, scope="acme")
     assert link is not None
     async with Session(link, transcription=stt, speech=tts) as s:
         events = s.events()
@@ -3150,7 +3148,7 @@ async def test_a_session_runs_over_the_socket(caplog: pytest.LogCaptureFixture) 
 
 async def test_clearing_drops_queued_audio_and_keeps_controls() -> None:
     socket = Socket(HELLO)
-    link = await serve(socket, authenticate=authenticate)
+    link = await serve(socket, identity=ANA, scope="acme")
     assert link is not None
     socket.gate.clear()
     for _ in range(3):
@@ -3163,9 +3161,11 @@ async def test_clearing_drops_queued_audio_and_keeps_controls() -> None:
     assert isinstance(socket.sent[0], bytes) and json.loads(socket.sent[1]) == {"type": "stop", "utterance": 1}
 ```
 
-  (`caplog` needs the `rfnry_senses` logger to propagate, which it does by default.)
-  `authenticate` receives the hello's `auth` and nothing else (decision 11): no header or cookie
-  reaches it, and none should be added to `Connection`.
+  (`caplog` needs the `rfnry_senses` logger to propagate, which it does by default. `Socket(None)`
+  puts the disconnect first: `receive` raises, as a real socket does when the client leaves.)
+  `serve` takes the person and scope from the consumer (decision 11); no header or cookie reaches
+  senses, and none should be added to `Connection`. There is no hello deadline: the socket was
+  authenticated on its upgrade, and a client that leaves makes `receive` raise.
 - [ ] **Step 2: implement** `websocket.py`, complete:
 
 ```python
@@ -3175,7 +3175,7 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
 from rfnry_senses.contracts import AudioFrame
@@ -3186,8 +3186,6 @@ from rfnry_senses.wire import PROTOCOL, control, decode, encode_audio, parse_hel
 
 log = logging.getLogger("rfnry_senses")
 
-Authenticate = Callable[[dict[str, Any]], Awaitable[tuple[Identity, str] | None]]
-
 
 @runtime_checkable
 class Connection(Protocol):
@@ -3197,31 +3195,26 @@ class Connection(Protocol):
     async def close(self) -> None: ...
 
 
-async def serve(connection: Connection, *, authenticate: Authenticate, timeout: float = 10.0) -> WebSocketTransport | None:
+async def serve(connection: Connection, *, identity: Identity, scope: str) -> WebSocketTransport | None:
+    if not scope:
+        raise InputError("transport: scope is empty")
     try:
-        first = await asyncio.wait_for(connection.receive(), timeout)
+        first = await connection.receive()
         if not isinstance(first, str):
             raise InputError("wire: the first frame must be a hello")
-        hello = parse_hello(first)
-        if hello.protocol != PROTOCOL:
-            raise InputError(f"transport: protocol {hello.protocol} is not supported; this server speaks {PROTOCOL}")
-    except TimeoutError:
-        await _refuse(connection, f"transport: no hello within {timeout:g} s")
-        return None
+        check_hello(first)
     except InputError as exc:
         await _refuse(connection, str(exc))
         return None
     except Exception:
         return None
-    who = await authenticate(hello.auth)
-    if who is None:
-        await _refuse(connection, "transport: not authenticated")
-        return None
-    identity, scope = who
-    if not scope:
-        await _refuse(connection, "transport: not authenticated")
-        raise InputError("transport: authenticate returned an empty scope")
     return WebSocketTransport(connection, identity, scope)
+
+
+def check_hello(text: str) -> None:
+    hello = parse_hello(text)
+    if hello.protocol != PROTOCOL:
+        raise InputError(f"transport: protocol {hello.protocol} is not supported; this server speaks {PROTOCOL}")
 
 
 async def _refuse(connection: Connection, message: str) -> None:
@@ -3320,7 +3313,9 @@ class WebSocketTransport:
      it hangs up;
   2. the same through FastAPI with the docs' adapter: an app whose route is the docs' Getting
      started endpoint with `stt`/`tts`/`engine` replaced by fakes (an `engine` whose `run` returns
-     an object with `reply="For two."`), driven by `fastapi.testclient.TestClient` —
+     an object with `reply="For two."`) and `signed_in` a dependency that reads an `authorization`
+     header (403 without it — the consumer's own check, shown refusing the upgrade), driven by
+     `fastapi.testclient.TestClient` — `websocket_connect(..., headers=...)`,
      `websocket_connect`, `send_text(hello)`, `receive_json()` → `ready`, `send_bytes(audio)`,
      and after the scripted turn, binary audio frames and a `said` event with `heard == "For
      two."`.
@@ -3334,8 +3329,8 @@ class WebSocketTransport:
 **Interfaces:**
 
 ```python
-async def accept_offer(sdp: str, *, hello: dict[str, Any], authenticate: Authenticate, sample_rate: int = 16000,
-                       ice_servers: list[dict[str, Any]] | None = None) -> WebRTCTransport | None
+async def accept_offer(sdp: str, *, identity: Identity, scope: str, sample_rate: int = 16000,
+                       ice_servers: list[dict[str, Any]] | None = None) -> WebRTCTransport
 
 class WebRTCTransport:               # a Transport
     identity: Identity
@@ -3347,13 +3342,13 @@ class WebRTCTransport:               # a Transport
   pytest.mark.webrtc`; `pytest.importorskip("aiortc")`): an in-process client
   `RTCPeerConnection` adds a silence audio track (a `MediaStreamTrack` subclass returning 20 ms
   48 kHz s16 mono `av.AudioFrame`s, paced with `asyncio.sleep(0.02)`, pts advancing by 960) and
-  aiortc's `VideoStreamTrack`, creates data channel `"senses"`, records every JSON message it
-  receives and answers `stop`/`silent` with `{"type": "played", "utterance": n, "ms": 0}` /
+  aiortc's `VideoStreamTrack`, creates data channel `"senses"`, sends `{"type": "hello",
+  "protocol": 1}` when it opens, records every JSON message it receives and answers `stop`/`silent` with `{"type": "played", "utterance": n, "ms": 0}` /
   the full length, and collects frames from the answered audio track. Then:
 
 ```python
-    link = await accept_offer(client.localDescription.sdp, hello={"token": "ok"}, authenticate=authenticate)
-    assert link is not None and link.scope == "acme"
+    link = await accept_offer(client.localDescription.sdp, identity=ANA, scope="acme")
+    assert link.scope == "acme"
     await client.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
     stt, tts = ScriptedTranscription(), Tone()
     async with Session(link, transcription=stt, speech=tts, video=True) as s:
@@ -3365,11 +3360,13 @@ class WebRTCTransport:               # a Transport
         await until(lambda: len(received_audio) > 5, timeout=5)
     assert isinstance(parts[0], Image) and (parts[0].data or b"")[:2] == b"\xff\xd8"
     assert said.heard == "Hello there." and {"type": "ready"} in messages
-    assert await accept_offer(offer, hello={"token": "no"}, authenticate=authenticate) is None
 ```
 
-  The offer endpoint is the consumer's own HTTP endpoint; `accept_offer` authenticates the posted
-  `hello` with the same `authenticate` and token as the WebSocket (decision 11). The camera track
+  A second test: a client whose channel sends `{"type": "hello", "protocol": 2}` receives
+  `{"type": "error", "message": "transport: protocol 2 is not supported; this server speaks 1"}`
+  and the session over it closes `hung_up`; `accept_offer(sdp, identity=ANA, scope="")` raises
+  `InputError("transport: scope is empty")`. The offer endpoint is the consumer's own HTTP
+  endpoint, authenticated by the consumer before it calls `accept_offer` (decision 11). The camera track
   arrives at the client's `fps` (its `maxFramerate`, Task 19) and every frame is encoded to JPEG,
   so a live session receives frames continuously — the video path the docs explain.
 - [ ] **Step 2: implement** `webrtc.py`, complete (adapted as the table at the top says):
@@ -3393,7 +3390,7 @@ from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import InputError, TransportError
 from rfnry_senses.models import Identity, Image
 from rfnry_senses.transport import Played
-from rfnry_senses.websocket import Authenticate
+from rfnry_senses.websocket import check_hello
 from rfnry_senses.wire import control, parse_played
 
 __all__ = ["WebRTCTransport", "accept_offer"]
@@ -3462,6 +3459,7 @@ class WebRTCTransport:
         self._resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate)
         self._jpeg: Any = None
         self._jpeg_size = (0, 0)
+        self._greeted = False
         self._closed = False
 
         @self._pc.on("track")
@@ -3477,11 +3475,21 @@ class WebRTCTransport:
 
             @channel.on("message")
             def on_message(message: Any) -> None:
-                if isinstance(message, str):
+                if not isinstance(message, str):
+                    return
+                if not self._greeted:
                     try:
-                        self._inbox.put_nowait(parse_played(message))
+                        check_hello(message)
                     except InputError as exc:
-                        log.warning("transport: dropped a frame: %s", exc)
+                        channel.send(control({"type": "error", "message": str(exc)}))
+                        self._inbox.put_nowait(None)
+                        return
+                    self._greeted = True
+                    return
+                try:
+                    self._inbox.put_nowait(parse_played(message))
+                except InputError as exc:
+                    log.warning("transport: dropped a frame: %s", exc)
 
         @self._pc.on("connectionstatechange")
         def on_state() -> None:
@@ -3554,17 +3562,13 @@ class WebRTCTransport:
 async def accept_offer(
     sdp: str,
     *,
-    hello: dict[str, Any],
-    authenticate: Authenticate,
+    identity: Identity,
+    scope: str,
     sample_rate: int = 16000,
     ice_servers: list[dict[str, Any]] | None = None,
-) -> WebRTCTransport | None:
-    who = await authenticate(hello)
-    if who is None:
-        return None
-    identity, scope = who
+) -> WebRTCTransport:
     if not scope:
-        raise InputError("transport: authenticate returned an empty scope")
+        raise InputError("transport: scope is empty")
     transport = WebRTCTransport(identity, scope, sample_rate=sample_rate, ice_servers=ice_servers)
     try:
         await transport._pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
@@ -3697,7 +3701,7 @@ const hex = (name: string): Uint8Array => Uint8Array.from(Buffer.from(readFileSy
 
 describe('the wire', () => {
   it('writes the client frames the server expects', () => {
-    expect(JSON.parse(hello({ token: 't0k3n' }))).toEqual(json('hello'))
+    expect(JSON.parse(hello())).toEqual(json('hello'))
     expect(JSON.parse(played(3, 1200))).toEqual(json('played'))
     expect(encodeAudio(Uint8Array.of(0x00, 0x01, 0xff, 0x7f), 16000, 1, 3)).toEqual(hex('audio'))
     expect(encodeImage(Uint8Array.of(0xff, 0xd8, 0xff, 0xd9))).toEqual(hex('image'))
@@ -3769,8 +3773,8 @@ export type AudioOut = { utterance: number; sampleRate: number; channels: number
 
 const CONTROLS = new Set(['ready', 'speaking', 'silent', 'stop', 'event', 'error'])
 
-export function hello(auth: unknown): string {
-  return JSON.stringify({ type: 'hello', protocol: PROTOCOL, auth })
+export function hello(): string {
+  return JSON.stringify({ type: 'hello', protocol: PROTOCOL })
 }
 
 export function played(utterance: number, ms: number): string {
@@ -4034,8 +4038,9 @@ export class Playback {
 ```ts
 export type ConnectOptions = {
   url: string
-  hello: unknown
   transport: 'websocket' | 'webrtc'
+  protocols?: string | string[]
+  headers?: Record<string, string>
   microphone?: boolean
   camera?: false | { fps?: number; width?: number; quality?: number }
   sampleRate?: number
@@ -4050,6 +4055,7 @@ export interface Senses {
   unmute(): void
   pauseCamera(): void
   resumeCamera(): void
+  setFps(fps: number): void
   close(): Promise<void>
 }
 export function connect(options: ConnectOptions): Promise<Senses>
@@ -4063,10 +4069,11 @@ export type { SensesEvent, Identity }
 - [ ] **Step 1: failing tests** — `tests/senses.test.ts`, with `vi.stubGlobal` for `WebSocket`
   (a fake that records sent frames and lets the test deliver messages and `close`) and
   `AudioContext` (the `Context` fake from `playback.test.ts`, moved to `tests/fakes.ts`):
-  1. `connect({ url, hello: { token: 't' }, transport: 'websocket', microphone: false })` sends
-     exactly `hello({ token: 't' })` on open and resolves only after the server's `ready`;
-  2. an `error` control before `ready` rejects with `new SensesError('transport: not
-     authenticated')`;
+  1. `connect({ url, transport: 'websocket', protocols: ['bearer', 't'], microphone: false })`
+     opens the socket with those subprotocols, sends exactly `hello()` on open and resolves only
+     after the server's `ready`;
+  2. an `error` control before `ready` rejects with `new SensesError('transport: protocol 2 is not
+     supported; this server speaks 1')`;
   3. `subscribe` receives `{ kind: 'status', status: 'open' }` first, then every `event` control's
      event; the returned function unsubscribes;
   4. binary audio is played, and after `silent {utterance: 1}` and the fake nodes ending, the
@@ -4077,7 +4084,9 @@ export type { SensesEvent, Identity }
      sent as `encodeAudio(pcm, 16000)` until `mute()`, and again after `unmute()`;
   6. with `camera: { fps: 2 }`, a stubbed `getUserMedia` video stream and a stubbed canvas whose
      `toBlob` yields a fixed JPEG, fake timers advance 1 s and the socket receives two
-     `encodeImage` frames; `pauseCamera()` stops them;
+     `encodeImage` frames; `setFps(4)` then gives four frames in the next second; `pauseCamera()`
+     stops them; `setFps(0)` throws `senses: fps must be positive`, and `setFps(2)` on a connection
+     without a camera throws `senses: setFps needs a camera`;
   7. the server's `closed` event, or the socket closing, sets `status` to `'closed'` and tells
      listeners; `close()` closes the socket and the audio context.
 - [ ] **Step 2: implement.** `websocket.ts`:
@@ -4091,12 +4100,12 @@ export type LinkHandlers = { control(frame: ServerControl): void; audio(frame: A
 export class WebSocketLink {
   private constructor(private readonly socket: WebSocket) {}
 
-  static open(url: string, auth: unknown, handlers: LinkHandlers): Promise<WebSocketLink> {
+  static open(url: string, protocols: string | string[] | undefined, handlers: LinkHandlers): Promise<WebSocketLink> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(url)
+      const socket = new WebSocket(url, protocols)
       socket.binaryType = 'arraybuffer'
       let ready = false
-      socket.onopen = () => socket.send(hello(auth))
+      socket.onopen = () => socket.send(hello())
       socket.onmessage = (message: MessageEvent) => {
         if (message.data instanceof ArrayBuffer) return handlers.audio(decodeAudio(message.data))
         const frame = parseControl(String(message.data))
@@ -4137,7 +4146,7 @@ export class WebSocketLink {
   `camera.ts` — adapted from `../rfnry-vision/packages/client-react/src/video/capture.ts` and the
   canvas path of `encoder.ts`: `class Camera { constructor(options: {fps, width, quality}, send:
   (jpeg: Uint8Array) => void); start(): Promise<MediaStream>; pause(): void; resume(): void;
-  stop(): void }`; a hidden `<video muted playsinline>` plays the stream, a `setInterval(1000 /
+  setFps(fps: number): void; stop(): void }` (`setFps` clears and restarts the interval); a hidden `<video muted playsinline>` plays the stream, a `setInterval(1000 /
   fps)` draws it scaled to `width` on a canvas and `toBlob('image/jpeg', quality)` sends the bytes;
   a capture still in flight skips the next tick. Frames flow for as long as the camera runs, at
   `camera.fps`: that continuous stream is what a live session forwards to its model (Task 10) —
@@ -4159,7 +4168,7 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
     status = 'closed'
     tell({ kind: 'status', status })
   }
-  const link = await WebSocketLink.open(options.url, options.hello, {
+  const link = await WebSocketLink.open(options.url, options.protocols, {
     control(frame) {
       if (frame.type === 'speaking') playback?.speaking(frame.utterance)
       else if (frame.type === 'silent') playback?.silent(frame.utterance)
@@ -4194,6 +4203,11 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
     unmute: () => microphone && (microphone.enabled = true),
     pauseCamera: () => camera?.pause(),
     resumeCamera: () => camera?.resume(),
+    setFps(fps) {
+      if (!(fps > 0)) throw new SensesError('senses: fps must be positive')
+      if (camera === null) throw new SensesError('senses: setFps needs a camera')
+      camera.setFps(fps)
+    },
     async close() {
       camera?.stop()
       await microphone?.stop()
@@ -4220,12 +4234,14 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
 - [ ] **Step 1: failing tests** — `tests/webrtc.test.ts`, with stubbed `RTCPeerConnection` (records
   `addTrack`, `createDataChannel('senses')`, offers a fixed SDP, completes ICE gathering
   immediately, exposes the channel to the test), `fetch`, `getUserMedia`:
-  1. `connect({ url: '/senses/offer', hello: { token: 't' }, transport: 'webrtc' })` posts
-     `{ sdp, hello: { token: 't' } }` as JSON, sets the answer from `{ sdp }`, and resolves when the
-     channel delivers `ready`;
+  1. `connect({ url: '/senses/offer', transport: 'webrtc', headers: { authorization: 'Bearer t' } })`
+     posts `{ sdp }` as JSON with those headers (and `credentials: 'same-origin'`), sets the answer
+     from `{ sdp }`, sends `hello()` when the channel opens, and resolves when the channel
+     delivers `ready`;
   2. a 401 rejects with `new SensesError('webrtc: the offer was refused with status 401')`;
   3. with a camera, the video sender's parameters get `maxFramerate` = `fps`; `pauseCamera()`
-     disables the video track, `mute()` the audio track;
+     disables the video track, `mute()` the audio track; `setFps(5)` calls the camera track's
+     `applyConstraints({ frameRate: 5 })`;
   4. `RemotePlayback`: given receiver stats (`inbound-rtp` with `jitterBufferEmittedCount`,
      `concealedSamples`, and a codec `clockRate` 48000), `speaking(1)` takes a baseline, `stop(1)`
      reports `(emitted − concealed) / 48` ms since it and mutes the element; `silent(1)` reports
@@ -4239,8 +4255,10 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   (the video sender): one `RTCPeerConnection({ iceServers: options.iceServers ?? [] })`, the
   data channel created before the offer, the microphone track (same constraints as
   `Microphone`), the camera track when asked with `sender.setParameters` setting `maxFramerate`,
-  `ontrack` feeding `RemotePlayback`, the offer posted as `{ sdp, hello }` to `options.url`, data
-  channel messages parsed with `parseControl` and routed exactly as in the WebSocket path. The
+  `ontrack` feeding `RemotePlayback`, the offer posted as `{ sdp }` to `options.url` with
+  `options.headers`, `hello()` sent when the channel opens, data channel messages parsed with
+  `parseControl` and routed exactly as in the WebSocket path; `setFps` applies `{ frameRate }` to
+  the camera track. The
   WebRTC path never sends audio frames or JPEG itself: the tracks carry them. `senses.ts` calls
   it for `transport: 'webrtc'` and returns the same `Senses` shape.
 - [ ] **Step 3: gate. Commit** `feat(ts): connect over WebRTC`.
@@ -4252,7 +4270,8 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
 `packages/typescript/tests/integration/python-server.test.ts`.
 
 - [ ] **Step 1:** `serve_for_client.py` — a `websockets` server on `127.0.0.1:<port from argv>`
-  that runs `serve` + a cascaded `Session` over scripted models: a transcription that yields
+  that runs `serve` (identity Ana, scope `acme`; the test server authenticates nobody) + a cascaded
+  `Session` over scripted models: a transcription that yields
   `Transcript("hello", final=True)` and `UtteranceEnd()` once it has been fed ten frames, a
   `Tone` speech model, and a loop that answers each `TurnEnded` with `say("Hi there.",
   triggered_by=event.speaker)`. When `RFNRY_LIVE_ADAPTERS` names a module, it takes
@@ -4275,27 +4294,29 @@ like `../engine/examples/*`: `pyproject.toml` (`[tool.uv] package = false`, `rfn
 `providers.py` (the only files that name vendors), `main.py` read top to bottom, and for browser
 examples `static/index.html` loading `../../packages/typescript/dist/index.js` (served by a
 `StaticFiles` mount; `npm run build` first). Keys come from `../../../.env.examples` through
-`uv run --env-file`; nothing with a key is ever written in the repository.
+`uv run --env-file`; nothing with a key is ever written in the repository. An example that needs a
+microphone also runs headless (its default when no browser is asked for): it synthesizes the
+person's words with the speech model at runtime and feeds them through a `Loopback`, paced in real
+time, so each example runs once live from a terminal; no third-party audio is committed.
 
 What each vendor can provide, with the keys this workspace has (`ANTHROPIC_API_KEY`,
-`GOOGLE_API_KEY`, `VOYAGE_API_KEY`, `DECISION_API_KEY`):
+`GOOGLE_API_KEY`, `OPENAI_API_KEY`, `VOYAGE_API_KEY`, `DECISION_API_KEY`):
 
 | contract | provider in `providers.py` | key | note |
 | --- | --- | --- | --- |
 | `LiveModel` | `GoogleLive` — Gemini Live (`google-genai`, `client.aio.live.connect`) | `GOOGLE_API_KEY` | `say` sends "Say exactly this, nothing else: …" as a completed turn; `send_text(respond=False)` sends an incomplete client turn; `interrupt(played_ms)` has no truncation call to make and raises (senses logs it) — the vendor cuts its own context when it detects the interruption |
-| `TranscriptionModel` | `GoogleTranscription` — a Gemini Live session with input transcription on, its replies discarded; `UtteranceEnd` on the vendor's turn end | `GOOGLE_API_KEY` | the examples' choice of transcriber: a live session used for its input transcription — a legitimate consumer choice the contract takes like any other; it costs a live session |
+| `TranscriptionModel` | `OpenAIProvider` — streaming realtime transcription: a Realtime transcription session (`wss://api.openai.com/v1/realtime?intent=transcription`, `session.update` with `type: "transcription"`, 24 kHz `audio/pcm`, `server_vad` turn detection); `…input_audio_transcription.delta` → a running `Transcript(final=False)`, `…completed` → `Transcript(final=True)` then `UtteranceEnd()`; the adapter resamples 16 kHz to 24 kHz | `OPENAI_API_KEY` | model `gpt-4o-transcribe`-class with server VAD (`gpt-live-transcribe` streams too but takes no turn detection, so the adapter would have to commit turns itself); the exact model is confirmed on the first live run and named in the commit |
 | `SpeechModel` | `GoogleSpeech` — Gemini text-to-speech, one request per sentence, 24 kHz PCM | `GOOGLE_API_KEY` | not streaming within a sentence; senses already speaks sentence by sentence |
 | `DecisionModel` (turns) | `TypeSafeProvider`, byte-identical with the engine examples' class | `DECISION_API_KEY` | |
 | generation (engine agents) | `AnthropicProvider` / `GoogleProvider`, byte-identical with the engine examples | `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Anthropic has no audio models: it is only ever the text mind |
 
-A `live`/`transcription`/`speech` provider shaped for OpenAI's realtime and speech APIs is not
-planned: there is no key for it. Every provider class is byte-identical across the folders that
-carry it (the rule of the engine's examples).
+OpenAI provides only transcription here; Gemini keeps the live model and speech. Every provider
+class is byte-identical across the folders that carry it (the rule of the engine's examples).
 
 | example | what it shows | vendors |
 | --- | --- | --- |
 | `barge_in` | offline, no keys: `Loopback` with scripted models; a `say` cut after 1.2 s by the person talking; prints `Said.heard` for `played` at 0.4 s, 1.2 s and never (the clock estimate) | none |
-| `cascaded_voice_agent` | the Getting started endpoint for real: FastAPI WebSocket, `serve`, a cascaded session with turns, an engine agent answering each `TurnEnded`, the browser page from the TS client with captions from `subscribe` | Google transcription + speech, Anthropic agent, decision turns |
+| `cascaded_voice_agent` | the Getting started endpoint for real: FastAPI WebSocket authenticated on the upgrade, `serve`, a cascaded session with turns, an engine agent answering each `TurnEnded`, the browser page from the TS client with captions from `subscribe`; headless by default | OpenAI transcription, Google speech, Anthropic agent, decision turns |
 | `live_voice_consult` | a live session whose tools are `engine.tool("core", scope=…, name="consult")`; `ToolCalled` printed; `inform` pushing a fact mid-call | Google live, Anthropic core agent |
 | `camera_look` | a camera-only session over WebSocket JPEG at 1 fps; an engine agent with `SensesTools` (`look` only) answers typed questions about what the camera sees | Anthropic agent |
 | `two_minds_thread` | live front, engine agent behind through `SensesTools` (`say`/`prompt`/`inform`/`look`), `ThreadTools`, and the `mirror` glue from the docs posting `Heard`/`Said` into a thread | Google live, Anthropic core; **needs rfnry-thread** — the folder lands when thread's `ThreadTools` does |
