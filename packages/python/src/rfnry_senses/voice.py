@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator, AsyncIterator
+
 from rfnry_senses.contracts import AudioFrame
 
 
@@ -22,6 +24,21 @@ def sentences(text: str) -> list[str]:
     if text[start:].strip():
         found.append(text[start:])
     return found
+
+
+async def sentences_from(text: str | AsyncIterator[str]) -> AsyncGenerator[str]:
+    if isinstance(text, str):
+        for sentence in sentences(text):
+            yield sentence
+        return
+    held = ""
+    async for chunk in text:
+        held += chunk
+        *complete, held = sentences(held) or [""]
+        for sentence in complete:
+            yield sentence
+    if held.strip():
+        yield held
 
 
 class Ledger:

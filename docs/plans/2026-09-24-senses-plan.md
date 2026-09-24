@@ -2045,7 +2045,7 @@ async def test_muting_cuts_the_voice_and_gates_what_follows() -> None:
 
 ```python
 async def say(self, text: str | AsyncIterator[str], *, triggered_by: Identity) -> Said
-async def sentences_from(text: str | AsyncIterator[str]) -> AsyncIterator[str]      # voice.py
+async def sentences_from(text: str | AsyncIterator[str]) -> AsyncGenerator[str]      # voice.py
 ```
 
 - [ ] **Step 1: failing tests** — `tests/unit/test_session_cascaded.py`:
@@ -2187,7 +2187,8 @@ async def test_say_speaks_a_stream_as_its_sentences_complete() -> None:
 
 async def test_an_empty_stream_says_nothing_and_a_failing_one_fails_only_its_say() -> None:
     async def empty() -> AsyncIterator[str]:
-        for chunk in ():
+        nothing: tuple[str, ...] = ()
+        for chunk in nothing:
             yield chunk
 
     async def broken() -> AsyncIterator[str]:
@@ -2251,10 +2252,11 @@ async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:
     assert said.text == said.heard == "For two, at eight." and said.triggered_by == HOST
 ```
 
-- [ ] **Step 2: implement** — in `voice.py`, after `sentences` (imports `AsyncIterator`):
+- [ ] **Step 2: implement** — in `voice.py`, after `sentences` (imports `AsyncGenerator`,
+  `AsyncIterator`; it returns an `AsyncGenerator` because `_play` calls its `aclose()`):
 
 ```python
-async def sentences_from(text: str | AsyncIterator[str]) -> AsyncIterator[str]:
+async def sentences_from(text: str | AsyncIterator[str]) -> AsyncGenerator[str]:
     if isinstance(text, str):
         for sentence in sentences(text):
             yield sentence

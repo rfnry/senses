@@ -5,7 +5,7 @@ import contextlib
 import json
 import logging
 from collections import deque
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from itertools import count
 from time import monotonic
@@ -26,8 +26,10 @@ from rfnry_senses.contracts import (
     LiveStarted,
     LiveToolCall,
     SpeechModel,
+    Transcript,
     Transcription,
     TranscriptionModel,
+    UtteranceEnd,
 )
 from rfnry_senses.errors import (
     ConfigurationError,
@@ -47,11 +49,22 @@ from rfnry_senses.events import (
     Silent,
     Speaking,
     ToolCalled,
+    TurnEnded,
 )
-from rfnry_senses.models import Content, DecisionModel, Identity, Image, Part, ToolSpec
+from rfnry_senses.models import (
+    Check,
+    CheckAnswer,
+    Content,
+    DecisionModel,
+    Identity,
+    Image,
+    Part,
+    ToolSpec,
+    as_decided,
+)
 from rfnry_senses.tools import ToolsLike
 from rfnry_senses.transport import Played, Transport
-from rfnry_senses.voice import Ledger
+from rfnry_senses.voice import Ledger, sentences_from
 from rfnry_senses.window import FrameWindow
 
 log = logging.getLogger("rfnry_senses")
@@ -59,6 +72,11 @@ log = logging.getLogger("rfnry_senses")
 PLAYED_GRACE = 0.25
 PLAYBACK_SLACK = 1.0
 _PARTS: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
+DONE = Check(
+    instructions="Has the person finished their turn, so that it is now the other side's turn to speak?",
+    yes="They finished what they meant to say and expect an answer or a reaction",
+    no="They paused mid-thought and are about to go on",
+)
 
 
 def as_content(result: object) -> Content:
@@ -85,6 +103,7 @@ class Utterance:
     spoke: bool = False
     finished: bool = False
     ledger: Ledger = field(default_factory=Ledger)
+    source: str | AsyncIterator[str] = ""
 
 
 class Subscription:
@@ -193,6 +212,11 @@ class Session:
             )
             self._connection = await self._live.open(tools=specs, instructions=self._instructions)
             self._spawn(self._live_events())
+        if self._transcription is not None:
+            self._stream = self._transcription.stream()
+            self._spawn(self._transcripts())
+        if self._speech is not None:
+            self._spawn(self._speak())
         self._spawn(self._inbound())
         self._opened = True
         await self._transport.send_control({"type": "ready"})
@@ -204,16 +228,36 @@ class Session:
     def events(self) -> Subscription:
         return Subscription(self._subscribers, self._closed)
 
-    async def say(self, text: str, *, triggered_by: Identity) -> Said:
-        self._ready(text)
+    async def say(self, text: str | AsyncIterator[str], *, triggered_by: Identity) -> Said:
+        if isinstance(text, str):
+            self._ready(text)
+        else:
+            self._check_open()
         done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
-        u = Utterance(triggered_by, text, verbatim=True, done=done)
+        u = Utterance(
+            triggered_by,
+            text if isinstance(text, str) else "",
+            verbatim=True,
+            done=done,
+            source=text,
+        )
         if self._muted:
             await self._finish(u, "", interrupted=True)
             return await done
         if self._connection is not None:
             connection = self._connection
-            return await self._ask(u, lambda: connection.say(text))
+            if not isinstance(text, str):
+                joined = "".join([chunk async for chunk in text])
+                self._check_open()
+                if not joined.strip():
+                    await self._finish(u, "", interrupted=False)
+                    return await done
+                u.text = joined
+            return await self._ask(u, lambda: connection.say(u.text))
+        if self._speech is not None:
+            self._waiting.append(u)
+            self._queue.put_nowait(u)
+            return await done
         raise ConfigurationError("session: say needs a live model or a speech model")
 
     async def prompt(self, text: str, *, triggered_by: Identity) -> Said:
@@ -347,6 +391,8 @@ class Session:
     async def _hear(self, frame: AudioFrame) -> None:
         if self._connection is not None:
             await self._connection.send_audio(frame)
+        elif self._stream is not None:
+            await self._stream.feed(frame)
 
     async def _see(self, image: Image) -> None:
         return None
@@ -493,6 +539,128 @@ class Session:
                 scope=self.scope, name=call.name, input=call.args, output=output, is_error=is_error
             )
         )
+
+    async def _transcripts(self) -> None:
+        assert self._stream is not None
+        finals: list[str] = []
+        partial = ""
+        async for event in self._stream.events():
+            if isinstance(event, Transcript):
+                text = event.text.strip()
+                if not text:
+                    continue
+                if self._hold is not None:
+                    self._hold.cancel()
+                    self._hold = None
+                await self._emit(
+                    Heard(scope=self.scope, text=event.text, final=event.final, speaker=self.person)
+                )
+                if event.final:
+                    finals.append(text)
+                    partial = ""
+                else:
+                    partial = text
+            elif isinstance(event, UtteranceEnd):
+                words = " ".join([*finals, partial] if partial else finals)
+                finals, partial = [], ""
+                if words:
+                    await self._utterance_ended(words)
+        log.warning("session: the transcription stream ended; the session no longer hears")
+
+    async def _utterance_ended(self, words: str) -> None:
+        self._turn.append(words)
+        text = " ".join(self._turn)
+        probability = await self._done(text) if self._turns is not None else None
+        if probability is None or probability >= self._turn_threshold:
+            await self._end_turn(text, probability)
+        else:
+            self._hold = self._spawn(self._hold_turn(text, probability))
+
+    async def _hold_turn(self, text: str, probability: float) -> None:
+        await asyncio.sleep(self._turn_timeout)
+        self._hold = None
+        await self._end_turn(text, probability)
+
+    async def _end_turn(self, text: str, probability: float | None) -> None:
+        self._turn = []
+        await self._emit(
+            TurnEnded(scope=self.scope, text=text, speaker=self.person, probability=probability)
+        )
+
+    async def _done(self, text: str) -> float | None:
+        assert self._turns is not None
+        try:
+            decided = as_decided(
+                await self._turns.decide({"said": self._last_heard, "heard": text}, {"done": DONE})
+            )
+        except Exception as exc:
+            log.warning("session: the turn check failed; the turn ends: %s", exc)
+            return None
+        answer = decided.answers.get("done")
+        if not isinstance(answer, CheckAnswer):
+            log.warning(
+                "session: the decision model did not answer 'done' with a check; the turn ends"
+            )
+            return None
+        return answer.probability
+
+    async def _speak(self) -> None:
+        while True:
+            u = await self._queue.get()
+            if u.finished:
+                continue
+            playing = self._playing = asyncio.create_task(self._play(u))
+            await asyncio.wait({playing})
+            self._playing = None
+            if not playing.cancelled() and (error := playing.exception()) is not None:
+                raise error
+
+    async def _play(self, u: Utterance) -> None:
+        assert self._speech is not None
+        if u.finished:
+            return
+        with contextlib.suppress(ValueError):
+            self._waiting.remove(u)
+        if self._muted:
+            await self._finish(u, "", interrupted=True)
+            return
+        self._start(u)
+        streamed = not isinstance(u.source, str)
+        pieces = sentences_from(u.source)
+        try:
+            async for sentence in pieces:
+                if streamed:
+                    u.text += sentence
+                try:
+                    async for frame in self._speech.speak(sentence):
+                        if self._utterance is not u:
+                            return
+                        await self._send(u, frame)
+                except Exception as exc:
+                    log.warning("session: the speech model failed: %s", exc)
+                    self._abandon(u, ModelError(f"session: the speech model failed: {exc}"))
+                    return
+                if self._utterance is not u:
+                    return
+                u.ledger.mark(sentence)
+        except Exception as exc:
+            self._abandon(u, exc)
+            return
+        finally:
+            await pieces.aclose()
+            close = getattr(u.source, "aclose", None)
+            if close is not None:
+                await close()
+        await self._conclude(u)
+
+    def _abandon(self, u: Utterance, error: Exception) -> None:
+        if self._utterance is u:
+            self._utterance = None
+            self._transport.clear_audio()
+        u.finished = True
+        self._played.pop(u.number, None)
+        if u.done is not None and not u.done.done():
+            u.done.set_exception(error)
 
     async def _close(
         self,

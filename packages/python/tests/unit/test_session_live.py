@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -242,3 +243,18 @@ async def test_every_subscription_sees_every_event() -> None:
         assert (await next_of(one, Heard)).text == (await next_of(two, Heard)).text == "hi"
         with pytest.raises(InputError, match="^session: text is empty$"):
             await s.say("  ", triggered_by=HOST)
+
+
+async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:
+    async def reply() -> AsyncIterator[str]:
+        for chunk in ("For two, ", "at eight."):
+            yield chunk
+
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        saying = asyncio.create_task(s.say(reply(), triggered_by=HOST))
+        await until(lambda: bool(live.connection.calls))
+        live.connection.emit(*response("For two, ", "at eight."))
+        said = await saying
+    assert live.connection.calls == [("say", "For two, at eight.")]
+    assert said.text == said.heard == "For two, at eight." and said.triggered_by == HOST
