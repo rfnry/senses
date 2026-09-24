@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Acme concierge</title>
+  </head>
+  <body>
+    <button id="start">Talk to the concierge</button>
+    <ul id="captions"></ul>
+    <script type="module">
+      import { connect } from '/client/index.js'
+
+      const captions = document.getElementById('captions')
+      const show = (who, text) => captions.append(Object.assign(document.createElement('li'), { textContent: `${who}: ${text}` }))
+
+      document.getElementById('start').onclick = async () => {
+        const senses = await connect({ url: `ws://${location.host}/senses`, transport: 'websocket' })
+        senses.subscribe((event) => {
+          if (event.kind === 'heard' && event.final) show(event.speaker.name, event.text)
+          if (event.kind === 'said') show('concierge', event.heard)
+          if (event.kind === 'status') show('line', event.status)
+        })
+      }
+    </script>
+  </body>
+</html>

@@ -4369,6 +4369,20 @@ class is byte-identical across the folders that carry it (the rule of the engine
 - [ ] **Step 3: commit** `docs: examples — barge-in, cascaded, live with consult, camera, WebRTC`
   (and `two_minds_thread` in its own commit once rfnry-thread lands).
 
+  As built (Task 21): rfnry-thread's `ThreadTools` had landed, so `two_minds_thread` ships in the
+  same commit. `barge_in` has no `providers.py` (its scripted models are in `main.py`). The
+  transcription provider is two classes, `OpenAIProvider` (the model, `stream()`) and
+  `OpenAIStream` (one session's transcription), on `gpt-transcribe` with server turn detection —
+  streaming realtime transcription whose deltas arrive once the turn is committed, verified live;
+  `gpt-live-transcribe` streams while the person talks but takes no turn detection, so it would
+  need the adapter to commit turns itself. `GoogleSpeech` is `gemini-3.1-flash-tts-preview`,
+  `GoogleLive` `gemini-3.1-flash-live-preview`. `two_minds_thread` gives the live model
+  `ThreadTools(...).only("read_recent")`: with `send` as well, the live model posted its own reply
+  on top of the mirror's. Thread calls take rfnry-thread's `Identity`, a separate class from
+  senses' byte-identical one, so the example converts with `model_validate(identity.model_dump())`.
+  `webrtc_voice`'s headless peer is aiortc, whose receiver holds its last packets until more
+  arrive; it reports a natural end as fully played, as `Loopback` does, and a `stop` by its clock.
+
 ## Task 22 — The live tier
 
 **Files:** create `packages/python/tests/e2e/conftest.py`, `packages/python/tests/e2e/test_live.py`;
