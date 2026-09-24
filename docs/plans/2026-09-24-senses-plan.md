@@ -3592,6 +3592,11 @@ async def accept_offer(
     return transport
 ```
 
+  PyAV 17 ships type stubs, so mypy checks it: `_hear` and `_see` skip anything `track.recv()`
+  returns that is not an `av.AudioFrame`/`av.VideoFrame`, and `_encode` narrows the created codec
+  with `isinstance(codec, av.VideoCodecContext)` (raising `TransportError("webrtc: this build of av
+  has no jpeg encoder")` otherwise) — both found in Task 14. The test says "Hello there, how are
+  you today?": two words of `Tone` are only ten 20 ms frames, too few to count on after Opus.
   Check against the installed PyAV that `av.AudioFrame(..., samples=n)` allocates with
   `align=1` (so `planes[0].update` takes exactly `n * 2 * channels` bytes); if the installed
   version pads, pass `align=1` explicitly. The inbound `bytes(out.planes[0])[: out.samples * 2]`
