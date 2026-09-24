@@ -40,3 +40,16 @@ build`), then run `main.py browser` and open `http://localhost:8000`.
 
 `uv` builds each folder's environment on first run; the per-folder `uv.lock` files are ignored by
 git. Lint an example with its own ruff: `uv run ruff format . && uv run ruff check .`.
+
+The live test tier uses `cascaded_voice_agent/live_adapters.py`, which builds the live,
+transcription, speech and decision models from that folder's `providers.py`. From
+`packages/python`:
+
+```bash
+RFNRY_LIVE_ADAPTERS=live_adapters PYTHONPATH=../../examples/cascaded_voice_agent \
+  uv run --project ../../examples/cascaded_voice_agent --with pytest --with pytest-asyncio \
+  --env-file ../../../.env.examples pytest -m live -q
+```
+
+and from `packages/typescript`, `RFNRY_LIVE_ADAPTERS=live_adapters npm run test:integration` runs
+the browser client's round trip against real transcription and speech.

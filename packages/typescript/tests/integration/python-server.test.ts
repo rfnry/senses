@@ -1,12 +1,15 @@
-import { type ChildProcess, execSync, spawn } from 'node:child_process'
+import { type ChildProcess, execFileSync, execSync, spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { type AudioContextLike, Playback } from '../../src/playback'
 import { WebSocketLink } from '../../src/websocket'
 import type { AudioOut, SensesEvent, ServerControl } from '../../src/wire'
 import { Context } from '../fakes'
 
 const PYTHON = join(__dirname, '../../../python')
+const EXAMPLE = join(PYTHON, '../../examples/cascaded_voice_agent')
+const KEYS = join(PYTHON, '../../../.env.examples')
+const LIVE = process.env.RFNRY_LIVE_ADAPTERS
 const hasUv = (() => {
   try {
     execSync('uv --version', { stdio: 'ignore' })
@@ -16,11 +19,14 @@ const hasUv = (() => {
   }
 })()
 
-let server: ChildProcess
-let port = 0
-const output: string[] = []
+type Server = { process: ChildProcess; port: number; output: string[] }
+let running: Server | null = null
 
-function waitFor(pattern: RegExp, timeout = 30_000): Promise<RegExpMatchArray> {
+function uv(live: boolean, ...args: string[]): string[] {
+  return live ? ['run', '--project', EXAMPLE, '--env-file', KEYS, ...args] : ['run', ...args]
+}
+
+function waitFor(output: string[], pattern: RegExp, timeout = 30_000): Promise<RegExpMatchArray> {
   return new Promise((resolve, reject) => {
     const started = Date.now()
     const check = () => {
@@ -33,65 +39,111 @@ function waitFor(pattern: RegExp, timeout = 30_000): Promise<RegExpMatchArray> {
   })
 }
 
+async function start(live: boolean): Promise<Server> {
+  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONPATH: EXAMPLE }
+  if (!live) delete env.RFNRY_LIVE_ADAPTERS
+  const child = spawn('uv', uv(live, 'python', 'tests/integration/serve_for_client.py', '0'), { cwd: PYTHON, env })
+  const output: string[] = []
+  child.stdout?.on('data', (chunk) => output.push(String(chunk)))
+  child.stderr?.on('data', (chunk) => output.push(String(chunk)))
+  running = { process: child, port: 0, output }
+  running.port = Number((await waitFor(output, /listening (\d+)/))[1])
+  return running
+}
+
+function synthesize(text: string): { rate: number; pcm: Uint8Array } {
+  const script = `import asyncio, base64, live_adapters
+async def main():
+    frames = [f async for f in live_adapters.speech().speak(${JSON.stringify(text)})]
+    print(frames[0].sample_rate, base64.b64encode(b"".join(f.data for f in frames)).decode())
+asyncio.run(main())`
+  const out = execFileSync('uv', uv(true, 'python', '-c', script), {
+    cwd: PYTHON,
+    env: { ...process.env, PYTHONPATH: EXAMPLE },
+    maxBuffer: 64 * 1024 * 1024,
+  })
+  const [rate, data] = String(out).trim().split('\n').at(-1)?.split(' ') ?? []
+  return { rate: Number(rate), pcm: Uint8Array.from(Buffer.from(data ?? '', 'base64')) }
+}
+
+async function talk(server: Server, send: (link: WebSocketLink) => Promise<void>) {
+  const seen: string[] = []
+  const events: SensesEvent[] = []
+  const audio: AudioOut[] = []
+  const context = new Context()
+  let link: WebSocketLink | null = null
+  const playback = new Playback(context as unknown as AudioContextLike, (utterance, ms) => link?.played(utterance, ms))
+  const said = new Promise<SensesEvent>((resolve) => {
+    const handlers = {
+      control(frame: ServerControl) {
+        if (frame.type === 'speaking') playback.speaking(frame.utterance)
+        if (frame.type === 'silent') {
+          playback.silent(frame.utterance)
+          for (const node of context.nodes) node.onended?.()
+        }
+        if (frame.type === 'event') {
+          events.push(frame.event)
+          seen.push(frame.event.kind)
+          if (frame.event.kind === 'said') resolve(frame.event)
+        }
+      },
+      audio(frame: AudioOut) {
+        seen.push(`audio ${frame.utterance}`)
+        audio.push(frame)
+        playback.push(frame)
+      },
+      closed() {},
+    }
+    void WebSocketLink.open(`ws://127.0.0.1:${server.port}`, undefined, handlers).then((opened) => {
+      link = opened
+      void send(opened)
+    })
+  })
+  const event = await said
+  return { event, events, seen, audio, link: link as WebSocketLink | null }
+}
+
+function expectTheRoundTrip(result: Awaited<ReturnType<typeof talk>>, words: string) {
+  expect(result.event.kind === 'said' && result.event.heard).toBe('Hi there.')
+  const heard = result.events.find((e) => e.kind === 'heard' && e.final)
+  expect(heard?.kind === 'heard' && heard.text.toLowerCase()).toContain(words)
+  const order = ['heard', 'turn_ended', 'audio 1', 'said'].map((kind) => result.seen.indexOf(kind))
+  expect(order.every((index) => index >= 0)).toBe(true)
+  expect([...order].sort((a, b) => a - b)).toEqual(order)
+  expect(result.audio.every((frame) => frame.utterance === 1)).toBe(true)
+}
+
+afterEach(() => {
+  running?.process.kill()
+  running = null
+})
+
 describe.skipIf(!hasUv)('the TypeScript client against the Python server', () => {
-  beforeAll(async () => {
-    server = spawn('uv', ['run', 'python', 'tests/integration/serve_for_client.py', '0'], {
-      cwd: PYTHON,
-      env: process.env,
-    })
-    server.stdout?.on('data', (chunk) => output.push(String(chunk)))
-    server.stderr?.on('data', (chunk) => output.push(String(chunk)))
-    port = Number((await waitFor(/listening (\d+)/))[1])
-  })
-
-  afterAll(() => {
-    server?.kill()
-  })
-
   it('is heard, answered, and hung up on', async () => {
-    const seen: string[] = []
-    const events: SensesEvent[] = []
-    const audio: AudioOut[] = []
-    const context = new Context()
-    let link: WebSocketLink | null = null
-    const playback = new Playback(context as unknown as AudioContextLike, (utterance, ms) =>
-      link?.played(utterance, ms),
-    )
-    const said = new Promise<SensesEvent>((resolve) => {
-      const handlers = {
-        control(frame: ServerControl) {
-          if (frame.type === 'speaking') playback.speaking(frame.utterance)
-          if (frame.type === 'silent') {
-            playback.silent(frame.utterance)
-            for (const node of context.nodes) node.onended?.()
-          }
-          if (frame.type === 'event') {
-            events.push(frame.event)
-            seen.push(frame.event.kind)
-            if (frame.event.kind === 'said') resolve(frame.event)
-          }
-        },
-        audio(frame: AudioOut) {
-          seen.push(`audio ${frame.utterance}`)
-          audio.push(frame)
-          playback.push(frame)
-        },
-        closed() {},
-      }
-      void WebSocketLink.open(`ws://127.0.0.1:${port}`, undefined, handlers).then((opened) => {
-        link = opened
-        for (let i = 0; i < 20; i++) opened.sendAudio(new Uint8Array(640), 16000)
-      })
+    const server = await start(false)
+    const result = await talk(server, async (link) => {
+      for (let i = 0; i < 20; i++) link.sendAudio(new Uint8Array(640), 16000)
     })
-    const event = await said
-    expect(event.kind === 'said' && event.heard).toBe('Hi there.')
-    const heard = events.find((e) => e.kind === 'heard')
-    expect(heard?.kind === 'heard' && heard.text).toBe('hello')
-    const order = ['heard', 'turn_ended', 'audio 1', 'said'].map((kind) => seen.indexOf(kind))
-    expect(order.every((index) => index >= 0)).toBe(true)
-    expect([...order].sort((a, b) => a - b)).toEqual(order)
-    expect(audio.every((frame) => frame.utterance === 1)).toBe(true)
-    ;(link as WebSocketLink | null)?.close()
-    await waitFor(/closed hung_up/)
+    expectTheRoundTrip(result, 'hello')
+    result.link?.close()
+    await waitFor(server.output, /closed hung_up/)
+  })
+})
+
+describe.skipIf(!hasUv || !LIVE)('the TypeScript client against real transcription and speech', () => {
+  it('is heard by the transcription model and answered by the speech model', async () => {
+    const { rate, pcm } = synthesize('A table for two at eight.')
+    const server = await start(true)
+    const step = (rate / 10) * 2
+    const result = await talk(server, async (link) => {
+      const speech = [...Array(Math.ceil(pcm.length / step)).keys()].map((i) => pcm.slice(i * step, (i + 1) * step))
+      for (const chunk of [...speech, ...Array(20).fill(new Uint8Array(step))]) {
+        link.sendAudio(chunk, rate)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    })
+    expectTheRoundTrip(result, 'table')
+    result.link?.close()
+    await waitFor(server.output, /closed hung_up/)
   })
 })

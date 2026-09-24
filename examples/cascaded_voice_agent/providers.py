@@ -21,6 +21,7 @@ from rfnry_engine import (
     Content,
     Decided,
     Document,
+    Image,
     Message,
     Part,
     Question,
@@ -34,6 +35,15 @@ from rfnry_engine import (
 )
 from rfnry_senses import (
     AudioFrame,
+    LiveAudio,
+    LiveDone,
+    LiveEvent,
+    LiveFailed,
+    LiveHeard,
+    LiveInterrupted,
+    LiveSaid,
+    LiveStarted,
+    LiveToolCall,
     Transcript,
     UtteranceEnd,
 )
@@ -359,3 +369,130 @@ class GoogleSpeech:
         step = rate // 10 * 2
         for start in range(0, len(data) - len(data) % 2, step):
             yield AudioFrame(data=data[start : start + step], sample_rate=rate)
+
+
+class GoogleLive:
+    def __init__(self, model: str = "gemini-3.1-flash-live-preview", voice: str = "Kore") -> None:
+        self.model = model
+        self.voice = voice
+        self.client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+    async def open(
+        self, *, tools: list[ToolSpec], instructions: str | None
+    ) -> "GoogleLiveConnection":
+        declarations = [
+            types.FunctionDeclaration(
+                name=spec.name,
+                description=spec.description,
+                parameters_json_schema=spec.input_schema,
+            )
+            for spec in tools
+        ]
+        config = types.LiveConnectConfig(
+            response_modalities=[types.Modality.AUDIO],
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+            system_instruction=instructions,
+            tools=[types.Tool(function_declarations=declarations)] if declarations else None,
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice)
+                )
+            ),
+        )
+        context = self.client.aio.live.connect(model=self.model, config=config)
+        return GoogleLiveConnection(context, await context.__aenter__())
+
+
+class GoogleLiveConnection:
+    def __init__(self, context: Any, session: Any) -> None:
+        self.context = context
+        self.session = session
+        self.names: dict[str, str] = {}
+        self.responding = False
+        self.heard = ""
+
+    async def send_audio(self, frame: AudioFrame) -> None:
+        blob = types.Blob(data=frame.data, mime_type=f"audio/pcm;rate={frame.sample_rate}")
+        await self.session.send_realtime_input(audio=blob)
+
+    async def send_image(self, image: Image) -> None:
+        await self.session.send_realtime_input(
+            video=types.Blob(data=image.data, mime_type="image/jpeg")
+        )
+
+    async def send_text(self, text: str, *, respond: bool) -> None:
+        turn = types.Content(role="user", parts=[types.Part(text=text)])
+        await self.session.send_client_content(turns=turn, turn_complete=respond)
+
+    async def say(self, text: str) -> None:
+        await self.send_text(f"Say exactly this, nothing else: {text}", respond=True)
+
+    async def interrupt(self, played_ms: int) -> None:
+        raise NotImplementedError(
+            "GoogleLive: the vendor cuts its own context when it hears the person"
+        )
+
+    async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None:
+        text = (
+            result
+            if isinstance(result, str)
+            else " ".join(p.text for p in result if hasattr(p, "text"))
+        )
+        response = {"error": text} if is_error else {"result": text}
+        name = self.names.pop(call_id, "")
+        await self.session.send_tool_response(
+            function_responses=[types.FunctionResponse(id=call_id, name=name, response=response)]
+        )
+
+    async def events(self) -> AsyncIterator[LiveEvent]:
+        try:
+            while True:
+                async for message in self.session.receive():
+                    for event in self._events(message):
+                        yield event
+        except Exception as exc:
+            yield LiveFailed(message=str(exc))
+
+    async def close(self) -> None:
+        await self.context.__aexit__(None, None, None)
+
+    def _events(self, message: Any) -> list[LiveEvent]:
+        events: list[LiveEvent] = []
+        content = message.server_content
+        if message.tool_call is not None:
+            for call in message.tool_call.function_calls or []:
+                self.names[call.id] = call.name
+                events.append(
+                    LiveToolCall(call_id=call.id, name=call.name, args=dict(call.args or {}))
+                )
+        if content is None:
+            return events
+        if content.input_transcription is not None and content.input_transcription.text:
+            self.heard += content.input_transcription.text
+            events.append(LiveHeard(text=self.heard, final=False))
+        speaking = content.output_transcription is not None or content.model_turn is not None
+        if speaking and not self.responding:
+            self.responding = True
+            if self.heard.strip():
+                events.append(LiveHeard(text=self.heard.strip(), final=True))
+            self.heard = ""
+            events.append(LiveStarted())
+        if content.output_transcription is not None and content.output_transcription.text:
+            events.append(LiveSaid(text=content.output_transcription.text))
+        for part in (
+            content.model_turn.parts if content.model_turn and content.model_turn.parts else []
+        ):
+            if part.inline_data is not None and part.inline_data.data:
+                rate = int(
+                    re.search(r"rate=(\d+)", part.inline_data.mime_type or "rate=24000").group(1)
+                )
+                events.append(
+                    LiveAudio(frame=AudioFrame(data=part.inline_data.data, sample_rate=rate))
+                )
+        if content.interrupted:
+            events.append(LiveInterrupted())
+        if (content.interrupted or content.turn_complete) and self.responding:
+            self.responding = False
+            events.append(LiveDone())
+        return events

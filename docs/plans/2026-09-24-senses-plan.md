@@ -4414,6 +4414,12 @@ Never run before Tasks 13, 14 and 20 pass offline (engineering rule 6).
   with the workspace keys; record costs and timings in the commit message. **Commit** `test: the
   live tier`.
 
+  As built (Task 22): `live_adapters.py` lives in `examples/cascaded_voice_agent/`, whose
+  `providers.py` also carries `GoogleLive` for it; the tier runs in that folder's environment
+  (`uv run --project … --with pytest --with pytest-asyncio`, as the engine's live tier does), and
+  the TypeScript live variant starts `serve_for_client.py` there too and has the speech model
+  synthesize the person's words through a short `python -c` in the same environment.
+
 ## Self-review against the spec
 
 - §1 scope: every stripped item is absent — no handler registry, stores, recorder, codecs,
