@@ -15,5 +15,6 @@ class Clock:
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> Clock:
     fake = Clock()
+    monkeypatch.setattr("rfnry_senses.session.monotonic", fake)
     monkeypatch.setattr("rfnry_senses.window.monotonic", fake)
     return fake
