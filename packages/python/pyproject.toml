@@ -19,7 +19,7 @@ dev = [
     "aiortc>=1.15.0",
     "websockets>=17.1",
     "fastapi>=0.141.1",
-    "httpx>=0.28.1",
+    "httpx2>=2.13.1",
 ]
 webrtc = [
     "aiortc>=1.15.0",
@@ -54,6 +54,9 @@ exclude = ["src/rfnry_senses/models.py", "src/rfnry_senses/tools.py"]
 select = ["E", "F", "I", "W", "B", "UP", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.ruff.lint.isort]
 combine-as-imports = true
 
@@ -74,3 +77,7 @@ files = ["src/rfnry_senses", "tests"]
 [[tool.mypy.overrides]]
 module = ["aiortc.*", "av.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.integration.socket_adapter"
+warn_return_any = false

@@ -206,7 +206,10 @@ class TransportError(SensesException): ...
   `dependencies = ["pydantic>=2.13.4"]`, `[project.optional-dependencies] webrtc = ["aiortc"]`
   (add it with `uv add --optional webrtc aiortc` and keep the resolved lower bound); `dev` = the
   engine's dev list minus `asyncpg`, `types-PyYAML`, `types-regex`, plus `aiortc`, `websockets`,
-  `fastapi`, `httpx`. `packages = ["src/rfnry_senses"]`. Markers and `addopts`:
+  `fastapi`, `httpx2` (Starlette's test client deprecates `httpx`; changed in Task 13). Ruff's
+  bugbear takes `extend-immutable-calls = ["fastapi.Depends"]`, and mypy relaxes `warn_return_any`
+  for `tests.integration.socket_adapter` only — the docs' adapter is pinned verbatim and returns
+  the ASGI message's value (both added in Task 13). `packages = ["src/rfnry_senses"]`. Markers and `addopts`:
 
 ```toml
 markers = [
@@ -3319,7 +3322,8 @@ class WebSocketTransport:
      frame, receives the `heard` event after the test feeds the transcription, receives audio
      frames with utterance 1 after `say`, answers `silent` with `played`, and sees `closed` after
      it hangs up;
-  2. the same through FastAPI with the docs' adapter: an app whose route is the docs' Getting
+  2. the same through FastAPI with the docs' adapter (the transcription fake hears when it is fed,
+     because the test client runs the app on another thread's loop): an app whose route is the docs' Getting
      started endpoint with `stt`/`tts`/`engine` replaced by fakes (an `engine` whose `run` returns
      an object with `reply="For two."`) and `signed_in` a dependency that reads an `authorization`
      header (403 without it — the consumer's own check, shown refusing the upgrade), driven by
