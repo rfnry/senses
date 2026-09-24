@@ -1,0 +1,4 @@
+{
+  "type": "error",
+  "message": "transport: protocol 2 is not supported; this server speaks 1"
+}

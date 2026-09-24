@@ -1,0 +1,16 @@
+{
+  "type": "event",
+  "event": {
+    "scope": "acme",
+    "at": "2026-09-24T12:03:04.200000Z",
+    "kind": "turn_ended",
+    "text": "A table for two.",
+    "speaker": {
+      "role": "user",
+      "id": "ana",
+      "name": "Ana",
+      "metadata": {}
+    },
+    "probability": 0.93
+  }
+}

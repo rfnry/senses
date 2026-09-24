@@ -1,0 +1,17 @@
+{
+  "type": "event",
+  "event": {
+    "scope": "acme",
+    "at": "2026-09-24T12:03:04.200000Z",
+    "kind": "said",
+    "text": "Your table is ready. Shall I order the usual?",
+    "heard": "Your table is ready. ",
+    "interrupted": true,
+    "triggered_by": {
+      "role": "assistant",
+      "id": "host",
+      "name": "Host",
+      "metadata": {}
+    }
+  }
+}
