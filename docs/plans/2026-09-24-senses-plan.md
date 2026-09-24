@@ -3708,7 +3708,11 @@ def test_no_vendor_is_named_in_the_library_or_its_contract() -> None:
   `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `target`/`lib` ES2022 +
   `DOM` + `DOM.Iterable`, `module` ESNext, `moduleResolution` Bundler, `types: ["node"]` only for
   tests (put `@types/node` in dev dependencies; `tsconfig.build.json` excludes `tests`). Biome:
-  single quotes, no semicolons, line width 120, recommended lint rules.
+  single quotes, no semicolons, line width 120, recommended lint rules (`"preset": "recommended"` in
+  Biome 2.5). Relative imports inside `src/` end in `.js` (`from './errors.js'`): `tsc` keeps
+  specifiers as written, and the browser examples load `dist/` as native ES modules, which need the
+  extension; tests import `../src/…` without one, as vitest resolves either (found in Task 16; the
+  snippets below are shown without the extension).
 - [ ] **Step 2: failing test** — `tests/wire.test.ts`:
 
 ```ts
