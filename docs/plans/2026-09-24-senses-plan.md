@@ -26,7 +26,8 @@ The thread plan did not exist when this was written; the TypeScript toolchain he
 for both clients — the thread plan should adopt it or name its difference.
 
 **Spec:** `docs/plans/2026-09-24-senses-design.md` (as corrected in commit "docs: senses.md — the
-contract, from the design") and `docs/senses.md`. Depends on: the content parts, landed in
+contract, from the design", then "docs: senses — streamed say, hello-token auth, video path
+explained") and `docs/senses.md`. Depends on: the content parts, landed in
 rfnry-engine and rfnry-memory; `engine.tool(agent, *, scope, …) -> Tools`
 (`../engine/docs/plans/2026-09-24-engine-tool-plan.md`, engine commit 79af329) for the two-minds
 examples; rfnry-thread's `Identity` block and `ThreadTools` for `test_family.py` and the
@@ -71,6 +72,17 @@ examples; rfnry-thread's `Identity` block and `ThreadTools` for `test_family.py`
 9. **The TypeScript media layer is injectable** for tests only through module-internal
    constructors (`Playback(context, report)`, `WebSocketLink(socketFactory)`); `connect()` is the
    one public entry and takes no test hooks.
+10. **`say` takes `str | AsyncIterator[str]`** (Task 8). Cascaded: `voice.sentences_from` cuts the
+    chunks with the same `sentences` splitter — a sentence is complete once text follows it — so
+    synthesis starts on the first one; `Said.text` accumulates the sentences taken. Live: the
+    chunks are joined and sent once the stream ends, because `LiveConnection.say` takes whole text;
+    the cause joins the FIFO then. A cut stops reading the stream and `aclose()`s it. An empty
+    stream returns an empty `Said`; a stream that raises fails only its `say`, with its own error.
+    `SensesTools`' `say` stays text (a model's tool arguments are a string).
+11. **Authentication is the hello's token only**, as in rfnry-thread. `authenticate` receives the
+    hello's `auth` over the WebSocket and the posted `hello` on the WebRTC offer — the same value,
+    the client's `hello` option — and nothing else: `Connection` exposes no headers or cookies, by
+    design (cross-site WebSocket hijacking; docs, Transports).
 
 ## Pre-change checklist
 
@@ -135,7 +147,10 @@ The spec implies five failure modes the tests must pin (each has a named test be
 
 Also worth a reviewer's eye: decision 3 (overlapping live responses are approximated); the muted
 live response being cut with `interrupt(0)` (it tells the model it was not heard, and cancels the
-generation); the `Looked`/`Muted`/`Informed` events the docs added.
+generation); the `Looked`/`Muted`/`Informed` events the docs added; a streamed `say` cut while
+senses is waiting on the consumer's stream — the cancellation lands inside the consumer's
+generator, and `_play`'s `finally` closes it either way
+(`test_a_barge_in_mid_stream_stops_reading_the_stream`).
 
 ## Adapted from the old libraries, or written fresh
 
@@ -1167,8 +1182,8 @@ class Session:
     async def close(self) -> None
 ```
 
-(`interrupt`, `mute`, `unmute` arrive in Task 7, the cascaded branch of `say` in Task 8, `look` in
-Task 10.)
+(`interrupt`, `mute`, `unmute` arrive in Task 7, the cascaded branch of `say` and its streamed
+`text: str | AsyncIterator[str]` in Task 8, `look` in Task 10.)
 
 - [ ] **Step 1: failing tests** — `tests/unit/test_session_live.py`:
 
@@ -2005,9 +2020,17 @@ async def test_muting_cuts_the_voice_and_gates_what_follows() -> None:
 
 ## Task 8 — Cascaded mode: hearing, turns, speaking
 
-**Files:** modify `src/rfnry_senses/session.py`; create `tests/unit/test_session_cascaded.py`.
+**Files:** modify `src/rfnry_senses/session.py`, `src/rfnry_senses/voice.py`,
+`tests/unit/test_voice.py`, `tests/unit/test_session_live.py`; create
+`tests/unit/test_session_cascaded.py`.
 
-**Interfaces:** no new public verb; `say` gains its cascaded branch; `TurnEnded` is emitted.
+**Interfaces:** no new public verb; `say` gains its cascaded branch and takes streamed text;
+`TurnEnded` is emitted.
+
+```python
+async def say(self, text: str | AsyncIterator[str], *, triggered_by: Identity) -> Said
+async def sentences_from(text: str | AsyncIterator[str]) -> AsyncIterator[str]      # voice.py
+```
 
 - [ ] **Step 1: failing tests** — `tests/unit/test_session_cascaded.py`:
 
@@ -2124,10 +2147,115 @@ async def test_what_was_heard_last_reaches_the_turn_check() -> None:
         stt.hear("Yes please.")
         await next_of(events, TurnEnded)
     assert dm.states == [{"said": "Shall I order the usual?", "heard": "Yes please."}]
+
+
+async def test_say_speaks_a_stream_as_its_sentences_complete() -> None:
+    s, link, _, tts = cascaded()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def reply() -> AsyncIterator[str]:
+        while (chunk := await queue.get()) is not None:
+            yield chunk
+
+    async with s:
+        saying = asyncio.create_task(s.say(reply(), triggered_by=HOST))
+        queue.put_nowait("One two")
+        queue.put_nowait(". Thr")
+        await until(lambda: tts.spoken == ["One two. "])
+        queue.put_nowait("ee.")
+        queue.put_nowait(None)
+        said = await saying
+    assert tts.spoken == ["One two. ", "Three."] and len(link.audio) == 3
+    assert said.text == said.heard == "One two. Three." and not said.interrupted and said.triggered_by == HOST
+
+
+async def test_an_empty_stream_says_nothing_and_a_failing_one_fails_only_its_say() -> None:
+    async def empty() -> AsyncIterator[str]:
+        for chunk in ():
+            yield chunk
+
+    async def broken() -> AsyncIterator[str]:
+        yield "One. "
+        raise RuntimeError("the writer failed")
+
+    s, _, _, tts = cascaded()
+    async with s:
+        nothing = await s.say(empty(), triggered_by=HOST)
+        with pytest.raises(RuntimeError, match="^the writer failed$"):
+            await s.say(broken(), triggered_by=HOST)
+        after = await s.say("Still here.", triggered_by=HOST)
+    assert nothing.text == nothing.heard == "" and not nothing.interrupted
+    assert after.heard == "Still here." and tts.spoken == ["Still here."]
 ```
 
-- [ ] **Step 2: implement** — in `session.py` add imports (`Transcript`, `UtteranceEnd`,
-  `TurnEnded`, `Check`, `CheckAnswer`, `as_decided`, `sentences`) and:
+  (`test_session_cascaded.py` also imports `AsyncIterator` from `collections.abc`.) Add to
+  `tests/unit/test_voice.py` (imports `asyncio`, `AsyncIterator`, `sentences_from`):
+
+```python
+async def chunks(*parts: str) -> AsyncIterator[str]:
+    for part in parts:
+        yield part
+
+
+async def test_a_stream_is_cut_into_sentences_in_order() -> None:
+    pieces = sentences_from(chunks("Your table", " is ready. Sh", "all I order", " the usual? ", "Fine"))
+    assert [s async for s in pieces] == ["Your table is ready. ", "Shall I order the usual? ", "Fine"]
+
+
+async def test_a_sentence_is_ready_as_soon_as_text_follows_it() -> None:
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def feed() -> AsyncIterator[str]:
+        while (chunk := await queue.get()) is not None:
+            yield chunk
+
+    pieces = sentences_from(feed())
+    queue.put_nowait("One two. Th")
+    assert await anext(pieces) == "One two. "
+    queue.put_nowait("ree.")
+    queue.put_nowait(None)
+    assert [s async for s in pieces] == ["Three."]
+```
+
+  Add to `tests/unit/test_session_live.py` (imports `AsyncIterator`):
+
+```python
+async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:
+    async def reply() -> AsyncIterator[str]:
+        for chunk in ("For two, ", "at eight."):
+            yield chunk
+
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        saying = asyncio.create_task(s.say(reply(), triggered_by=HOST))
+        await until(lambda: bool(live.connection.calls))
+        live.connection.emit(*response("For two, ", "at eight."))
+        said = await saying
+    assert live.connection.calls == [("say", "For two, at eight.")]
+    assert said.text == said.heard == "For two, at eight." and said.triggered_by == HOST
+```
+
+- [ ] **Step 2: implement** — in `voice.py`, after `sentences` (imports `AsyncIterator`):
+
+```python
+async def sentences_from(text: str | AsyncIterator[str]) -> AsyncIterator[str]:
+    if isinstance(text, str):
+        for sentence in sentences(text):
+            yield sentence
+        return
+    held = ""
+    async for chunk in text:
+        held += chunk
+        *complete, held = sentences(held) or [""]
+        for sentence in complete:
+            yield sentence
+    if held.strip():
+        yield held
+```
+
+  In `session.py` add imports (`AsyncIterator`, `Transcript`, `UtteranceEnd`, `TurnEnded`,
+  `Check`, `CheckAnswer`, `as_decided`, `sentences_from`), the field `source: str |
+  AsyncIterator[str] = ""` on `Utterance`, and:
 
 ```python
 DONE = Check(
@@ -2147,13 +2275,34 @@ DONE = Check(
             self._spawn(self._speak())
 ```
 
-  In `say`, before the final `raise`:
+  `say` becomes (Task 7's muted check kept):
 
 ```python
+    async def say(self, text: str | AsyncIterator[str], *, triggered_by: Identity) -> Said:
+        if isinstance(text, str):
+            self._ready(text)
+        else:
+            self._check_open()
+        done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
+        u = Utterance(triggered_by, text if isinstance(text, str) else "", verbatim=True, done=done, source=text)
+        if self._muted:
+            await self._finish(u, "", interrupted=True)
+            return await done
+        if self._connection is not None:
+            connection = self._connection
+            if not isinstance(text, str):
+                joined = "".join([chunk async for chunk in text])
+                self._check_open()
+                if not joined.strip():
+                    await self._finish(u, "", interrupted=False)
+                    return await done
+                u.text = joined
+            return await self._ask(u, lambda: connection.say(u.text))
         if self._speech is not None:
             self._waiting.append(u)
             self._queue.put_nowait(u)
             return await done
+        raise ConfigurationError("session: say needs a live model or a speech model")
 ```
 
   `_hear` becomes:
@@ -2246,29 +2395,50 @@ DONE = Check(
             await self._finish(u, "", interrupted=True)
             return
         self._start(u)
+        streamed = not isinstance(u.source, str)
+        pieces = sentences_from(u.source)
         try:
-            for sentence in sentences(u.text):
-                async for frame in self._speech.speak(sentence):
-                    if self._utterance is not u:
-                        return
-                    await self._send(u, frame)
+            async for sentence in pieces:
+                if streamed:
+                    u.text += sentence
+                try:
+                    async for frame in self._speech.speak(sentence):
+                        if self._utterance is not u:
+                            return
+                        await self._send(u, frame)
+                except Exception as exc:
+                    log.warning("session: the speech model failed: %s", exc)
+                    self._abandon(u, ModelError(f"session: the speech model failed: {exc}"))
+                    return
                 if self._utterance is not u:
                     return
                 u.ledger.mark(sentence)
         except Exception as exc:
-            log.warning("session: the speech model failed: %s", exc)
-            if self._utterance is u:
-                self._utterance = None
-                self._transport.clear_audio()
-            u.finished = True
-            self._played.pop(u.number, None)
-            if u.done is not None and not u.done.done():
-                u.done.set_exception(ModelError(f"session: the speech model failed: {exc}"))
+            self._abandon(u, exc)
             return
+        finally:
+            await pieces.aclose()
+            close = getattr(u.source, "aclose", None)
+            if close is not None:
+                await close()
         await self._conclude(u)
+
+    def _abandon(self, u: Utterance, error: Exception) -> None:
+        if self._utterance is u:
+            self._utterance = None
+            self._transport.clear_audio()
+        u.finished = True
+        self._played.pop(u.number, None)
+        if u.done is not None and not u.done.done():
+            u.done.set_exception(error)
 ```
 
-- [ ] **Step 3: gate. Commit** `feat: cascaded sessions — transcripts, turns, speech`.
+  The outer `except` is the consumer's stream failing: that `say` raises the stream's own error.
+  A barge-in cancels `_playing` wherever it waits — on the speech model or inside the consumer's
+  stream — and the `finally` closes the stream; a queued stream that is never spoken is never
+  read.
+
+- [ ] **Step 3: gate. Commit** `feat: cascaded sessions — transcripts, turns, speech, streamed say`.
 
 ## Task 9 — Cascaded barge-in
 
@@ -2332,7 +2502,40 @@ async def test_the_voice_speaks_again_after_a_barge_in() -> None:
         said = await s.say("Go ahead.", triggered_by=HOST)
     assert said.heard == "Go ahead." and not said.interrupted
     assert {"type": "speaking", "utterance": 2} in link.controls
+
+
+async def test_a_barge_in_mid_stream_stops_reading_the_stream() -> None:
+    link, stt, tts = Loopback(ANA, "acme"), ScriptedTranscription(), Tone()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    pulled: list[str] = []
+    closed = asyncio.Event()
+
+    async def reply() -> AsyncIterator[str]:
+        try:
+            while True:
+                chunk = await queue.get()
+                pulled.append(chunk)
+                yield chunk
+        finally:
+            closed.set()
+
+    async with Session(link, transcription=stt, speech=tts) as s:
+        events = s.events()
+        saying = asyncio.create_task(s.say(reply(), triggered_by=HOST))
+        queue.put_nowait("One two. ")
+        queue.put_nowait("Three")
+        await until(lambda: len(link.audio) == 2)
+        stt.hear("wait", final=False, end=False)
+        cut = await next_of(events, Interrupted)
+        said = await saying
+        queue.put_nowait(" four.")
+        await asyncio.wait_for(closed.wait(), 1.0)
+    assert cut.heard == said.heard == said.text == "One two. " and said.interrupted
+    assert pulled == ["One two. ", "Three"] and tts.spoken == ["One two. "]
 ```
+
+  (Imports `AsyncIterator` from `collections.abc`. The stream test needs no code of its own:
+  Task 8's `_play` stops reading and closes the stream when the cut cancels it.)
 - [ ] **Step 2: implement** — in `_transcripts`, before `await self._emit(Heard(...))`:
 
 ```python
@@ -2617,7 +2820,8 @@ class SensesTools(Tools):
 ```
 
   The tool descriptions are the model-facing contract; keep them as written unless the docs
-  change.
+  change. The `say` tool passes `args["text"]`, a string: a model's tool arguments are text, and a
+  streamed `say` is for code (decision 10).
 - [ ] **Step 3: gate. Commit** `feat: SensesTools — the room, for a text mind`.
 
 ## Task 12 — The wire: binary frames, control frames, golden fixtures
@@ -2960,6 +3164,8 @@ async def test_clearing_drops_queued_audio_and_keeps_controls() -> None:
 ```
 
   (`caplog` needs the `rfnry_senses` logger to propagate, which it does by default.)
+  `authenticate` receives the hello's `auth` and nothing else (decision 11): no header or cookie
+  reaches it, and none should be added to `Connection`.
 - [ ] **Step 2: implement** `websocket.py`, complete:
 
 ```python
@@ -3162,6 +3368,10 @@ class WebRTCTransport:               # a Transport
     assert await accept_offer(offer, hello={"token": "no"}, authenticate=authenticate) is None
 ```
 
+  The offer endpoint is the consumer's own HTTP endpoint; `accept_offer` authenticates the posted
+  `hello` with the same `authenticate` and token as the WebSocket (decision 11). The camera track
+  arrives at the client's `fps` (its `maxFramerate`, Task 19) and every frame is encoded to JPEG,
+  so a live session receives frames continuously — the video path the docs explain.
 - [ ] **Step 2: implement** `webrtc.py`, complete (adapted as the table at the top says):
 
 ```python
@@ -3442,9 +3652,11 @@ def test_no_vendor_is_named_in_the_library_or_its_contract() -> None:
     auto-answering `ScriptedLive` whose connection replies to `say`/`send_text(respond=True)` with
     `response(...)` of the words); `stt` (`Script("A table for two.")`); `tts` (`Tone()`); `dm`
     (`Done(0.9)`); `tools` (a `Tools` with a `now` tool); `now` (its body); `engine` (a fake whose
-    `run(agent, scope=, input=, tools=None)` returns an object with `reply="For two, at eight."`
-    and whose `tool(agent, scope=, name=, description=)` returns a one-tool `Tools` named
-    `name`); `ThreadTools` (a function returning an empty `Tools`); `client`, `thread`;
+    `run(agent, scope=, input=, tools=None, on_event=None)` awaits `on_event(TextDelta(text=w))`
+    for each word of `"For two, at eight."` (spaces kept) when given one, then returns an object
+    with `reply="For two, at eight."`, and whose `tool(agent, scope=, name=, description=)`
+    returns a one-tool `Tools` named `name`); `TextDelta` (a stand-in with a `text` field — the
+    docs name the engine's event, the harness never imports rfnry-engine); `asyncio`; `ThreadTools` (a function returning an empty `Tools`); `client`, `thread`;
     `session` (an opened live `Session` over its own `Loopback`, closed after the block); `post`
     (records its calls). A block that iterates `session.events()` until the session ends is
     ended by the harness hanging its link up 0.2 s after the block starts; the `Seeing` block's
@@ -3927,7 +4139,9 @@ export class WebSocketLink {
   (jpeg: Uint8Array) => void); start(): Promise<MediaStream>; pause(): void; resume(): void;
   stop(): void }`; a hidden `<video muted playsinline>` plays the stream, a `setInterval(1000 /
   fps)` draws it scaled to `width` on a canvas and `toBlob('image/jpeg', quality)` sends the bytes;
-  a capture still in flight skips the next tick.
+  a capture still in flight skips the next tick. Frames flow for as long as the camera runs, at
+  `camera.fps`: that continuous stream is what a live session forwards to its model (Task 10) —
+  "seeing as video" in the docs.
 
   `senses.ts` — `connect()` dispatches on `transport`; the WebSocket path:
 
@@ -4069,7 +4283,7 @@ What each vendor can provide, with the keys this workspace has (`ANTHROPIC_API_K
 | contract | provider in `providers.py` | key | note |
 | --- | --- | --- | --- |
 | `LiveModel` | `GoogleLive` — Gemini Live (`google-genai`, `client.aio.live.connect`) | `GOOGLE_API_KEY` | `say` sends "Say exactly this, nothing else: …" as a completed turn; `send_text(respond=False)` sends an incomplete client turn; `interrupt(played_ms)` has no truncation call to make and raises (senses logs it) — the vendor cuts its own context when it detects the interruption |
-| `TranscriptionModel` | `GoogleTranscription` — a Gemini Live session with input transcription on, its replies discarded; `UtteranceEnd` on the vendor's turn end | `GOOGLE_API_KEY` | a live model used as a transcriber: works, costs a live session. **Gap:** no dedicated streaming-transcription key in the workspace |
+| `TranscriptionModel` | `GoogleTranscription` — a Gemini Live session with input transcription on, its replies discarded; `UtteranceEnd` on the vendor's turn end | `GOOGLE_API_KEY` | the examples' choice of transcriber: a live session used for its input transcription — a legitimate consumer choice the contract takes like any other; it costs a live session |
 | `SpeechModel` | `GoogleSpeech` — Gemini text-to-speech, one request per sentence, 24 kHz PCM | `GOOGLE_API_KEY` | not streaming within a sentence; senses already speaks sentence by sentence |
 | `DecisionModel` (turns) | `TypeSafeProvider`, byte-identical with the engine examples' class | `DECISION_API_KEY` | |
 | generation (engine agents) | `AnthropicProvider` / `GoogleProvider`, byte-identical with the engine examples | `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Anthropic has no audio models: it is only ever the text mind |
@@ -4134,12 +4348,15 @@ Never run before Tasks 13, 14 and 20 pass offline (engineering rule 6).
 - §3 contracts: Task 3; `say` on the connection and the event names are the corrections recorded
   in the design.
 - §4 session: live and cascaded (Tasks 6–9), optional modalities (Task 8's
-  `test_each_model_is_optional`, Task 10), every primitive, `say` returning what was heard, barge-in,
-  the frame window, attribution — each with a named test.
+  `test_each_model_is_optional`, Task 10), every primitive, `say` returning what was heard, a
+  streamed `say` (Task 8, its barge-in in Task 9), barge-in, the frame window, attribution (an
+  unsolicited response is `triggered_by=None`) — each with a named test.
 - §5 events: Task 3 and every session test; `Heard` regardless of an answer (Task 8).
-- §6 SensesTools: Task 11, definitions by mode.
+- §6 SensesTools: Task 11, definitions by mode; `say` stays text.
 - §7 two minds: docs + `live_voice_consult`, `two_minds_thread`.
-- §8 transports: Tasks 12–14; golden fixtures shared (Tasks 12, 16).
+- §8 transports: Tasks 12–14; golden fixtures shared (Tasks 12, 16); hello-token authentication
+  on both (decision 11); the video path — JPEG frames over WebSocket, a track over WebRTC turned
+  into JPEG, both at the client's `fps` (Tasks 14, 18, 19).
 - §9 TypeScript client: Tasks 16–19; no framework, no store, no visualizer.
 - §10 engine addition: referenced, planned in the engine repository.
 - §11 layout, docs test, examples: Tasks 1, 15, 21. §12 tests: three tiers, Tasks 1–22.
@@ -4150,6 +4367,7 @@ and run: the 81 unit tests of those tasks pass three runs in a row with `Runtime
 error, `mypy --strict` is clean, and `ruff check` is clean after `--fix` sorts imports. The family
 cut markers match between rfnry-engine and rfnry-memory for every block listed against both. The
 TypeScript `wire.ts` and `playback.ts` with their tests typecheck under the strict settings of
-Task 16 and pass against the fixtures the Python test wrote. Not run: the WebSocket and WebRTC
+Task 16 and pass against the fixtures the Python test wrote. The streamed-`say` additions to Tasks
+8 and 9 (decision 10) were written after that run and have not been run. Not run: the WebSocket and WebRTC
 integration tests, the rest of the TypeScript client, the docs-examples harness, the examples and
 the live tier.

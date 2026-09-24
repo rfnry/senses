@@ -184,8 +184,9 @@ said = await session.prompt("Tell the guest their table is ready.", triggered_by
 await session.inform("The terrace closes at nine tonight.", triggered_by=host)
 ```
 
-`say` speaks exactly the given words, through the same voice. A cascaded session has no model to
-prompt or inform; both are a `ConfigurationError` there.
+`say` speaks exactly the given words, through the same voice; given a stream of text, it joins the
+chunks and sends them once the stream ends, since a live model's verbatim speech needs the whole
+text. A cascaded session has no model to prompt or inform; both are a `ConfigurationError` there.
 
 ### Cascaded sessions
 
@@ -209,6 +210,36 @@ a decision model.
 still being made. Calls queue: a second `say` speaks after the first. Each model is optional — a
 session with only `speech=` can announce and never listens; one with only `transcription=` listens
 and never speaks, and `say` there is a `ConfigurationError`.
+
+`say` also takes an `AsyncIterator[str]` — a reply still being written. Senses cuts it into
+sentences as the chunks arrive, so the first sentence plays while the model is still writing the
+rest; when the person cuts in, senses stops reading the stream and closes it. With rfnry-engine, a
+run's `on_event` hands over its text deltas:
+
+```python
+async def reply(text, scope):
+    chunks = asyncio.Queue()
+
+    async def forward(event):
+        if isinstance(event, TextDelta):
+            chunks.put_nowait(event.text)
+
+    async def run():
+        try:
+            await engine.run("concierge", scope=scope, input=text, on_event=forward)
+        finally:
+            chunks.put_nowait(None)
+
+    running = asyncio.create_task(run())
+    while (chunk := await chunks.get()) is not None:
+        yield chunk
+    await running
+
+said = await session.say(reply("Is the terrace open?", session.scope), triggered_by=host)
+```
+
+`Said.text` is what the voice was given and `Said.heard` what the person heard, as with a string. A
+stream that yields no text speaks nothing and returns an empty `Said`.
 
 ### Speaking and being interrupted
 
@@ -263,6 +294,14 @@ that stalls leaves an empty window rather than a stale picture. Senses never sam
 transcodes a frame; the client sends JPEG at the rate models consume (1 frame per second by
 default). In a live session every frame also streams to the model; when the model falls behind it
 gets the newest frame and the ones in between are skipped.
+
+That stream is how a live model sees as video. Today's live models take video as a sequence of
+image frames, so seeing as video is frames arriving continuously at the rate you set — the client's
+`camera.fps`. Over a WebSocket each frame is a JPEG: light, and ideal at 1–2 frames a second. Over
+WebRTC the camera is a real video track, with inter-frame compression and adaptive bitrate — the
+right path when your product raises the frame rate; the `webrtc` extra turns it back into JPEG
+frames on the server. A model that takes true video input would add `send_video` to the live
+connection, alongside what is there.
 
 `look` returns the newest frames, oldest first, each an `Image` followed by the `Text` of when it was
 taken — `frame at 12:03:04.200` — ready to hand any model that sees. With nothing in the window it
@@ -330,8 +369,12 @@ extra. The transport is your choice per endpoint, never negotiated.
 
 `serve(connection, authenticate=)` takes any object with four methods — `receive()` returning text
 or bytes, `send_text`, `send_bytes`, `close` — reads the hello within `timeout` (10 s), and returns
-the transport, or `None` after telling the client why it was refused. FastAPI's socket adapts like
-this:
+the transport, or `None` after telling the client why it was refused. `authenticate` sees only the
+hello — never headers or cookies, as in rfnry-thread. Browsers send cookies on a cross-site WebSocket
+upgrade and WebSockets have no CORS, so a socket that trusts cookies can be opened by any site the
+person visits (cross-site WebSocket hijacking); a token in the hello is something another site
+cannot read. If your application signs in with cookies, mint a short-lived token from your own
+endpoint and pass it as `hello`. FastAPI's socket adapts like this:
 
 ```python
 class Socket:
@@ -352,8 +395,9 @@ fixtures both clients' tests read.
 
 WebRTC is the transport for browser voice: Opus bandwidth, loss concealment, and the echo
 cancellation that lets the person interrupt over speakers. One peer connection carries the audio,
-an optional low-rate camera track and a data channel for the control frames. You host the
-signalling endpoint; the client posts its offer and hello to it:
+an optional camera track at the client's `fps` and a data channel for the control frames. You host
+the signalling endpoint — your own HTTP endpoint; the client posts its offer and hello to it, and
+`accept_offer` authenticates the offer with the hello's token, through the same `authenticate`:
 
 ```python
 @app.post("/senses/offer")
@@ -404,7 +448,8 @@ await senses.close()
 
 It captures the microphone with echo cancellation and noise suppression and sends 16 kHz PCM, or an
 Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer endpoint and optional
-`iceServers`). With `camera` it samples JPEG frames at `fps`. It plays the voice, counts what it
+`iceServers`). With `camera` it sends frames at `fps` for as long as the camera runs: JPEG over a
+WebSocket, a video track capped at `fps` over WebRTC. It plays the voice, counts what it
 played, and answers `stop` with it on its own. `mute()`/`unmute()` silence the microphone,
 `pauseCamera()`/`resumeCamera()` the camera; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`. Device pickers, visualizers and framework bindings
@@ -434,7 +479,7 @@ loop — pinned to one session and one cause:
 | tool | returns | offered when |
 | --- | --- | --- |
 | `look(frames)` | the frames as parts: `[Image, Text("frame at 12:03:04.200")]` | `video=True` |
-| `say(text)` | `{"heard": …, "interrupted": …}` | the session has a voice |
+| `say(text)` | `{"heard": …, "interrupted": …}` — text only; a streamed `say` is for code | the session has a voice |
 | `prompt(text)` | `{"said": …, "heard": …, "interrupted": …}` | live |
 | `inform(text)` | `"informed"` | live |
 | `interrupt()` | `{"heard": …}` — empty when nothing was being said | the session has a voice |

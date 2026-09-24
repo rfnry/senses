@@ -94,7 +94,8 @@ class SpeechModel(Protocol):
 - `send_text(respond=True)` backs `prompt`; `respond=False` backs `inform`; `say(text)` backs a live
   `say` — verbatim speech is a vendor technique (a native call, or an instruction to repeat), so it
   lives in the adapter, not in a prompt the library writes. (Added while writing the docs: the
-  first contract had no method behind the live `say` row of §4.)
+  first contract had no method behind the live `say` row of §4.) The connection's `say` takes whole
+  text: a streamed session `say` (§4) is joined before it reaches it.
 - Transcription events: `Transcript(text, final)` and `UtteranceEnd()`.
 - A `LiveConnection` implements everything; a vendor that cannot (e.g. truncate) raises from its
   adapter. No capability matrix.
@@ -128,7 +129,7 @@ drops audio; `video=False` by default. A camera-only session has no models at al
 
 | method | live | cascaded |
 |---|---|---|
-| `say(text)` | speak exactly these words | synthesize (streaming, sentence by sentence) and play |
+| `say(text)` — a `str` or an `AsyncIterator[str]` | speak exactly these words (a stream is joined, then sent) | synthesize (streaming, sentence by sentence) and play |
 | `prompt(text)` | ask the live model to respond now, in its own words; returns `Said` | not available (`ConfigurationError`) |
 | `inform(text)` | add context the live model sees, without speaking — replaces stale connect-time instructions | not available |
 | `interrupt()` | stop speaking and truncate to what the person heard | same |
@@ -146,6 +147,16 @@ text the person actually heard before cutting in, from the client's `played_ms` 
 synthesized chunks. The same truncation drives the live model's `interrupt(played_ms)` so its
 context holds only what was heard.
 
+**`say` takes streamed text.** `say(text: str | AsyncIterator[str], *, triggered_by)` — a text
+mind's reply can be spoken while it is still being written. In cascaded mode the chunks go through
+the same sentence splitter (a sentence is complete once text follows its end), so synthesis starts on
+the first complete sentence and the rest follows as it arrives. In live mode the chunks are joined
+and sent once the stream ends: the connection's `say` takes whole text, because verbatim speech is a
+vendor technique that needs the words it repeats; the cause joins the FIFO when the text is
+complete. Either way `Said` reports what was heard, and `Said.text` is what the voice was given.
+When the utterance is cut, senses stops reading the stream and closes it (`aclose()`, when it has
+one). A stream that yields no text speaks nothing and returns an empty `Said`.
+
 **Barge-in.** In cascaded mode, a new utterance from the person while the assistant speaks clears
 outbound audio, waits briefly for `played_ms`, records what was heard, emits `Interrupted`, and fences
 stale synthesized frames by a generation counter. In live mode the vendor detects the interruption;
@@ -162,9 +173,9 @@ live mode frames also stream to the model.
 **Attribution.** `triggered_by` is required on every action. In live mode, `say`/`prompt` push their
 cause onto a FIFO; each response the model starts takes the oldest; an empty queue means the model
 answered what it heard or started on its own, and the cause is `None` — declared, never assumed.
-(Changed while writing the docs from "the cause is the assistant itself": with vendor turn-taking
-an empty queue most often means the model is answering the person, and naming either party would
-be a guess; the family rule is that unsolicited turns stay unattributed.) Pushing onto the FIFO and
+(Changed while writing the docs from naming the assistant as the cause: with vendor turn-taking an
+empty queue most often means the model is answering the person, and naming either party would be a
+guess; the family rule is that unsolicited turns stay unattributed.) Pushing onto the FIFO and
 sending to the connection happen under one lock, so concurrent `say`/`prompt` calls keep order.
 
 ## 5. Events
@@ -211,12 +222,13 @@ tools = SensesTools(session, triggered_by=ana)
 | `interrupt()` | `{"heard": ...}`, empty when nothing was being said |
 
 `definitions()` offers what the session can do: `look` with `video=True`, `say`/`interrupt` with a
-voice (live or a speech model), `prompt`/`inform` when live. There is no `listen`
+voice (live or a speech model), `prompt`/`inform` when live. The `say` tool takes
+text only — a model's tool arguments are a string; a streamed `say` is for code. There is no `listen`
 tool (the loop is started with what was said) and no `watch` tool (triggers are the consumer's).
 
 ## 7. The two-minds pattern (documented, built from family parts)
 
-A live model in front and an engine agent behind, as Claire and Envoy do:
+A live model in front and an engine agent behind:
 
 ```python
 consult = engine.tool("core", scope="acme", name="consult", description="Ask the reasoning mind.")
@@ -253,7 +265,7 @@ callback.)
   the server. The client answers `stop`, and the natural end of an utterance (`silent`), with
   `played`. Media uses its own socket, separate from any thread socket.
 - **WebRTC** (extra `rfnry-senses[webrtc]`, aiortc): one peer connection with an audio track and an
-  optional low-rate video track; controls on the data channel; `accept_offer(sdp, hello=,
+  optional video track at the client's `fps`; controls on the data channel; `accept_offer(sdp, hello=,
   authenticate=)` returns the transport with its `answer` SDP (the consumer hosts the signalling
   endpoint; the client posts `{sdp, hello}` and reads `{sdp}`). The extra resamples inbound audio to
   `sample_rate` and encodes the camera track's frames to JPEG at the client's rate with the `av`
@@ -266,13 +278,32 @@ callback.)
 The transport is an explicit choice, never negotiated. Camera-only sessions use WebSocket JPEG at the
 rate models consume (default 1 frame/s).
 
+**Authentication is the hello's token, nothing else.** As in rfnry-thread, `authenticate(hello)`
+sees only what the client put in its hello — never headers or cookies. Browsers send cookies on a
+cross-site WebSocket upgrade and WebSockets have no CORS, so a cookie-authenticated socket can be
+opened by any site the person visits (cross-site WebSocket hijacking); a token in the hello is
+something another site cannot read. An application that signs in with cookies mints a short-lived
+token from its own endpoint and passes it as the hello. The WebRTC offer endpoint is the consumer's
+own HTTP endpoint: the client posts `{sdp, hello}` and `accept_offer` authenticates the offer with
+the same token, through the same `authenticate`.
+
+**Seeing as video.** Today's live models take video as a sequence of image frames. "Seeing as
+video" is frames streaming to the live model continuously, at the rate the consumer sets (`fps` on
+the client): every frame that arrives goes to the model, the newest when it falls behind. The two
+transports carry those frames differently. WebSocket sends each as a JPEG — light, and ideal at 1–2
+frames a second. WebRTC sends a real video track, with inter-frame compression and adaptive
+bitrate — the right path when a product raises the frame rate; the extra turns the track back into
+JPEG frames on the server. A future model that takes true video input would add `send_video` to
+the live contract, additively; nothing here changes.
+
 ## 9. The TypeScript client — `@rfnry/senses`
 
 Framework-free:
 
 - `connect({url, hello, transport: "websocket" | "webrtc"})`.
 - Microphone capture with `getUserMedia` echo cancellation and noise suppression; camera frames
-  sampled at `fps` (default 1) as JPEG over WebSocket, or a low-framerate track over WebRTC.
+  sampled at `camera.fps` (default 1) as JPEG over WebSocket, or a video track capped at `fps` over
+  WebRTC — sent continuously while the camera runs, which is how a live session sees as video.
 - Playback that tracks `played_ms` and reports it on interruption automatically.
 - `mute()` / `unmute()`, `pauseCamera()` / `resumeCamera()`.
 - `subscribe(listener) -> unsubscribe` for the session's events (every one but `Informed` and
@@ -305,7 +336,8 @@ session where an engine agent looks; the two-minds pattern with a thread; barge-
 ## 12. Tests
 
 Unit: scripted fake live, transcription, speech and decision models; an in-process loopback transport;
-barge-in truncation with a fake `played_ms`; turn detection with and without a decision model; the
+barge-in truncation with a fake `played_ms`; a streamed `say` spoken as its sentences complete and
+stopped mid-stream by a barge-in; turn detection with and without a decision model; the
 frame window; attribution FIFO; SensesTools definitions by mode; `look` returning parts.
 Integration: the WebSocket transport against a real socket; the WebRTC transport behind the extra
 (aiortc loopback). E2E: real models behind `live`; the TypeScript client against a live server
@@ -321,9 +353,10 @@ Integration: the WebSocket transport against a real socket; the WebRTC transport
 | No store | the thread is the conversation log, the Refinery the agent's log; a third log would repeat them |
 | `LiveModel`, `TranscriptionModel`, `SpeechModel`; `TurnDetector` cut | named for what they produce; turns split into the transcriber's end-of-utterance and an optional decision-model check |
 | One live contract, no capability matrix | adapters raise what their vendor cannot do |
-| `prompt` / `inform` primitives | both products reached into `live_session.send_text`; stale connect-time instructions were their top gap |
+| `prompt` / `inform` primitives | a text mind steering a live voice needs to ask it to speak and to tell it what changed; connect-time instructions go stale |
 | `look` returns image parts | the text mind sees directly; no separate vision model session |
 | `say` returns what was heard | the model learns it was interrupted and what got through |
+| `say` takes a `str` or an `AsyncIterator[str]`; the `say` tool stays text | a text mind's streamed reply starts playing on its first sentence; a model's tool arguments are a string |
 | SensesTools for the text mind; the live model takes any `Tools` | most of what a live model needs is other family tools |
 | WebSocket core, WebRTC as an extra | WebRTC is quality-critical for browser voice (Opus, loss concealment, echo cancellation); a plain install stays light |
 | Transcripts mirrored to a thread by consumer glue | the libraries compose through shared shapes and never import each other |
@@ -332,3 +365,5 @@ Integration: the WebSocket transport against a real socket; the WebRTC transport
 | `serve` returns the transport; the consumer builds the session | no session-factory callback; the loop stays the consumer's |
 | A four-method media connection (`receive() -> str \| bytes`) | text and binary frames interleave on one socket |
 | The utterance number rides in the audio header | stale frames are dropped in the client as well as the server |
+| Authentication is the hello's token only; the WebRTC offer carries the same hello | cookies ride cross-site WebSocket upgrades with no CORS (cross-site WebSocket hijacking); another site cannot read a token; mirrors rfnry-thread |
+| Video is frames at the client's `fps`: JPEG over WebSocket, a video track over WebRTC | live models take video as image frames; WebRTC's inter-frame compression serves higher rates; true video input would add `send_video` additively |
