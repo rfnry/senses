@@ -4252,6 +4252,10 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   the server sends nothing but events before the person speaks, so create `playback` before
   awaiting `WebSocketLink.open` if a test shows otherwise (the `AudioContext` needs no await).
   Make the `mute`/`unmute` arrow bodies statements (Biome flags assignments in expressions).
+  As built (Task 18): `playback` is created before the link opens (its report forwards to the link
+  once it exists), so nothing that arrives right after `ready` is dropped; the listener set and
+  status live in a small `Listeners` class both paths share; `encodeAudio`/`encodeImage` return
+  `Uint8Array<ArrayBuffer>` (TypeScript 7's `WebSocket.send` refuses `ArrayBufferLike` views).
 - [ ] **Step 3: gate. Commit** `feat(ts): connect over a WebSocket — microphone, camera, playback,
   events`.
 

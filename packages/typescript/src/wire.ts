@@ -43,7 +43,7 @@ export function played(utterance: number, ms: number): string {
   return JSON.stringify({ type: 'played', utterance, ms: Math.max(0, Math.round(ms)) })
 }
 
-export function encodeAudio(pcm: Uint8Array, sampleRate: number, channels = 1, utterance = 0): Uint8Array {
+export function encodeAudio(pcm: Uint8Array, sampleRate: number, channels = 1, utterance = 0): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(HEADER + pcm.byteLength)
   const view = new DataView(out.buffer)
   view.setUint8(0, AUDIO)
@@ -54,7 +54,7 @@ export function encodeAudio(pcm: Uint8Array, sampleRate: number, channels = 1, u
   return out
 }
 
-export function encodeImage(jpeg: Uint8Array): Uint8Array {
+export function encodeImage(jpeg: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(1 + jpeg.byteLength)
   out[0] = IMAGE
   out.set(jpeg, 1)

@@ -1,34 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { type AudioContextLike, Playback } from '../src/playback'
-
-class Node {
-  buffer: unknown = null
-  onended: (() => void) | null = null
-  started = -1
-  stopped = false
-  connect(): void {}
-  start(at: number): void {
-    this.started = at
-  }
-  stop(): void {
-    this.stopped = true
-  }
-}
-
-class Context {
-  currentTime = 0
-  destination = {} as AudioNode
-  nodes: Node[] = []
-  createBuffer(_channels: number, length: number, rate: number): AudioBuffer {
-    return { duration: length / rate, getChannelData: () => new Float32Array(length) } as unknown as AudioBuffer
-  }
-  createBufferSource(): AudioBufferSourceNode {
-    const node = new Node()
-    this.nodes.push(node)
-    return node as unknown as AudioBufferSourceNode
-  }
-  async close(): Promise<void> {}
-}
+import { Context } from './fakes'
 
 const frame = (utterance: number, ms = 100) => ({
   utterance,
