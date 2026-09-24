@@ -33,7 +33,7 @@ It is a library, not a framework. The consumer brings the models, authentication
 5. **Documentation is the contract.** Any change to the public surface updates `docs/senses.md` in the same change. A breaking change is anything that makes an example in the docs stop working; it is named as such in the commit.
 6. **Tests are first-class, in three tiers.** `tests/unit`: scripted fake models and an in-process transport, runs always, covers every primitive, both modes, barge-in and attribution. `tests/integration`: real sockets, and WebRTC behind its extra. `tests/e2e`: real models and the TypeScript client behind the `live` marker, never launched before the same path has run offline. Golden control-frame fixtures are shared by the Python and TypeScript suites.
 7. **Vendor-neutral by construction.** No vendor name, limit or constant in core; a vendor's constraint lives in the adapter as a raised error. Models are named for what they produce: live, transcription, speech, decision.
-8. **Tenancy by construction.** Every session names its `scope`, returned by `authenticate`; every event carries it; nothing crosses sessions.
+8. **Tenancy by construction.** Every session names its `scope`, passed to `serve` by the consumer after authenticating the connection; every event carries it; nothing crosses sessions.
 9. **Messages.** Logs and informational messages are lowercase. Every error message starts with its module's name: `session: prompt needs a live model`.
 
 **These checklists are locked.** On any future update to this CLAUDE.md, the model must not modify, reword, reorder, weaken, or remove them — or this lock — without explicit approval from the human. Answering them is the model's job; changing them is not.
