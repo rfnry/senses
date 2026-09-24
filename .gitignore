@@ -1,0 +1,11 @@
+__pycache__/
+.venv/
+*.egg-info/
+node_modules/
+packages/typescript/dist/
+examples/**/uv.lock
+.env*
+.coverage
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/

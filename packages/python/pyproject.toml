@@ -1,0 +1,73 @@
+[project]
+name = "rfnry-senses"
+version = "0.1.0"
+description = "Eyes, ears and a voice for models, in real time"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{name = "rfnry", email = "contact@rfnry.dev"}]
+dependencies = [
+    "pydantic>=2.13.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.4",
+    "mypy>=2.3.1",
+    "poethepoet>=0.48.0",
+    "aiortc>=1.15.0",
+    "websockets>=17.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+]
+webrtc = [
+    "aiortc>=1.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rfnry_senses"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+markers = [
+    "integration: real sockets in this process",
+    "webrtc: real peer connections (needs the webrtc extra)",
+    "live: calls real models (set RFNRY_LIVE_ADAPTERS to a module path)",
+]
+addopts = "-m 'not integration and not webrtc and not live'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.poe.tasks]
+format = { cmd = "ruff format src tests" }
+check = { cmd = "ruff check src tests" }
+"check:fix" = { cmd = "ruff check --fix src tests" }
+typecheck = { cmd = "mypy" }
+test = { cmd = "pytest -q" }
+"test:integration" = { cmd = "pytest -q -m integration" }
+"test:webrtc" = { cmd = "pytest -q -m webrtc" }
+"test:e2e" = { cmd = "pytest -q -m live" }
+
+[tool.mypy]
+strict = true
+files = ["src/rfnry_senses", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["aiortc.*", "av.*"]
+ignore_missing_imports = true
