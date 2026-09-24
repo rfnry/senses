@@ -243,6 +243,8 @@ async def test_every_subscription_sees_every_event() -> None:
         assert (await next_of(one, Heard)).text == (await next_of(two, Heard)).text == "hi"
         with pytest.raises(InputError, match="^session: text is empty$"):
             await s.say("  ", triggered_by=HOST)
+        with pytest.raises(ConfigurationError, match="^session: look needs video=True$"):
+            await s.look(triggered_by=HOST)
 
 
 async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:

@@ -35,6 +35,7 @@ from rfnry_senses.errors import (
     ConfigurationError,
     InputError,
     ModelError,
+    NotFoundError,
     SensesException,
     TransportError,
 )
@@ -44,6 +45,7 @@ from rfnry_senses.events import (
     Heard,
     Informed,
     Interrupted,
+    Looked,
     Muted,
     Said,
     Silent,
@@ -59,6 +61,7 @@ from rfnry_senses.models import (
     Identity,
     Image,
     Part,
+    Text,
     ToolSpec,
     as_decided,
 )
@@ -212,6 +215,8 @@ class Session:
             )
             self._connection = await self._live.open(tools=specs, instructions=self._instructions)
             self._spawn(self._live_events())
+            if self._window is not None:
+                self._spawn(self._forward_frames())
         if self._transcription is not None:
             self._stream = self._transcription.stream()
             self._spawn(self._transcripts())
@@ -394,8 +399,37 @@ class Session:
         elif self._stream is not None:
             await self._stream.feed(frame)
 
+    async def look(self, frames: int = 1, *, triggered_by: Identity) -> list[Part]:
+        self._check_open()
+        if self._window is None:
+            raise ConfigurationError("session: look needs video=True")
+        if frames < 1:
+            raise InputError("session: frames must be at least 1")
+        seen = self._window.newest(frames)
+        if not seen:
+            raise NotFoundError(f"session: no frame in the last {self._window.seconds:g} s")
+        await self._emit(Looked(scope=self.scope, frames=len(seen), triggered_by=triggered_by))
+        parts: list[Part] = []
+        for at, image in seen:
+            parts += [image, Text(text=f"frame at {at:%H:%M:%S}.{at.microsecond // 1000:03d}")]
+        return parts
+
     async def _see(self, image: Image) -> None:
-        return None
+        if self._window is None:
+            return
+        self._window.append(image)
+        if self._connection is not None:
+            self._frame = image
+            self._frame_ready.set()
+
+    async def _forward_frames(self) -> None:
+        assert self._connection is not None
+        while True:
+            await self._frame_ready.wait()
+            self._frame_ready.clear()
+            frame, self._frame = self._frame, None
+            if frame is not None:
+                await self._connection.send_image(frame)
 
     async def _live_events(self) -> None:
         assert self._connection is not None
