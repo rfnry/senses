@@ -7,7 +7,7 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from rfnry_senses.contracts import AudioFrame
-from rfnry_senses.models import Identity, Image
+from rfnry_senses.models import Identity, IdentityLike, Image, as_identity
 
 
 class Played(BaseModel):
@@ -17,8 +17,10 @@ class Played(BaseModel):
 
 @runtime_checkable
 class Transport(Protocol):
-    identity: Identity
-    scope: str
+    @property
+    def identity(self) -> IdentityLike: ...
+    @property
+    def scope(self) -> str: ...
 
     def inbound(self) -> AsyncIterator[AudioFrame | Image | Played]: ...
     async def send_audio(self, frame: AudioFrame, utterance: int) -> None: ...
@@ -30,13 +32,13 @@ class Transport(Protocol):
 class Loopback:
     def __init__(
         self,
-        identity: Identity,
+        identity: IdentityLike,
         scope: str,
         *,
         played: Callable[[int, float], int] | None = None,
         answer: bool = True,
     ) -> None:
-        self.identity = identity
+        self.identity: Identity = as_identity(identity)
         self.scope = scope
         self.audio: list[AudioFrame] = []
         self.controls: list[dict[str, Any]] = []

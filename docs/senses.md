@@ -346,6 +346,12 @@ response started with the queue empty — the model answering what it heard, or 
 has `triggered_by=None`. The client receives every event except `Informed` and `ToolCalled`, which
 are between you and the model.
 
+Every identity the library takes — `serve`, `accept_offer`, `Loopback`, a transport's `identity`,
+each verb's `triggered_by=`, `SensesTools(triggered_by=)` — is read by its fields: any object with
+`role`, `id`, `name` and `metadata` will do, such as rfnry-thread's `Identity`, which has the same
+source. The values are validated as strictly as an `Identity`'s; one that does not fit is an
+`InputError`.
+
 ### Two minds
 
 A live model in front for the conversation, an engine agent behind for the thinking:
@@ -558,7 +564,7 @@ model, `look` without `video=True`; a `window`, `window_bytes`, `turn_timeout` o
 that is not positive, a `turn_threshold` outside `(0, 1]`. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
 audio frame whose bytes do not fill its samples, a tool called with bad arguments, an
-empty scope given to `serve` or `accept_offer`. `NotFoundError` when `look` finds no frame in the
+identity whose fields do not fit, an empty scope given to `serve` or `accept_offer`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the

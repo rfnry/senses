@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from rfnry_senses.models import Identity, Part
+from rfnry_senses.models import IdentityLike, Part, as_identity
 from rfnry_senses.session import Session
 from rfnry_senses.tools import Tool, Tools
 
@@ -22,9 +22,9 @@ class NoArgs(BaseModel):
 
 
 class SensesTools(Tools):
-    def __init__(self, session: Session, *, triggered_by: Identity) -> None:
+    def __init__(self, session: Session, *, triggered_by: IdentityLike) -> None:
         self.session = session
-        self.triggered_by = triggered_by
+        self.triggered_by = as_identity(triggered_by)
         tools: list[Tool] = []
         if session._window is not None:
             tools.append(

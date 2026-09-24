@@ -1,6 +1,5 @@
 import asyncio
 
-import rfnry_thread
 from rfnry_engine import Engine
 from rfnry_senses import AudioFrame, Heard, Identity, Loopback, Said, SensesTools, Session
 from rfnry_thread import InMemoryStorage, Message, Server, ThreadTools, resolve
@@ -17,10 +16,6 @@ INSTRUCTIONS = (
 
 engine = Engine("agents", generation=AnthropicProvider())
 voice = GoogleSpeech(voice="Puck")
-
-
-def thread_identity(identity: Identity) -> rfnry_thread.Identity:
-    return rfnry_thread.Identity.model_validate(identity.model_dump())
 
 
 async def mirror(session: Session, post, said: asyncio.Queue[Said]) -> None:
@@ -45,8 +40,8 @@ async def guest_says(link: Loopback, text: str) -> None:
 
 async def main() -> None:
     server = Server(InMemoryStorage())
-    guest = await server.connect(thread_identity(ANA), scope="acme")
-    concierge = await server.connect(thread_identity(CONCIERGE), scope="acme")
+    guest = await server.connect(identity=ANA, scope="acme")
+    concierge = await server.connect(identity=CONCIERGE, scope="acme")
     thread = await guest.create_thread(thread_id="table-for-two")
     await guest.add_member(thread.id, concierge.identity)
     clients = {ANA.id: guest, CONCIERGE.id: concierge}

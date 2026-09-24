@@ -59,11 +59,13 @@ from rfnry_senses.models import (
     Content,
     DecisionModel,
     Identity,
+    IdentityLike,
     Image,
     Part,
     Text,
     ToolSpec,
     as_decided,
+    as_identity,
 )
 from rfnry_senses.tools import ToolsLike
 from rfnry_senses.transport import Played, Transport
@@ -168,7 +170,7 @@ class Session:
         if not 0 < turn_threshold <= 1:
             raise ConfigurationError("session: turn_threshold must be in (0, 1]")
         self.scope = transport.scope
-        self.person = transport.identity
+        self.person = as_identity(transport.identity)
         self._transport = transport
         self._live = live
         self._tools = tools
@@ -233,14 +235,15 @@ class Session:
     def events(self) -> Subscription:
         return Subscription(self._subscribers, self._closed)
 
-    async def say(self, text: str | AsyncIterator[str], *, triggered_by: Identity) -> Said:
+    async def say(self, text: str | AsyncIterator[str], *, triggered_by: IdentityLike) -> Said:
+        cause = as_identity(triggered_by)
         if isinstance(text, str):
             self._ready(text)
         else:
             self._check_open()
         done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
         u = Utterance(
-            triggered_by,
+            cause,
             text if isinstance(text, str) else "",
             verbatim=True,
             done=done,
@@ -265,47 +268,52 @@ class Session:
             return await done
         raise ConfigurationError("session: say needs a live model or a speech model")
 
-    async def prompt(self, text: str, *, triggered_by: Identity) -> Said:
+    async def prompt(self, text: str, *, triggered_by: IdentityLike) -> Said:
+        cause = as_identity(triggered_by)
         self._ready(text)
         connection = self._need_live("prompt")
         done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
-        u = Utterance(triggered_by, done=done)
+        u = Utterance(cause, done=done)
         if self._muted:
             await self._finish(u, "", interrupted=True)
             return await done
         return await self._ask(u, lambda: connection.send_text(text, respond=True))
 
-    async def inform(self, text: str, *, triggered_by: Identity) -> None:
+    async def inform(self, text: str, *, triggered_by: IdentityLike) -> None:
+        cause = as_identity(triggered_by)
         self._ready(text)
         connection = self._need_live("inform")
         async with self._lock:
             await connection.send_text(text, respond=False)
-        await self._emit(Informed(scope=self.scope, text=text, triggered_by=triggered_by))
+        await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
 
     async def close(self) -> None:
         await self._close("closed", None, None)
 
-    async def interrupt(self, *, triggered_by: Identity) -> Interrupted | None:
+    async def interrupt(self, *, triggered_by: IdentityLike) -> Interrupted | None:
+        cause = as_identity(triggered_by)
         self._check_open()
         if not self._voice:
             raise ConfigurationError("session: interrupt needs a live model or a speech model")
-        return await self._cut(triggered_by)
+        return await self._cut(cause)
 
-    async def mute(self, *, triggered_by: Identity) -> None:
+    async def mute(self, *, triggered_by: IdentityLike) -> None:
+        cause = as_identity(triggered_by)
         self._check_open()
         if self._muted:
             return
         self._muted = True
-        await self._emit(Muted(scope=self.scope, muted=True, triggered_by=triggered_by))
+        await self._emit(Muted(scope=self.scope, muted=True, triggered_by=cause))
         await self._drop_waiting()
-        await self._cut(triggered_by)
+        await self._cut(cause)
 
-    async def unmute(self, *, triggered_by: Identity) -> None:
+    async def unmute(self, *, triggered_by: IdentityLike) -> None:
+        cause = as_identity(triggered_by)
         self._check_open()
         if not self._muted:
             return
         self._muted = False
-        await self._emit(Muted(scope=self.scope, muted=False, triggered_by=triggered_by))
+        await self._emit(Muted(scope=self.scope, muted=False, triggered_by=cause))
 
     async def _cut(self, cause: Identity) -> Interrupted | None:
         u = self._utterance
@@ -399,7 +407,8 @@ class Session:
         elif self._stream is not None:
             await self._stream.feed(frame)
 
-    async def look(self, frames: int = 1, *, triggered_by: Identity) -> list[Part]:
+    async def look(self, frames: int = 1, *, triggered_by: IdentityLike) -> list[Part]:
+        cause = as_identity(triggered_by)
         self._check_open()
         if self._window is None:
             raise ConfigurationError("session: look needs video=True")
@@ -408,7 +417,7 @@ class Session:
         seen = self._window.newest(frames)
         if not seen:
             raise NotFoundError(f"session: no frame in the last {self._window.seconds:g} s")
-        await self._emit(Looked(scope=self.scope, frames=len(seen), triggered_by=triggered_by))
+        await self._emit(Looked(scope=self.scope, frames=len(seen), triggered_by=cause))
         parts: list[Part] = []
         for at, image in seen:
             parts += [image, Text(text=f"frame at {at:%H:%M:%S}.{at.microsecond // 1000:03d}")]

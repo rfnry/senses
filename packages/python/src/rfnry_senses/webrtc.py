@@ -21,7 +21,7 @@ from aiortc.mediastreams import MediaStreamError
 
 from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import InputError, TransportError
-from rfnry_senses.models import Identity, Image
+from rfnry_senses.models import Identity, IdentityLike, Image, as_identity
 from rfnry_senses.transport import Played
 from rfnry_senses.websocket import check_hello
 from rfnry_senses.wire import control, parse_played
@@ -85,13 +85,13 @@ class _Voice(MediaStreamTrack):
 class WebRTCTransport:
     def __init__(
         self,
-        identity: Identity,
+        identity: IdentityLike,
         scope: str,
         *,
         sample_rate: int = 16000,
         ice_servers: list[dict[str, Any]] | None = None,
     ) -> None:
-        self.identity = identity
+        self.identity: Identity = as_identity(identity)
         self.scope = scope
         self.answer = ""
         self._rate = sample_rate
@@ -220,14 +220,15 @@ class WebRTCTransport:
 async def accept_offer(
     sdp: str,
     *,
-    identity: Identity,
+    identity: IdentityLike,
     scope: str,
     sample_rate: int = 16000,
     ice_servers: list[dict[str, Any]] | None = None,
 ) -> WebRTCTransport:
+    person = as_identity(identity)
     if not scope:
         raise InputError("transport: scope is empty")
-    transport = WebRTCTransport(identity, scope, sample_rate=sample_rate, ice_servers=ice_servers)
+    transport = WebRTCTransport(person, scope, sample_rate=sample_rate, ice_servers=ice_servers)
     try:
         await transport._pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
         await transport._pc.setLocalDescription(await transport._pc.createAnswer())

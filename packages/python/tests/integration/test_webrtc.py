@@ -16,7 +16,7 @@ from rfnry_senses.models import Image
 from rfnry_senses.session import Session
 from rfnry_senses.webrtc import accept_offer
 
-from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, next_of, until
+from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, lookalike, next_of, until
 
 pytestmark = pytest.mark.webrtc
 
@@ -121,5 +121,15 @@ async def test_an_empty_scope_is_the_consumers_bug() -> None:
     try:
         with pytest.raises(InputError, match="^transport: scope is empty$"):
             await accept_offer(await client.offer(), identity=ANA, scope="")
+    finally:
+        await client.pc.close()
+
+
+async def test_accept_offer_reads_the_person_by_their_fields() -> None:
+    client = Client()
+    try:
+        link = await accept_offer(await client.offer(), identity=lookalike(ANA), scope="acme")
+        assert link.identity == ANA
+        await link.close()
     finally:
         await client.pc.close()

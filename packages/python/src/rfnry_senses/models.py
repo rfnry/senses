@@ -214,3 +214,21 @@ class Identity(BaseModel):
     id: str
     name: str | None = None
     metadata: dict[str, Any] = {}
+
+
+class IdentityLike(Protocol):
+    @property
+    def role(self) -> Literal["user", "assistant", "system"]: ...
+    @property
+    def id(self) -> str: ...
+    @property
+    def name(self) -> str | None: ...
+    @property
+    def metadata(self) -> dict[str, Any]: ...
+
+
+def as_identity(value: IdentityLike) -> Identity:
+    try:
+        return Identity.model_validate(value, from_attributes=True)
+    except ValidationError as exc:
+        raise InputError(f"models: not an identity: {exc.errors(include_url=False)}") from exc

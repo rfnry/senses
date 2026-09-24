@@ -9,7 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import InputError
-from rfnry_senses.models import Identity, Image
+from rfnry_senses.models import Identity, IdentityLike, Image, as_identity
 from rfnry_senses.transport import Played
 from rfnry_senses.wire import PROTOCOL, control, decode, encode_audio, parse_hello, parse_played
 
@@ -25,8 +25,9 @@ class Connection(Protocol):
 
 
 async def serve(
-    connection: Connection, *, identity: Identity, scope: str
+    connection: Connection, *, identity: IdentityLike, scope: str
 ) -> WebSocketTransport | None:
+    person = as_identity(identity)
     if not scope:
         raise InputError("transport: scope is empty")
     try:
@@ -39,7 +40,7 @@ async def serve(
         return None
     except Exception:
         return None
-    return WebSocketTransport(connection, identity, scope)
+    return WebSocketTransport(connection, person, scope)
 
 
 def check_hello(text: str) -> None:

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from rfnry_senses.contracts import (
     AudioFrame,
@@ -19,6 +20,18 @@ from rfnry_senses.models import CheckAnswer, Content, Identity, Image, Question,
 ANA = Identity(role="user", id="ana", name="Ana")
 HOST = Identity(role="assistant", id="host", name="Host")
 JPEG = b"\xff\xd8\xff\xe0frame\xff\xd9"
+
+
+@dataclass(frozen=True)
+class Lookalike:
+    role: Literal["user", "assistant", "system"]
+    id: str
+    name: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def lookalike(identity: Identity) -> Lookalike:
+    return Lookalike(identity.role, identity.id, identity.name, dict(identity.metadata))
 
 
 def pcm(ms: int, rate: int = 16000) -> AudioFrame:

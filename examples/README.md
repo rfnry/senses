@@ -23,6 +23,12 @@ own examples' classes.
 | `AnthropicProvider` | generation | the engine agents' text mind |
 | `TypeSafeProvider` | `DecisionModel` | the turn check |
 
+A trade-off in `cascaded_voice_agent`: with server turn detection, the realtime transcription model
+emits text only after the turn ends, so a barge-in registers late — the voice is cut when the
+person stops talking over it, not when they start. A streaming model without turn detection would
+send text as it is spoken, but then the adapter has to end turns itself. Which one is the
+consumer's call.
+
 ## Running
 
 The keys live outside the repository, in a file with `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`,
