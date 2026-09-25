@@ -519,7 +519,7 @@ that ran it decides what the model reads.
 
 Senses stores nothing. The session holds the camera window and the words of the utterance in
 flight, in memory, and nothing else; it never writes to disk and never sees a credential. The
-conversation's record is a thread's job and the agent's record the engine Refinery's; a third log
+conversation's record is a thread's job and the agent's record the engine refinery's; a third log
 would repeat them.
 
 To keep a record, mirror the events — a few lines of your own, and neither library imports the
