@@ -108,19 +108,23 @@ def segment(marker: int, body: bytes) -> bytes:
 
 
 def desk() -> bytes:
-    pixels = scene()
+    return encode(scene())
+
+
+def encode(pixels: list[list[tuple[int, int, int]]]) -> bytes:
+    height, width = len(pixels), len(pixels[0])
     planes = [
         [[0.299 * r + 0.587 * g + 0.114 * b - 128 for r, g, b in row] for row in pixels],
         [[-0.168736 * r - 0.331264 * g + 0.5 * b for r, g, b in row] for row in pixels],
         [[0.5 * r - 0.418688 * g - 0.081312 * b for r, g, b in row] for row in pixels],
     ]
     bits, previous = Bits(), [0, 0, 0]
-    for top in range(0, HEIGHT, 8):
-        for left in range(0, WIDTH, 8):
+    for top in range(0, height, 8):
+        for left in range(0, width, 8):
             for c, plane in enumerate(planes):
                 samples = [row[left : left + 8] for row in plane[top : top + 8]]
                 previous[c] = block(bits, samples, previous[c])
-    frame = struct.pack(">BHHB", 8, HEIGHT, WIDTH, 3) + bytes([1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0])
+    frame = struct.pack(">BHHB", 8, height, width, 3) + bytes([1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0])
     huffman = (
         bytes([0x00]) + bytes([0, 0, 0, 12] + [0] * 12) + bytes(range(12))
         + bytes([0x10]) + bytes([0] * 7 + [len(AC)] + [0] * 8) + bytes(AC)

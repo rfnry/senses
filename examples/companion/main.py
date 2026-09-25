@@ -24,16 +24,17 @@ from rfnry_senses import (
 
 from desk import desk
 from providers import AnthropicProvider, GoogleLive, GoogleSpeech
+from screen import screen
 
 ORIGIN = "http://localhost:8000"
 CLIENT = Path(__file__).parents[2] / "packages/typescript/dist"
 ANA = Identity(role="user", id="ana", name="Ana")
 MIND = Identity(role="assistant", id="mind", name="Mind")
 INSTRUCTIONS = (
-    "You talk with a person who hears you, and you hear and see them through their microphone "
-    "and camera. Keep every answer to one or two short sentences. A second mind works behind "
-    "you: for anything about what the camera shows, or that needs thought, call the consult tool "
-    "with the question and answer from what it says."
+    "You talk with a person who hears you, and you hear them through their microphone and see "
+    "through their camera or, when they share it, their screen. Keep every answer to one or two "
+    "short sentences. A second mind works behind you: for anything about what you see, or that "
+    "needs thought, call the consult tool with the question and answer from what it says."
 )
 
 engine = Engine("agents", generation=AnthropicProvider())
@@ -45,7 +46,7 @@ async def companion(link: Transport) -> Session:
         "mind",
         scope=link.scope,
         name="consult",
-        description="Ask the mind behind you. It can look through the camera.",
+        description="Ask the mind behind you. It sees what you see: the camera or the screen.",
         tools=SensesTools(session, triggered_by=MIND),
     )
     await session.start(tools=consult)
@@ -83,21 +84,20 @@ async def ana_says(link: Loopback, text: str) -> None:
         await asyncio.sleep(0.1)
 
 
-async def camera(link: Loopback) -> None:
-    frame = desk()
+async def film(link: Loopback, frame: bytes) -> None:
     while True:
         await link.show(frame)
         await asyncio.sleep(1)
 
 
-async def headless() -> None:
+async def headless(frame: bytes, question: str) -> None:
     link = Loopback(ANA, scope="home")
     answered = asyncio.Event()
     async with await companion(link) as session:
         narrating = asyncio.create_task(narrate(session, answered))
-        filming = asyncio.create_task(camera(link))
+        filming = asyncio.create_task(film(link, frame))
         await asyncio.sleep(1)
-        await ana_says(link, "What do you see on my desk?")
+        await ana_says(link, question)
         await asyncio.wait_for(answered.wait(), 90)
         await asyncio.sleep(0.5)
         narrating.cancel()
@@ -147,5 +147,9 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["browser"]:
         print(f"open {ORIGIN}")
         uvicorn.run(app, host="localhost", port=8000)
+    elif sys.argv[1:] == ["screen"]:
+        asyncio.run(
+            headless(screen(), "I'm sharing my screen. I need to save this, where do I click?")
+        )
     else:
-        asyncio.run(headless())
+        asyncio.run(headless(desk(), "What do you see on my desk?"))
