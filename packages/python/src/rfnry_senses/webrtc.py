@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import array
 import asyncio
 import contextlib
 import fractions
 import logging
+import sys
 import time
 from collections.abc import AsyncIterator, Coroutine
 from typing import Any
@@ -31,11 +33,27 @@ __all__ = ["WebRTCTransport", "accept_offer"]
 log = logging.getLogger("rfnry_senses")
 
 
+def fade(frame: AudioFrame, begin: float, end: float) -> AudioFrame:
+    samples = array.array("h", frame.data)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    count = len(samples) // frame.channels
+    for i in range(len(samples)):
+        position = i // frame.channels
+        samples[i] = int(samples[i] * (begin + (end - begin) * position / count))
+    if sys.byteorder == "big":
+        samples.byteswap()
+    return AudioFrame(
+        data=samples.tobytes(), sample_rate=frame.sample_rate, channels=frame.channels
+    )
+
+
 class _Voice(MediaStreamTrack):
     kind = "audio"
     FRAME_MS = 20
     PREBUFFER_S = 0.12
     GAP_S = 0.1
+    FADE_FRAMES = 3
 
     def __init__(self) -> None:
         super().__init__()
@@ -55,11 +73,17 @@ class _Voice(MediaStreamTrack):
             )
 
     def clear(self) -> None:
+        tail: list[AudioFrame] = []
         while not self._queue.empty():
-            self._queue.get_nowait()
+            frame = self._queue.get_nowait()
+            if len(tail) < self.FADE_FRAMES:
+                tail.append(frame)
         self._rest = b""
         self._start = None
         self._samples = 0
+        steps = len(tail)
+        for n, frame in enumerate(tail):
+            self._queue.put_nowait(fade(frame, 1 - n / steps, 1 - (n + 1) / steps))
 
     async def recv(self) -> av.AudioFrame:
         frame = await self._queue.get()

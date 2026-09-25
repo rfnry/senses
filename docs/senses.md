@@ -261,7 +261,8 @@ said.interrupted    # True
 
 When the person starts talking over the assistant — a cascaded transcript arrives, or the live
 model reports `LiveInterrupted` — senses stops the voice: queued audio is dropped, the client is told
-to stop, and it answers with how many milliseconds it played. Senses cuts the utterance's words to
+to stop and fades the voice out over 60 ms rather than cutting it mid-sample, and it answers with
+how many milliseconds it played. Senses cuts the utterance's words to
 that point — whole sentences in a cascaded session, the model's own transcript in a live one — emits
 `Interrupted`, and, in a live session, calls `interrupt(played_ms)` so the model's context holds only
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that

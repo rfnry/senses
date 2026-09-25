@@ -10,11 +10,12 @@ pytest.importorskip("aiortc")
 import av
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 
+from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import InputError
 from rfnry_senses.events import Closed
 from rfnry_senses.models import Image
 from rfnry_senses.session import Session
-from rfnry_senses.webrtc import accept_offer
+from rfnry_senses.webrtc import _Voice, accept_offer
 
 from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, lookalike, next_of, until
 
@@ -133,3 +134,19 @@ async def test_accept_offer_reads_the_person_by_their_fields() -> None:
         await link.close()
     finally:
         await client.pc.close()
+
+
+async def test_a_cut_fades_the_voice_out_over_the_next_sixty_milliseconds() -> None:
+    voice = _Voice()
+    loud = (16000).to_bytes(2, "little", signed=True)
+    voice.push(AudioFrame(data=loud * 24000, sample_rate=24000))
+    voice.clear()
+    frames = [await voice.recv() for _ in range(3)]
+    assert voice._queue.empty()
+    levels = [
+        abs(int.from_bytes(bytes(f.planes[0])[i : i + 2], "little", signed=True))
+        for f in frames
+        for i in (0, 958)
+    ]
+    assert levels == sorted(levels, reverse=True)
+    assert levels[0] == 16000 and levels[-1] < 600

@@ -3,13 +3,26 @@ export class Node {
   onended: (() => void) | null = null
   started = -1
   stopped = false
+  stoppedAt = -1
   connect(): void {}
   start(at: number): void {
     this.started = at
   }
-  stop(): void {
+  stop(at = 0): void {
     this.stopped = true
+    this.stoppedAt = at
   }
+}
+
+export class Gain {
+  ramps: Array<[number, number]> = []
+  gain = {
+    setValueAtTime: (_value: number, _at: number) => {},
+    linearRampToValueAtTime: (value: number, at: number) => {
+      this.ramps.push([value, at])
+    },
+  }
+  connect(): void {}
 }
 
 export class Context {
@@ -17,6 +30,7 @@ export class Context {
   currentTime = 0
   destination = {} as AudioNode
   nodes: Node[] = []
+  gains: Gain[] = []
   closed = false
   audioWorklet = { addModule: async (_url: string) => {} }
   constructor() {
@@ -29,6 +43,11 @@ export class Context {
     const node = new Node()
     this.nodes.push(node)
     return node as unknown as AudioBufferSourceNode
+  }
+  createGain(): GainNode {
+    const gain = new Gain()
+    this.gains.push(gain)
+    return gain as unknown as GainNode
   }
   createMediaStreamSource(_stream: MediaStream): { connect(node: unknown): void } {
     return { connect() {} }

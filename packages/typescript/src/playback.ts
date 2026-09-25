@@ -2,14 +2,17 @@ import type { AudioOut } from './wire.js'
 
 export type AudioContextLike = Pick<
   AudioContext,
-  'currentTime' | 'destination' | 'createBuffer' | 'createBufferSource' | 'close'
+  'currentTime' | 'destination' | 'createBuffer' | 'createBufferSource' | 'createGain' | 'close'
 >
+
+const FADE_S = 0.06
 
 type Scheduled = { utterance: number; start: number; duration: number; node: AudioBufferSourceNode }
 
 export class Playback {
   private next = 0
   private fenced = 0
+  private gain: GainNode | null = null
   private readonly scheduled = new Set<Scheduled>()
   private readonly played = new Map<number, number>()
   private readonly ending = new Set<number>()
@@ -41,7 +44,7 @@ export class Playback {
     }
     const node = this.context.createBufferSource()
     node.buffer = buffer
-    node.connect(this.context.destination)
+    node.connect(this.output())
     const start = Math.max(this.context.currentTime, this.next)
     const entry: Scheduled = { utterance: frame.utterance, start, duration: buffer.duration, node }
     node.onended = () => {
@@ -63,9 +66,12 @@ export class Playback {
     if (utterance !== Number.MAX_SAFE_INTEGER) this.speaking(utterance)
     this.fenced = Math.max(this.fenced, utterance)
     const now = this.context.currentTime
+    this.gain?.gain.setValueAtTime(1, now)
+    this.gain?.gain.linearRampToValueAtTime(0, now + FADE_S)
+    this.gain = null
     for (const entry of this.scheduled) {
       entry.node.onended = null
-      entry.node.stop()
+      entry.node.stop(Math.max(now + FADE_S, entry.start))
       this.add(entry.utterance, Math.min(Math.max(now - entry.start, 0), entry.duration) * 1000)
     }
     this.scheduled.clear()
@@ -76,6 +82,14 @@ export class Playback {
   async close(): Promise<void> {
     this.stop(Number.MAX_SAFE_INTEGER)
     await this.context.close()
+  }
+
+  private output(): GainNode {
+    if (this.gain === null) {
+      this.gain = this.context.createGain()
+      this.gain.connect(this.context.destination)
+    }
+    return this.gain
   }
 
   private add(utterance: number, ms: number): void {

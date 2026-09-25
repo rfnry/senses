@@ -38,6 +38,19 @@ describe('playback', () => {
     expect(context.nodes.slice(1).every((n) => n.stopped)).toBe(true)
   })
 
+  it('fades out instead of cutting, and the next utterance plays at full volume', () => {
+    const { context, playback } = setup()
+    playback.push(frame(1))
+    playback.push(frame(1))
+    context.currentTime = 0.05
+    playback.stop(1)
+    expect(context.gains[0]?.ramps).toEqual([[0, 0.11]])
+    expect(context.nodes.map((n) => n.stoppedAt)).toEqual([0.11, 0.11])
+    playback.push(frame(2))
+    expect(context.gains).toHaveLength(2)
+    expect(context.gains[1]?.ramps).toEqual([])
+  })
+
   it('drops audio of a stopped utterance', () => {
     const { context, reports, playback } = setup()
     playback.push(frame(1))
