@@ -384,6 +384,38 @@ it the camera directly. The same tools serve the agent when it acts first, passe
 `events()` ([Storage](#storage)). A persona, a floor policy or a mandate gate stays in your product,
 built on `mute`, `unmute`, `interrupt` and tools of your own.
 
+### Three ways to use the screen
+
+A shared screen or camera fits the family in three shapes. The engine agent is the same in all
+three; only the session around it changes.
+
+**Two minds.** A live model watches continuously, frames streaming at `fps`, and holds the
+conversation; for anything that needs thought it asks the engine agent through `consult`. The agent
+looks at the screen itself with `look` from its `SensesTools` — the same current frame, as an image,
+never the live model's description of it — and answers through the live voice with `say` or
+`prompt`, or keeps it current with `inform`. Best for fluid help while the person works; the live
+model is billed for every frame it watches.
+
+**Cascaded, one mind.** Transcription, then an engine agent on a strong model, then speech; the
+agent calls `look` when it needs to see. Turns take seconds and nothing watches between them, but
+it is one model with one set of rules, every step is recorded by the engine's refinery, and frames
+cost only when they are looked at. Best for step-by-step guidance.
+
+**Chat plus screen.** A video-only session — no audio models — beside an rfnry-thread thread: the
+person types, the engine agent answers in the thread and calls `look` on the shared screen. Best for
+support and internal tools, where people already work in a chat:
+
+```python
+async with Session(link, video=True) as screen:
+    run = await engine.run("support", scope=screen.scope, input="Where do I click to save?", tools=SensesTools(screen, triggered_by=assistant))
+```
+
+| shape | live feel | depth | cost | moving parts |
+| --- | --- | --- | --- | --- |
+| two minds | fluid, talks while it watches | the agent's, on request | every frame streamed | live model, engine agent, `consult` |
+| one mind | turn by turn, seconds a turn | one strong model throughout | frames only when looked at | transcription, engine agent, speech |
+| chat plus screen | typed, at chat pace | one strong model throughout | frames only when looked at | thread, engine agent, video-only session |
+
 ### Transports
 
 A session runs on a `Transport`. Two ship: a WebSocket, in the core, and WebRTC, with the `webrtc`
