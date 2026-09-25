@@ -25,7 +25,7 @@ from rfnry_senses.wire import decode, encode_audio, encode_image, parse_hello, p
 
 from .fakes import ANA, HOST
 
-FIXTURES = Path(__file__).parents[4] / "fixtures" / "wire"
+FIXTURES = Path(__file__).parents[4] / "tests" / "fixtures" / "wire"
 AT = datetime(2026, 9, 24, 12, 3, 4, 200000, tzinfo=UTC)
 
 

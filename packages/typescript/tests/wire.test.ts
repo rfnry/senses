@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { SensesError } from '../src/errors'
 import { decodeAudio, encodeAudio, encodeImage, hello, parseControl, played } from '../src/wire'
 
-const FIXTURES = join(__dirname, '../../../fixtures/wire')
+const FIXTURES = join(__dirname, '../../../tests/fixtures/wire')
 const json = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), 'utf8'))
 const hex = (name: string): Uint8Array =>
   Uint8Array.from(Buffer.from(readFileSync(join(FIXTURES, `${name}.hex`), 'utf8').trim(), 'hex'))
