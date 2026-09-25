@@ -1,7 +1,8 @@
+import { Camera } from './camera.js'
 import { SensesError } from './errors.js'
 import { MICROPHONE } from './microphone.js'
 import { RemotePlayback } from './remote-playback.js'
-import { type ConnectOptions, cameraOptions, checkFps, Listeners, type Senses } from './room.js'
+import { type ConnectOptions, cameraOptions, checkCamera, checkFps, Listeners, type Senses } from './room.js'
 import { hello, parseControl, played } from './wire.js'
 
 function gathered(pc: RTCPeerConnection): Promise<void> {
@@ -21,9 +22,18 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     if (channel.readyState === 'open') channel.send(played(utterance, ms))
   })
   const streams: MediaStream[] = []
-  const tracks = (kind: 'audio' | 'video') =>
-    streams.flatMap((stream) => stream.getTracks()).filter((t) => t.kind === kind)
-  const camera = options.camera ? cameraOptions(options.camera) : null
+  const microphone = () => streams.flatMap((stream) => stream.getAudioTracks())
+  const settings = options.camera ? cameraOptions(options.camera) : null
+  let sender: RTCRtpSender | null = null
+  const camera = settings
+    ? new Camera(
+        settings,
+        async (stream) => {
+          await sender?.replaceTrack(stream?.getVideoTracks()[0] ?? null)
+        },
+        (source) => room.tell({ kind: 'video', source }),
+      )
+    : null
   const ready = new Promise<void>((resolve, reject) => {
     let open = false
     channel.onopen = () => channel.send(hello())
@@ -52,6 +62,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
   ready.catch(() => {})
   const stop = () => {
     for (const stream of streams) for (const track of stream.getTracks()) track.stop()
+    camera?.stop()
     remote.close()
     pc.close()
     room.end()
@@ -63,16 +74,12 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       streams.push(microphone)
       for (const track of microphone.getAudioTracks()) pc.addTrack(track, microphone)
     }
-    if (camera !== null) {
-      const video = await navigator.mediaDevices.getUserMedia({ video: { width: camera.width, frameRate: camera.fps } })
-      streams.push(video)
-      for (const track of video.getVideoTracks()) {
-        pc.addTransceiver(track, {
-          direction: 'sendonly',
-          streams: [video],
-          sendEncodings: [{ maxFramerate: camera.fps }],
-        })
-      }
+    if (camera !== null && settings !== null) {
+      await camera.use(settings.source)
+      sender = pc.addTransceiver(camera.track ?? 'video', {
+        direction: 'sendonly',
+        sendEncodings: [{ maxFramerate: settings.fps }],
+      }).sender
     }
     pc.ontrack = (event: RTCTrackEvent) =>
       remote.start(event.streams[0] ?? new MediaStream([event.track]), event.receiver)
@@ -95,21 +102,31 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === 'failed' || pc.connectionState === 'closed') room.end()
   }
-  const enable = (kind: 'audio' | 'video', on: boolean) => {
-    for (const track of tracks(kind)) track.enabled = on
+  const enable = (on: boolean) => {
+    for (const track of microphone()) track.enabled = on
   }
   return {
     get status() {
       return room.status
     },
     subscribe: (listener) => room.subscribe(listener),
-    mute: () => enable('audio', false),
-    unmute: () => enable('audio', true),
-    pauseCamera: () => enable('video', false),
-    resumeCamera: () => enable('video', true),
+    mute: () => enable(false),
+    unmute: () => enable(true),
+    async shareScreen() {
+      await checkCamera(camera, 'shareScreen').use('screen')
+    },
+    async useCamera() {
+      await checkCamera(camera, 'useCamera').use('camera')
+    },
+    pauseCamera: () => camera?.pause(),
+    resumeCamera: () => camera?.resume(),
     setFps(fps) {
       checkFps(fps, camera)
-      for (const track of tracks('video')) void track.applyConstraints({ frameRate: fps })
+      camera?.setFps(fps)
+      if (sender === null) return
+      const parameters = sender.getParameters()
+      for (const encoding of parameters.encodings) encoding.maxFramerate = fps
+      void sender.setParameters(parameters)
     },
     async close() {
       stop()

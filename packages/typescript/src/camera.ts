@@ -1,33 +1,51 @@
-export type CameraOptions = { fps: number; width: number; quality: number }
+export type VideoSource = 'camera' | 'screen'
+
+export type CameraOptions = { source: VideoSource; fps: number; width: number; quality: number }
+
+function capture(source: VideoSource, width: number, fps: number): Promise<MediaStream> {
+  const video = { width, frameRate: fps }
+  return source === 'screen'
+    ? navigator.mediaDevices.getDisplayMedia({ video, audio: false })
+    : navigator.mediaDevices.getUserMedia({ video })
+}
 
 export class Camera {
+  source: VideoSource | null = null
+  fps: number
   private stream: MediaStream | null = null
-  private video: HTMLVideoElement | null = null
-  private canvas: HTMLCanvasElement | null = null
-  private timer: ReturnType<typeof setInterval> | null = null
-  private busy = false
+  private back: VideoSource | null = null
   private paused = false
-  private fps: number
+  private stopped = false
 
   constructor(
     private readonly options: CameraOptions,
-    private readonly send: (jpeg: Uint8Array) => void,
+    private readonly show: (stream: MediaStream | null) => Promise<void>,
+    private readonly told: (source: VideoSource | null) => void,
   ) {
     this.fps = options.fps
   }
 
-  async start(): Promise<MediaStream> {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+  get track(): MediaStreamTrack | null {
+    return this.stream?.getVideoTracks()[0] ?? null
+  }
+
+  async use(source: VideoSource): Promise<void> {
+    const stream = await capture(source, this.options.width, this.fps)
+    if (this.stopped) {
+      for (const track of stream.getTracks()) track.stop()
+      return
+    }
+    for (const track of stream.getVideoTracks()) {
+      track.enabled = !this.paused
+      track.onended = () => void this.ended(stream)
+    }
+    if (source === 'screen' && this.source !== 'screen') this.back = this.source
+    const previous = this.stream
     this.stream = stream
-    const video = document.createElement('video')
-    video.muted = true
-    video.playsInline = true
-    video.srcObject = stream
-    await video.play()
-    this.video = video
-    this.canvas = document.createElement('canvas')
-    this.schedule()
-    return stream
+    this.source = source
+    await this.show(stream)
+    for (const track of previous?.getTracks() ?? []) track.stop()
+    this.told(source)
   }
 
   pause(): void {
@@ -42,36 +60,30 @@ export class Camera {
 
   setFps(fps: number): void {
     this.fps = fps
-    this.schedule()
+    for (const track of this.stream?.getVideoTracks() ?? []) void track.applyConstraints({ frameRate: fps })
   }
 
   stop(): void {
-    if (this.timer !== null) clearInterval(this.timer)
-    this.timer = null
+    this.stopped = true
     for (const track of this.stream?.getTracks() ?? []) track.stop()
     this.stream = null
+    this.source = null
   }
 
-  private schedule(): void {
-    if (this.timer !== null) clearInterval(this.timer)
-    this.timer = setInterval(() => void this.capture(), 1000 / this.fps)
-  }
-
-  private async capture(): Promise<void> {
-    const { video, canvas } = this
-    if (this.busy || this.paused || video === null || canvas === null || video.videoWidth === 0) return
-    this.busy = true
-    try {
-      const scale = Math.min(1, this.options.width / video.videoWidth)
-      canvas.width = Math.round(video.videoWidth * scale)
-      canvas.height = Math.round(video.videoHeight * scale)
-      canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
-      const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/jpeg', this.options.quality),
+  private async ended(stream: MediaStream): Promise<void> {
+    if (stream !== this.stream || this.stopped) return
+    if (this.source === 'screen' && this.back === 'camera') {
+      const returned = await this.use('camera').then(
+        () => true,
+        () => false,
       )
-      if (blob !== null && !this.paused) this.send(new Uint8Array(await blob.arrayBuffer()))
-    } finally {
-      this.busy = false
+      if (returned) return
     }
+    if (stream !== this.stream) return
+    for (const track of stream.getTracks()) track.stop()
+    this.stream = null
+    this.source = null
+    await this.show(null)
+    this.told(null)
   }
 }

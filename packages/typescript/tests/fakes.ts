@@ -80,9 +80,17 @@ export class Track {
   enabled = true
   stopped = false
   constraints: MediaTrackConstraints[] = []
-  constructor(readonly kind: 'audio' | 'video') {}
+  onended: (() => void) | null = null
+  constructor(
+    readonly kind: 'audio' | 'video',
+    readonly source: 'microphone' | 'camera' | 'screen' = kind === 'audio' ? 'microphone' : 'camera',
+  ) {}
   stop(): void {
     this.stopped = true
+  }
+  end(): void {
+    this.stopped = true
+    this.onended?.()
   }
   async applyConstraints(constraints: MediaTrackConstraints): Promise<void> {
     this.constraints.push(constraints)
@@ -126,12 +134,24 @@ export const JPEG = Uint8Array.of(0xff, 0xd8, 0xff, 0xd9)
 
 export function media() {
   const streams: Stream[] = []
-  const getUserMedia = async (constraints: MediaStreamConstraints) => {
-    const stream = new Stream(constraints.video ? [new Track('video')] : [new Track('audio')])
+  const asked: Array<{ source: 'microphone' | 'camera' | 'screen'; constraints: MediaStreamConstraints }> = []
+  const refused = { screen: false }
+  const made = (track: Track) => {
+    const stream = new Stream([track])
     streams.push(stream)
     return stream as unknown as MediaStream
   }
-  return { streams, navigator: { mediaDevices: { getUserMedia } } }
+  const getUserMedia = async (constraints: MediaStreamConstraints) => {
+    asked.push({ source: constraints.video ? 'camera' : 'microphone', constraints })
+    return made(constraints.video ? new Track('video') : new Track('audio'))
+  }
+  const getDisplayMedia = async (constraints: DisplayMediaStreamOptions) => {
+    asked.push({ source: 'screen', constraints })
+    if (refused.screen) throw new Error('NotAllowedError')
+    return made(new Track('video', 'screen'))
+  }
+  const video = () => streams.flatMap((stream) => stream.getVideoTracks())
+  return { streams, asked, refused, video, navigator: { mediaDevices: { getUserMedia, getDisplayMedia } } }
 }
 
 export function documentWithCanvas() {

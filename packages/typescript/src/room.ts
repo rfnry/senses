@@ -1,4 +1,4 @@
-import type { CameraOptions } from './camera.js'
+import type { CameraOptions, VideoSource } from './camera.js'
 import { SensesError } from './errors.js'
 import type { SensesEvent } from './wire.js'
 
@@ -8,28 +8,47 @@ export type ConnectOptions = {
   protocols?: string | string[]
   headers?: Record<string, string>
   microphone?: boolean
-  camera?: false | { fps?: number; width?: number; quality?: number }
+  camera?: false | { source?: VideoSource; fps?: number; width?: number; quality?: number }
   sampleRate?: number
   iceServers?: RTCIceServer[]
 }
 
 export type SensesStatus = 'open' | 'closed'
 
-export type SensesListener = (event: SensesEvent | { kind: 'status'; status: SensesStatus }) => void
+export type SensesListener = (
+  event: SensesEvent | { kind: 'status'; status: SensesStatus } | { kind: 'video'; source: VideoSource | null },
+) => void
 
 export interface Senses {
   readonly status: SensesStatus
   subscribe(listener: SensesListener): () => void
   mute(): void
   unmute(): void
+  shareScreen(): Promise<void>
+  useCamera(): Promise<void>
   pauseCamera(): void
   resumeCamera(): void
   setFps(fps: number): void
   close(): Promise<void>
 }
 
-export function cameraOptions(camera: { fps?: number; width?: number; quality?: number }): CameraOptions {
-  return { fps: camera.fps ?? 1, width: camera.width ?? 640, quality: camera.quality ?? 0.7 }
+export function cameraOptions(camera: {
+  source?: VideoSource
+  fps?: number
+  width?: number
+  quality?: number
+}): CameraOptions {
+  return {
+    source: camera.source ?? 'camera',
+    fps: camera.fps ?? 1,
+    width: camera.width ?? 640,
+    quality: camera.quality ?? 0.7,
+  }
+}
+
+export function checkCamera<T>(camera: T | null, verb: string): T {
+  if (camera === null) throw new SensesError(`senses: ${verb} needs the camera option`)
+  return camera
 }
 
 export function checkFps(fps: number, camera: unknown): void {

@@ -131,6 +131,77 @@ describe('connect over a WebSocket', () => {
     expect(() => senses.setFps(0)).toThrow(new SensesError('senses: fps must be positive'))
   })
 
+  it('shares the screen, keeps sending frames, and returns to the camera when the share ends', async () => {
+    vi.useFakeTimers()
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const { senses, socket } = await opened({ camera: { fps: 2, width: 1280 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    const [camera] = devices.video()
+    await senses.shareScreen()
+    const screen = devices.video()[1]
+    expect(screen?.source).toBe('screen')
+    expect(camera?.stopped).toBe(true)
+    expect(devices.asked.at(-1)).toEqual({
+      source: 'screen',
+      constraints: { video: { width: 1280, frameRate: 2 }, audio: false },
+    })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(2)
+    senses.setFps(4)
+    expect(screen?.constraints).toEqual([{ frameRate: 4 }])
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(6)
+    screen?.end()
+    await vi.waitFor(() => expect(sources).toEqual(['screen', 'camera']))
+    expect(devices.video()[2]?.source).toBe('camera')
+    expect(devices.asked.at(-1)?.constraints).toEqual({ video: { width: 1280, frameRate: 4 } })
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(10)
+  })
+
+  it('stops sending when a share it started with ends, until the camera is asked for', async () => {
+    vi.useFakeTimers()
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const { senses, socket } = await opened({ camera: { source: 'screen', fps: 1 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(1)
+    devices.video()[0]?.end()
+    await vi.waitFor(() => expect(sources).toEqual([null]))
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(socket.binary()).toHaveLength(1)
+    await senses.useCamera()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(2)
+    expect(sources).toEqual([null, 'camera'])
+  })
+
+  it('keeps the camera when the person cancels the screen picker, and stays paused across a switch', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const { senses } = await opened({ camera: {} })
+    devices.refused.screen = true
+    await expect(senses.shareScreen()).rejects.toThrow('NotAllowedError')
+    expect(devices.video()[0]?.stopped).toBe(false)
+    devices.refused.screen = false
+    senses.pauseCamera()
+    await senses.shareScreen()
+    expect(devices.video()[1]?.enabled).toBe(false)
+  })
+
+  it('refuses a screen without the camera option', async () => {
+    const { senses } = await opened()
+    await expect(senses.shareScreen()).rejects.toEqual(new SensesError('senses: shareScreen needs the camera option'))
+    await expect(senses.useCamera()).rejects.toEqual(new SensesError('senses: useCamera needs the camera option'))
+  })
+
   it('refuses a rate without a camera', async () => {
     const { senses } = await opened()
     expect(() => senses.setFps(2)).toThrow(new SensesError('senses: setFps needs a camera'))

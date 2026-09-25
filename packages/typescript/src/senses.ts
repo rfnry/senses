@@ -1,7 +1,8 @@
 import { Camera } from './camera.js'
+import { Frames } from './frames.js'
 import { Microphone } from './microphone.js'
 import { Playback } from './playback.js'
-import { type ConnectOptions, cameraOptions, checkFps, Listeners, type Senses } from './room.js'
+import { type ConnectOptions, cameraOptions, checkCamera, checkFps, Listeners, type Senses } from './room.js'
 import { overWebRTC } from './webrtc.js'
 import { WebSocketLink } from './websocket.js'
 
@@ -33,8 +34,17 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   const microphone = options.microphone === false ? null : new Microphone()
   microphone?.onChunk((pcm) => link.sendAudio(pcm, rate))
   await microphone?.start(rate)
-  const camera = options.camera ? new Camera(cameraOptions(options.camera), (jpeg) => link.sendImage(jpeg)) : null
-  await camera?.start()
+  const settings = options.camera ? cameraOptions(options.camera) : null
+  const frames = settings ? new Frames({ ...settings }, (jpeg) => link.sendImage(jpeg)) : null
+  const camera =
+    settings && frames
+      ? new Camera(
+          settings,
+          (stream) => frames.show(stream),
+          (source) => room.tell({ kind: 'video', source }),
+        )
+      : null
+  if (camera !== null && settings !== null) await camera.use(settings.source)
   return {
     get status() {
       return room.status
@@ -46,14 +56,22 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
     unmute() {
       if (microphone !== null) microphone.enabled = true
     },
+    async shareScreen() {
+      await checkCamera(camera, 'shareScreen').use('screen')
+    },
+    async useCamera() {
+      await checkCamera(camera, 'useCamera').use('camera')
+    },
     pauseCamera: () => camera?.pause(),
     resumeCamera: () => camera?.resume(),
     setFps(fps) {
       checkFps(fps, camera)
       camera?.setFps(fps)
+      frames?.setFps(fps)
     },
     async close() {
       camera?.stop()
+      frames?.stop()
       await microphone?.stop()
       link.close()
       await playback.close()

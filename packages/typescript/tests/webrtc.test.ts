@@ -24,6 +24,20 @@ class Channel {
   }
 }
 
+class Sender {
+  replaced: Array<Track | null> = []
+  parameters: { encodings: RTCRtpEncodingParameters[] } = { encodings: [] }
+  async replaceTrack(track: Track | null): Promise<void> {
+    this.replaced.push(track)
+  }
+  getParameters() {
+    return structuredClone(this.parameters)
+  }
+  async setParameters(parameters: { encodings: RTCRtpEncodingParameters[] }): Promise<void> {
+    this.parameters = parameters
+  }
+}
+
 class Peer {
   static made: Peer[] = []
   iceGatheringState = 'complete'
@@ -32,6 +46,7 @@ class Peer {
   remote: unknown = null
   channel: Channel | null = null
   added: Array<{ track: Track; init?: RTCRtpTransceiverInit }> = []
+  sender = new Sender()
   transceivers: unknown[] = []
   closed = false
   ontrack: ((event: unknown) => void) | null = null
@@ -46,9 +61,11 @@ class Peer {
   addTrack(track: Track): void {
     this.added.push({ track })
   }
-  addTransceiver(what: Track | string, init?: RTCRtpTransceiverInit): void {
+  addTransceiver(what: Track | string, init?: RTCRtpTransceiverInit): { sender: Sender } {
     if (typeof what === 'string') this.transceivers.push({ kind: what, init })
     else this.added.push({ track: what, ...(init ? { init } : {}) })
+    this.sender.parameters.encodings = (init?.sendEncodings ?? []).map((encoding) => ({ ...encoding }))
+    return { sender: this.sender }
   }
   async createOffer(): Promise<{ type: string; sdp: string }> {
     return { type: 'offer', sdp: 'v=0 offer' }
@@ -133,8 +150,44 @@ describe('connect over WebRTC', () => {
     expect(audio?.track.enabled).toBe(false)
     senses.setFps(5)
     expect(video?.track.constraints).toEqual([{ frameRate: 5 }])
+    expect(peer.sender.parameters.encodings).toEqual([{ maxFramerate: 5 }])
     await senses.close()
     expect(peer.closed).toBe(true)
+  })
+
+  it('replaces the camera track with the screen, keeps the cap, and puts the camera back when the share ends', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    const camera = peer.added.find((a) => a.track.kind === 'video')?.track
+    await senses.shareScreen()
+    const screen = peer.sender.replaced[0]
+    expect(screen?.source).toBe('screen')
+    expect(camera?.stopped).toBe(true)
+    senses.setFps(4)
+    expect(screen?.constraints).toEqual([{ frameRate: 4 }])
+    expect(peer.sender.parameters.encodings).toEqual([{ maxFramerate: 4 }])
+    screen?.end()
+    await vi.waitFor(() => expect(sources).toEqual(['screen', 'camera']))
+    expect(peer.sender.replaced[1]?.source).toBe('camera')
+    expect(peer.sender.replaced[1]?.stopped).toBe(false)
+    expect(peer.closed).toBe(false)
+  })
+
+  it('starts on the screen when asked, and sends no video once the share ends', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const { senses, peer } = await connected({ camera: { source: 'screen', fps: 2 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    const video = peer.added.find((a) => a.track.kind === 'video')
+    expect(video?.track.source).toBe('screen')
+    expect(video?.init?.sendEncodings).toEqual([{ maxFramerate: 2 }])
+    video?.track.end()
+    await vi.waitFor(() => expect(sources).toEqual([null]))
+    expect(peer.sender.replaced).toEqual([null])
   })
 
   it('listens only, when there is no microphone, and refuses a rate without a camera', async () => {

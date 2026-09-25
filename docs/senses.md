@@ -311,6 +311,12 @@ right path when your product raises the frame rate; the `webrtc` extra turns it 
 frames on the server. A model that takes true video input would add `send_video` to the live
 connection, alongside what is there.
 
+The frames can be the person's screen instead of their camera — "where do I click to save?" — and
+the session does not tell them apart: a frame is a frame, and a model that sees a screen knows it is
+looking at one. The browser client chooses the source ([The TypeScript client](#the-typescript-client)),
+one at a time. A shared screen goes to the model you chose, as the camera does; the browser asks the
+person which screen or window to share, and shows that it is being shared.
+
 `look` returns the newest frames, oldest first, each an `Image` followed by the `Text` of when it was
 taken — `frame at 12:03:04.200` — ready to hand any model that sees. With nothing in the window it
 raises `NotFoundError`. The model sees the frame itself; there is no vision model in between. Without
@@ -471,16 +477,38 @@ senses.pauseCamera()
 await senses.close()
 ```
 
+The screen is the same video, from another source:
+
+```ts
+shareButton.onclick = () => senses.shareScreen()
+senses.subscribe((event) => {
+  if (event.kind === 'video') shareButton.hidden = event.source === 'screen'
+})
+```
+
 It captures the microphone with echo cancellation and noise suppression and sends 16 kHz PCM, or an
 Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer endpoint and optional
 `iceServers`). It authenticates as your endpoint expects: cookies go with the request on their own,
 a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`. With
 `camera` it sends frames at `fps` for as long as the camera runs: JPEG over a WebSocket, a video
 track capped at `fps` over WebRTC. `setFps(fps)` changes the rate while it runs — the sampling
-interval over a WebSocket, the camera track's frame rate over WebRTC; without a camera it throws.
+interval over a WebSocket, the track's frame rate and its cap over WebRTC; without a camera it throws.
+
+`camera` is the video the client sends, from one source at a time: the camera, or the screen with
+`camera: { source: 'screen' }`. `shareScreen()` switches to the screen while it runs and
+`useCamera()` back; both need the `camera` option, since a WebRTC connection negotiates its video
+once and a switch replaces the track in place. The browser asks the person what to share, and a
+cancelled picker rejects `shareScreen` and leaves the camera on. When the person stops sharing from
+the browser's own controls, the client returns to the camera if it had one before the share, or
+sends no video until `useCamera()`. Each switch is told to `subscribe` as
+`{ kind: 'video', source: 'camera' | 'screen' | null }`. A screen's detail is small text: give it
+room with `width` (1280 reads a window; 640, the default, suits a face), and raise `setFps` while
+the model guides the person through clicks, then lower it. Screen sharing is a desktop-browser
+feature; mobile browsers mostly have no `getDisplayMedia`.
+
 It plays the voice, counts what it played, and answers `stop` with it on its own.
-`mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the camera;
-`subscribe` receives the session's events and
+`mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
+source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`. Device pickers, visualizers and framework bindings
 are yours.
 
