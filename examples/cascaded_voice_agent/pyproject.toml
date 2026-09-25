@@ -7,7 +7,6 @@ dependencies = [
     "rfnry-engine",
     "anthropic",
     "google-genai",
-    "httpx",
     "websockets",
     "fastapi",
     "uvicorn",
