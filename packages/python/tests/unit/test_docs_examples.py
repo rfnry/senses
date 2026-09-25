@@ -13,7 +13,7 @@ from pydantic import BaseModel
 import rfnry_senses
 from rfnry_senses import Identity, Loopback, Session, Tool, Tools
 
-from .fakes import ANA, JPEG, Done, ScriptedConnection, ScriptedLive, pcm, response
+from .fakes import ANA, JPEG, ScriptedConnection, ScriptedLive, pcm, response
 
 ROOT = Path(__file__).parents[4]
 DOCS = ROOT / "docs" / "senses.md"
@@ -40,7 +40,6 @@ ILLUSTRATIVE = {
 
 SIGNATURES = {
     "class LiveModel(Protocol):",
-    "class DecisionModel(Protocol):",
     "class Tools:",
 }
 
@@ -176,7 +175,6 @@ async def context() -> tuple[dict[str, Any], list[Loopback]]:
         live=AnsweringLive(),
         stt=namespace["Script"]("A table for two."),
         tts=namespace["Tone"](),
-        dm=Done(0.9),
         tools=tools,
         now=now,
         engine=Engine(),

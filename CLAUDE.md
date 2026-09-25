@@ -20,7 +20,7 @@ It is a library, not a framework. The consumer brings the models, authentication
 2. **Does it get more useful as models improve, or less?** More is substrate: transports, media plumbing, barge-in truncation, attribution, the model contracts. Less is compensation. Name which.
 3. **If less, is it a structural boundary independent of model strength?** Microphone and camera permission, the output gate, what the person actually heard, tenant isolation, transport limits. Keep if yes, cut if no.
 4. **Does it exist because a current model is weak at X?** Name X. If yes, the design is wrong — leverage the capability instead of policing the lack of it.
-5. **Does it work with a generation model only, a decision model only, and both?** A live model, a text model through transcription and speech models, and a decision model for turn completion are each optional; a feature states which it needs and degrades cleanly without the rest.
+5. **Does it work with a generation model only, a decision model only, and both?** A live model and a text model through transcription and speech models are each optional; a feature states which it needs and degrades cleanly without the rest. The loop outside the session may run on either kind of model, and nothing in the session assumes which.
 
 ### Engineering checklist
 

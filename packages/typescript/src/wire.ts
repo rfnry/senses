@@ -16,7 +16,7 @@ type Stamp = { scope: string; at: string }
 
 export type SensesEvent =
   | (Stamp & { kind: 'heard'; text: string; final: boolean; speaker: Identity })
-  | (Stamp & { kind: 'turn_ended'; text: string; speaker: Identity; probability: number | null })
+  | (Stamp & { kind: 'turn_ended'; text: string; speaker: Identity })
   | (Stamp & { kind: 'said'; text: string; heard: string; interrupted: boolean; triggered_by: Identity | null })
   | (Stamp & { kind: 'interrupted'; heard: string; triggered_by: Identity })
   | (Stamp & { kind: 'speaking' })

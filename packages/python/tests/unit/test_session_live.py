@@ -39,20 +39,14 @@ def session(link: Loopback, live: ScriptedLive, **kwargs: Any) -> Session:
         (
             {
                 "transcription": ScriptedTranscription(),
-                "turns": object(),
                 "speech": Tone(),
                 "window": 0,
             },
             "^session: window must be positive$",
         ),
-        ({"speech": Tone(), "turns": object()}, "^session: turns need a transcription model$"),
         (
             {"speech": Tone(), "instructions": "Be brief."},
             "^session: instructions are for a live model$",
-        ),
-        (
-            {"live": ScriptedLive(), "turn_threshold": 0},
-            r"^session: turn_threshold must be in \(0, 1\]$",
         ),
         (
             {"live": ScriptedLive(), "tool_timeout": 0},

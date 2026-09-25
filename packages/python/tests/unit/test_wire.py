@@ -32,9 +32,7 @@ AT = datetime(2026, 9, 24, 12, 3, 4, 200000, tzinfo=UTC)
 def controls() -> dict[str, dict[str, Any]]:
     events = {
         "heard": Heard(scope="acme", at=AT, text="a table for two", final=True, speaker=ANA),
-        "turn_ended": TurnEnded(
-            scope="acme", at=AT, text="A table for two.", speaker=ANA, probability=0.93
-        ),
+        "turn_ended": TurnEnded(scope="acme", at=AT, text="A table for two.", speaker=ANA),
         "said": Said(
             scope="acme",
             at=AT,

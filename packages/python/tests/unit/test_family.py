@@ -7,7 +7,6 @@ FAMILY = ROOT.parent
 OWN = ROOT / "packages/python/src/rfnry_senses"
 
 BLOCKS = {
-    "state": ("models.py", "State = ", "\n", ("engine", "memory")),
     "parts": (
         "models.py",
         "class Text(BaseModel):",
@@ -19,37 +18,6 @@ BLOCKS = {
         "class ToolSpec(BaseModel):",
         "    input_schema: dict[str, Any]\n",
         ("engine", "memory"),
-    ),
-    "usage": (
-        "models.py",
-        "class Usage(BaseModel):",
-        "            cache_read=self.cache_read + other.cache_read,\n        )\n",
-        ("engine", "memory"),
-    ),
-    "decision": (
-        "models.py",
-        "class Choice(BaseModel):",
-        "    model: str | None = None\n",
-        ("engine", "memory"),
-    ),
-    "as_decided": ("models.py", "def as_decided(", "from exc\n", ("engine", "memory")),
-    "usage like": (
-        "models.py",
-        "class UsageLike(Protocol):",
-        "    def cache_read(self) -> int: ...\n",
-        ("engine", "memory"),
-    ),
-    "answers like": (
-        "models.py",
-        "class ChoiceAnswerLike(Protocol):",
-        "    def model(self) -> str | None: ...\n",
-        ("engine", "memory"),
-    ),
-    "decision model": (
-        "models.py",
-        "class DecisionModel(Protocol):",
-        "| DecidedLike: ...\n",
-        ("engine",),
     ),
     "tools": ("tools.py", "Result = ", "if n not in names})\n", ("engine", "memory", "thread")),
     "identity": (

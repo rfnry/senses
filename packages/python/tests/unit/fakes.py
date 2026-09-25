@@ -15,7 +15,7 @@ from rfnry_senses.contracts import (
     Transcript,
     UtteranceEnd,
 )
-from rfnry_senses.models import CheckAnswer, Content, Identity, Image, Question, State, ToolSpec
+from rfnry_senses.models import Content, Identity, Image, ToolSpec
 
 ANA = Identity(role="user", id="ana", name="Ana")
 HOST = Identity(role="assistant", id="host", name="Host")
@@ -156,13 +156,3 @@ class Tone:
             await self.release.wait()
         for _ in text.split():
             yield pcm(self.ms)
-
-
-class Done:
-    def __init__(self, *probabilities: float) -> None:
-        self.probabilities = list(probabilities)
-        self.states: list[State] = []
-
-    async def decide(self, state: State, questions: dict[str, Question]) -> dict[str, CheckAnswer]:
-        self.states.append(state)
-        return {"done": CheckAnswer(probability=self.probabilities.pop(0))}

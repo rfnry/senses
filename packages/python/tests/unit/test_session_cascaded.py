@@ -9,7 +9,7 @@ from rfnry_senses.events import Heard, TurnEnded
 from rfnry_senses.session import Session
 from rfnry_senses.transport import Loopback
 
-from .fakes import ANA, HOST, Done, ScriptedTranscription, Tone, next_of, pcm, until
+from .fakes import ANA, HOST, ScriptedTranscription, Tone, next_of, pcm, until
 
 
 def cascaded(**kwargs: Any) -> tuple[Session, Loopback, ScriptedTranscription, Tone]:
@@ -28,11 +28,7 @@ async def test_the_person_is_heard_and_their_turn_ends_with_the_utterance() -> N
         turn = await next_of(events, TurnEnded)
         await until(lambda: len(stt.fed) == 1)
     assert [h.final for h in heard] == [False, True, True]
-    assert (
-        turn.text == "A table for two. At eight."
-        and turn.speaker == ANA
-        and turn.probability is None
-    )
+    assert turn.text == "A table for two. At eight." and turn.speaker == ANA
 
 
 async def test_a_trailing_partial_belongs_to_the_turn() -> None:
@@ -41,33 +37,6 @@ async def test_a_trailing_partial_belongs_to_the_turn() -> None:
         events = s.events()
         stt.hear("book a", final=False)
         assert (await next_of(events, TurnEnded)).text == "book a"
-
-
-async def test_a_decision_model_holds_a_turn_the_person_has_not_finished() -> None:
-    dm = Done(0.2, 0.9)
-    s, _, stt, _ = cascaded(turns=dm)
-    async with s:
-        events = s.events()
-        stt.hear("I would like")
-        await until(lambda: len(dm.states) == 1)
-        stt.hear("a table for two.")
-        turn = await next_of(events, TurnEnded)
-    assert turn.text == "I would like a table for two." and turn.probability == 0.9
-    assert dm.states == [
-        {"said": "", "heard": "I would like"},
-        {"said": "", "heard": "I would like a table for two."},
-    ]
-
-
-async def test_a_held_turn_ends_after_the_timeout_and_a_failed_check_ends_it_at_once() -> None:
-    s, _, stt, _ = cascaded(turns=Done(0.2), turn_timeout=0.05)
-    async with s:
-        events = s.events()
-        stt.hear("Hmm")
-        assert (await next_of(events, TurnEnded)).probability == 0.2
-        stt.hear("And also")
-        turn = await next_of(events, TurnEnded)
-    assert turn.text == "And also" and turn.probability is None
 
 
 async def test_say_speaks_sentence_by_sentence_and_in_order() -> None:
@@ -121,17 +90,6 @@ async def test_each_model_is_optional() -> None:
     async with Session(Loopback(ANA, "acme"), speech=Tone()) as announcer:
         said = await announcer.say("Doors close in one minute.", triggered_by=HOST)
     assert said.heard == "Doors close in one minute."
-
-
-async def test_what_was_heard_last_reaches_the_turn_check() -> None:
-    dm = Done(0.9)
-    s, _, stt, _ = cascaded(turns=dm)
-    async with s:
-        events = s.events()
-        await s.say("Shall I order the usual?", triggered_by=HOST)
-        stt.hear("Yes please.")
-        await next_of(events, TurnEnded)
-    assert dm.states == [{"said": "Shall I order the usual?", "heard": "Yes please."}]
 
 
 async def test_say_speaks_a_stream_as_its_sentences_complete() -> None:

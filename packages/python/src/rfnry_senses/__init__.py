@@ -41,11 +41,7 @@ from rfnry_senses.events import (
 )
 from rfnry_senses.models import (
     Audio,
-    Check,
-    CheckAnswer,
     Content,
-    Decided,
-    DecisionModel,
     Document,
     Identity,
     Image,
@@ -91,10 +87,6 @@ __all__ = [
     "UtteranceEnd",
     "SpeechModel",
     "AudioFrame",
-    "DecisionModel",
-    "Check",
-    "CheckAnswer",
-    "Decided",
     "Text",
     "Image",
     "Audio",

@@ -6,7 +6,7 @@ import pytest
 
 from rfnry_senses import AudioFrame, Heard, Loopback, Session, TurnEnded
 
-from ..unit.fakes import ANA, HOST, ScriptedTranscription, next_of
+from ..unit.fakes import ANA, HOST, next_of
 
 pytestmark = pytest.mark.live
 
@@ -48,20 +48,6 @@ async def test_the_voice_round_trips_through_speech_and_transcription(adapters: 
         turn = await next_of(events, TurnEnded, timeout=30)
     print(f"\nround trip: heard {heard.text!r}, turn {turn.text!r}")
     assert "table" in turn.text.lower()
-
-
-async def test_a_decision_model_judges_whether_the_turn_is_done(adapters: Any) -> None:
-    probabilities = []
-    for words in ("I would like", "I would like a table for two at eight."):
-        stt = ScriptedTranscription()
-        async with Session(
-            Loopback(ANA, "acme"), transcription=stt, turns=adapters.decision(), turn_timeout=0.1
-        ) as session:
-            events = session.events()
-            stt.hear(words)
-            probabilities.append((await next_of(events, TurnEnded, timeout=30)).probability)
-    print(f"\nturns: 'I would like' {probabilities[0]}, the whole request {probabilities[1]}")
-    assert probabilities[1] is not None and probabilities[1] > 0.5
 
 
 async def test_an_interrupted_live_voice_reports_a_prefix_of_what_it_said(adapters: Any) -> None:

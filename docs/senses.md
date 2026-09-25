@@ -21,12 +21,14 @@ own reasoning — lives outside the session. What senses owns is what no model p
 moving audio and frames across a network in real time, cutting the voice off when the person talks,
 knowing what they actually heard, and saying who caused what.
 
+**The model decides when the person is done.** When a turn ends is the transcription or live
+model's call — its own turn detection, which improves as models do. Senses does not second-guess it.
+
 **What was heard is what counts.** When the person cuts in, playback stops, the client reports how
 much it played, and both the session's report and the live model's context are cut to it. `say`
 returns what got through.
 
-**Models are named for what they produce.** Live, transcription, speech, decision. Each is
-optional: a feature says which it needs and the rest degrade cleanly. A camera-only session has no
+**Models are named for what they produce.** Live, transcription, speech. Each is optional: a feature says which it needs and the rest degrade cleanly. A camera-only session has no
 model at all.
 
 **Attribution is declared, never assumed.** Every action names who caused it. When a live model
@@ -96,18 +98,9 @@ needed it raises to its caller. There is no capability matrix.
 A transcription stream reports `Transcript(text, final)` — the running words of the current
 segment, then the segment committed — and `UtteranceEnd()` when the person stops talking.
 
-Turn completion has no protocol of its own. The acoustic end of speech is the transcription
-model's `UtteranceEnd`; whether the person is *done* — paused, or finished — is one `Check` asked of
-a decision model, the family's contract, copied from rfnry-engine:
-
-```python
-class DecisionModel(Protocol):
-    async def decide(self, state: State, questions: dict[str, Question]) -> Mapping[str, AnswerLike] | DecidedLike: ...
-```
-
-The session asks `Check(instructions=…)` and reads the `CheckAnswer`'s `probability`; a
-`Decided(answers, usage, model)` is read the same way. An adapter written for rfnry-engine or
-rfnry-memory fits unchanged. A generation model is never asked to judge turns.
+Turn completion has no protocol of its own: the turn ends when the transcription model reports
+`UtteranceEnd`. How eagerly it decides the person is done — a silence timer, or a model that judges
+the words — is the adapter's configuration.
 
 Fakes are enough to run everything in tests:
 
@@ -199,7 +192,7 @@ is `start(tools=)` — without a live model, tools belong to your own loop.
 ### Cascaded sessions
 
 ```python
-async with Session(link, transcription=stt, speech=tts, turns=dm) as session:
+async with Session(link, transcription=stt, speech=tts) as session:
     async for event in session.events():
         if isinstance(event, TurnEnded):
             run = await engine.run("concierge", scope=session.scope, input=event.text)
@@ -208,11 +201,8 @@ async with Session(link, transcription=stt, speech=tts, turns=dm) as session:
 
 Senses feeds the person's audio to a transcription stream and reports every `Heard`, partial and
 final, whether or not anyone answers — the person's words are never lost because the loop chose
-silence. When the stream reports `UtteranceEnd`, the utterance's words become a turn. With only a
-transcription model, the turn ends there. With `turns=` a decision model, senses first asks whether
-the person is done; below `turn_threshold` (0.5) it waits for more speech, and ends the turn anyway
-after `turn_timeout` (3 s) of silence. `TurnEnded.probability` carries the answer, or `None` without
-a decision model.
+silence. When the stream reports `UtteranceEnd`, the utterance's words become a turn and senses emits
+`TurnEnded`.
 
 `say` synthesizes the text sentence by sentence, so the first sentence plays while the rest is
 still being made. Calls queue: a second `say` speaks after the first. Each model is optional — a
@@ -331,7 +321,7 @@ both streams see every event. Each event carries the session's `scope` and the t
 | event | fields | when |
 | --- | --- | --- |
 | `Heard` | `text, final, speaker` | the person's words, partial and final |
-| `TurnEnded` | `text, speaker, probability` | a cascaded turn ended |
+| `TurnEnded` | `text, speaker` | a cascaded turn ended |
 | `Said` | `text, heard, interrupted, triggered_by` | an utterance ended |
 | `Interrupted` | `heard, triggered_by` | the voice was cut |
 | `Speaking` / `Silent` | — | the voice started / stopped |
@@ -619,7 +609,7 @@ Everything the package exports, by role.
 
 - **Run a session:** `Session` — `start(tools=)` or `async with` — and `SensesTools`.
 - **What a session reports:** `Event`; `Heard`, `TurnEnded`, `Said`, `Interrupted`, `Speaking`, `Silent`, `Looked`, `Muted`, `Informed`, `ToolCalled`, `Closed`.
-- **Speak to models:** `LiveModel`, `LiveConnection`, `LiveEvent`, `LiveAudio`, `LiveHeard`, `LiveSaid`, `LiveStarted`, `LiveDone`, `LiveToolCall`, `LiveInterrupted`, `LiveFailed`; `TranscriptionModel`, `Transcription`, `Transcript`, `UtteranceEnd`; `SpeechModel`; `AudioFrame`; `DecisionModel`, `Check`, `CheckAnswer`, `Decided`; parts `Text`, `Image`, `Audio`, `Document`, `Part`, `Content`; `ToolSpec`.
+- **Speak to models:** `LiveModel`, `LiveConnection`, `LiveEvent`, `LiveAudio`, `LiveHeard`, `LiveSaid`, `LiveStarted`, `LiveDone`, `LiveToolCall`, `LiveInterrupted`, `LiveFailed`; `TranscriptionModel`, `Transcription`, `Transcript`, `UtteranceEnd`; `SpeechModel`; `AudioFrame`; parts `Text`, `Image`, `Audio`, `Document`, `Part`, `Content`; `ToolSpec`.
 - **Give models tools:** `Tool`, `Tools`.
 - **Connect people:** `serve`, `Connection`, `Transport`, `Played`, `Loopback`, `Identity`; with the `webrtc` extra, `accept_offer` and `WebRTCTransport` from `rfnry_senses.webrtc`.
 - **Fail loudly:** `SensesException`, `ConfigurationError`, `InputError`, `NotFoundError`, `ModelError`, `TransportError`.
@@ -627,18 +617,17 @@ Everything the package exports, by role.
 ## Errors
 
 `ConfigurationError` for a session that cannot do what is asked: a live model given with
-transcription, speech or turn models; `instructions=` or `start(tools=)` without a live model;
-`start` on a session already started; `turns=`
-without `transcription=`; `say` or `interrupt` without a voice, `prompt` or `inform` without a live
-model, `look` without `video=True`; a `window`, `window_bytes`, `turn_timeout` or `tool_timeout`
-that is not positive, a `turn_threshold` outside `(0, 1]`. `InputError` for a call the library
+transcription or speech models; `instructions=` or `start(tools=)` without a live model; `start`
+on a session already started; `say` or `interrupt` without a voice, `prompt` or `inform` without a
+live model, `look` without `video=True`; a `window`, `window_bytes` or `tool_timeout` that is not
+positive. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
 audio frame whose bytes do not fill its samples, a tool called with bad arguments, an
 identity whose fields do not fit, an empty scope given to `serve` or `accept_offer`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the
-one `say` that needed it; a turn check that fails is logged and the turn ends. `TransportError`
+one `say` that needed it. `TransportError`
 for a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after
 its hello has the frame dropped with a warning, never the session.

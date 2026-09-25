@@ -54,17 +54,13 @@ from rfnry_senses.events import (
     TurnEnded,
 )
 from rfnry_senses.models import (
-    Check,
-    CheckAnswer,
     Content,
-    DecisionModel,
     Identity,
     IdentityLike,
     Image,
     Part,
     Text,
     ToolSpec,
-    as_decided,
     as_identity,
 )
 from rfnry_senses.tools import ToolsLike
@@ -77,11 +73,6 @@ log = logging.getLogger("rfnry_senses")
 PLAYED_GRACE = 0.25
 PLAYBACK_SLACK = 1.0
 _PARTS: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
-DONE = Check(
-    instructions="Has the person finished their turn, so that it is now the other side's turn to speak?",
-    yes="They finished what they meant to say and expect an answer or a reaction",
-    no="They paused mid-thought and are about to go on",
-)
 
 
 def as_content(result: object) -> Content:
@@ -139,35 +130,25 @@ class Session:
         instructions: str | None = None,
         transcription: TranscriptionModel | None = None,
         speech: SpeechModel | None = None,
-        turns: DecisionModel | None = None,
         video: bool = False,
         window: float = 10.0,
         window_bytes: int = 8 * 1024 * 1024,
-        turn_threshold: float = 0.5,
-        turn_timeout: float = 3.0,
         tool_timeout: float | None = 30.0,
     ) -> None:
-        if live is not None and (
-            transcription is not None or speech is not None or turns is not None
-        ):
+        if live is not None and (transcription is not None or speech is not None):
             raise ConfigurationError(
-                "session: a live model hears and speaks itself; give it no transcription, speech or turn models"
+                "session: a live model hears and speaks itself; give it no transcription or speech models"
             )
         if live is None and instructions is not None:
             raise ConfigurationError("session: instructions are for a live model")
-        if turns is not None and transcription is None:
-            raise ConfigurationError("session: turns need a transcription model")
         for name, value in (
             ("window", window),
             ("window_bytes", window_bytes),
-            ("turn_timeout", turn_timeout),
         ):
             if value <= 0:
                 raise ConfigurationError(f"session: {name} must be positive")
         if tool_timeout is not None and tool_timeout <= 0:
             raise ConfigurationError("session: tool_timeout must be positive or None")
-        if not 0 < turn_threshold <= 1:
-            raise ConfigurationError("session: turn_threshold must be in (0, 1]")
         self.scope = transport.scope
         self.person = as_identity(transport.identity)
         self._transport = transport
@@ -176,10 +157,7 @@ class Session:
         self._instructions = instructions
         self._transcription = transcription
         self._speech = speech
-        self._turns = turns
         self._window = FrameWindow(window, window_bytes) if video else None
-        self._turn_threshold = turn_threshold
-        self._turn_timeout = turn_timeout
         self._tool_timeout = tool_timeout
         self._connection: LiveConnection | None = None
         self._stream: Transcription | None = None
@@ -199,9 +177,6 @@ class Session:
         self._lock = asyncio.Lock()
         self._frame: Image | None = None
         self._frame_ready = asyncio.Event()
-        self._turn: list[str] = []
-        self._hold: asyncio.Task[None] | None = None
-        self._last_heard = ""
 
     @property
     def _voice(self) -> bool:
@@ -556,8 +531,6 @@ class Session:
         )
         if u.spoke:
             await self._emit(Silent(scope=self.scope))
-        if heard:
-            self._last_heard = heard
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
         if u.done is not None or u.spoke or u.text:
@@ -604,9 +577,6 @@ class Session:
                 text = event.text.strip()
                 if not text:
                     continue
-                if self._hold is not None:
-                    self._hold.cancel()
-                    self._hold = None
                 if self._utterance is not None or self._waiting:
                     await self._cut(self.person)
                     await self._drop_waiting()
@@ -625,42 +595,8 @@ class Session:
                     await self._utterance_ended(words)
         log.warning("session: the transcription stream ended; the session no longer hears")
 
-    async def _utterance_ended(self, words: str) -> None:
-        self._turn.append(words)
-        text = " ".join(self._turn)
-        probability = await self._done(text) if self._turns is not None else None
-        if probability is None or probability >= self._turn_threshold:
-            await self._end_turn(text, probability)
-        else:
-            self._hold = self._spawn(self._hold_turn(text, probability))
-
-    async def _hold_turn(self, text: str, probability: float) -> None:
-        await asyncio.sleep(self._turn_timeout)
-        self._hold = None
-        await self._end_turn(text, probability)
-
-    async def _end_turn(self, text: str, probability: float | None) -> None:
-        self._turn = []
-        await self._emit(
-            TurnEnded(scope=self.scope, text=text, speaker=self.person, probability=probability)
-        )
-
-    async def _done(self, text: str) -> float | None:
-        assert self._turns is not None
-        try:
-            decided = as_decided(
-                await self._turns.decide({"said": self._last_heard, "heard": text}, {"done": DONE})
-            )
-        except Exception as exc:
-            log.warning("session: the turn check failed; the turn ends: %s", exc)
-            return None
-        answer = decided.answers.get("done")
-        if not isinstance(answer, CheckAnswer):
-            log.warning(
-                "session: the decision model did not answer 'done' with a check; the turn ends"
-            )
-            return None
-        return answer.probability
+    async def _utterance_ended(self, text: str) -> None:
+        await self._emit(TurnEnded(scope=self.scope, text=text, speaker=self.person))
 
     async def _speak(self) -> None:
         while True:

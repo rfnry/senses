@@ -26,7 +26,6 @@ class TurnEnded(_Event):
     kind: Literal["turn_ended"] = "turn_ended"
     text: str
     speaker: Identity
-    probability: float | None = None
 
 
 class Said(_Event):
