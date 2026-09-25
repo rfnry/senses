@@ -112,16 +112,17 @@ Images are the family `Image` part.
 
 Two modes, chosen by the models given:
 
-- **Live** — `Session(live=LiveModel, tools=Tools|None, instructions=...)`: the model runs inside the
-  vendor's session; senses pipes audio and frames in, audio out, and dispatches the live model's tool
+- **Live** — `Session(live=LiveModel, instructions=...)`, started with `start(tools=Tools|None)`:
+  the model runs inside the vendor's session; senses pipes audio and frames in, audio out, and dispatches the live model's tool
   calls through `tools` (any family `Tools`: an engine agent as a tool, `ThreadTools`,
   `MemoryTools`, product tools).
 - **Cascaded** — `Session(transcription=..., speech=..., turns=DecisionModel|None)`: senses hears,
   transcribes, detects turns and emits them; the consumer's loop decides and calls `say`.
 
 `Session(transport, ...)` takes the transport `serve`/`accept_offer` returned and its scope from it
-(`session.scope`); it is an async context manager (`async with Session(...) as session`) and
-`close()` ends it early. Audio follows the models — a session with no model that hears or speaks
+(`session.scope`); `start(tools=None)` opens it — the live connection, with the tools' definitions —
+and it is an async context manager (`async with Session(...) as session` starts one without tools;
+on a started session it only closes) and `close()` ends it early. Audio follows the models — a session with no model that hears or speaks
 drops audio; `video=False` by default. A camera-only session has no models at all. (The separate
 `audio=` flag was dropped while writing the docs: it had no setting that meant anything.)
 
@@ -231,9 +232,9 @@ tool (the loop is started with what was said) and no `watch` tool (triggers are 
 A live model in front and an engine agent behind:
 
 ```python
-consult = engine.tool("core", scope="acme", name="consult", description="Ask the reasoning mind.")
-async with Session(link, live=live_model, tools=consult + ThreadTools(client, thread_id=t, triggered_by=ana)) as session:
-    behind = SensesTools(session, triggered_by=assistant)   # the engine agent can say/prompt/inform/look
+session = Session(link, live=live_model, video=True)
+consult = engine.tool("core", scope="acme", name="consult", tools=SensesTools(session, triggered_by=assistant))
+await session.start(tools=consult + ThreadTools(client, thread_id=t, triggered_by=ana))
 ```
 
 - The live model asks the text mind with `consult` (an engine agent as a tool — see §10).
@@ -333,7 +334,7 @@ The tool's body runs `engine.run(agent, scope, input=args["input"], context=cont
 the reply (or a decision's answers as a dict). It records like any run. It is how a live model
 consults an engine agent, and how any runtime mounts an agent. It returns a one-tool `Tools`, not a
 `Tool`: a `Tool` has no `+` and is not a `ToolsLike`, so `consult + ThreadTools(...)` and
-`Session(tools=consult)` would not work (aligned with the engine plan,
+`session.start(tools=consult)` would not work (aligned with the engine plan,
 `engine/docs/plans/2026-09-24-engine-tool-plan.md`).
 
 ## 11. Package and layout
@@ -380,3 +381,4 @@ Integration: the WebSocket transport against a real socket; the WebRTC transport
 | The WebRTC client sends its `hello` on the data channel | the protocol version is checked on both transports; the offer body stays `{sdp}` |
 | `setFps(fps)` on the TypeScript connection | a product raises or lowers the rate models see while the camera runs, without reconnecting |
 | Video is frames at the client's `fps`: JPEG over WebSocket, a video track over WebRTC | live models take video as image frames; WebRTC's inter-frame compression serves higher rates; true video input would add `send_video` additively |
+| Live tools are given at `start(tools=)`, not to `Session(...)`; `start(tools=)` without a live model is a `ConfigurationError` | the two minds are circular — the live model's `consult` tool runs an agent whose `SensesTools` need the session — so the session is built first and its tools given when the live connection opens, the moment vendors take tool definitions; a cascaded session's tools belong to the consumer's loop |

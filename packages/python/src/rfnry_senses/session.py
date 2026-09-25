@@ -136,7 +136,6 @@ class Session:
         transport: Transport,
         *,
         live: LiveModel | None = None,
-        tools: ToolsLike | None = None,
         instructions: str | None = None,
         transcription: TranscriptionModel | None = None,
         speech: SpeechModel | None = None,
@@ -154,8 +153,8 @@ class Session:
             raise ConfigurationError(
                 "session: a live model hears and speaks itself; give it no transcription, speech or turn models"
             )
-        if live is None and (tools is not None or instructions is not None):
-            raise ConfigurationError("session: tools and instructions are for a live model")
+        if live is None and instructions is not None:
+            raise ConfigurationError("session: instructions are for a live model")
         if turns is not None and transcription is None:
             raise ConfigurationError("session: turns need a transcription model")
         for name, value in (
@@ -173,7 +172,7 @@ class Session:
         self.person = as_identity(transport.identity)
         self._transport = transport
         self._live = live
-        self._tools = tools
+        self._tools: ToolsLike | None = None
         self._instructions = instructions
         self._transcription = transcription
         self._speech = speech
@@ -208,11 +207,20 @@ class Session:
     def _voice(self) -> bool:
         return self._live is not None or self._speech is not None
 
-    async def __aenter__(self) -> Session:
+    async def start(self, tools: ToolsLike | None = None) -> None:
+        if self._closed:
+            raise TransportError("session: the session is closed")
+        if self._opened:
+            raise ConfigurationError("session: the session has already started")
+        if tools is not None and self._live is None:
+            raise ConfigurationError(
+                "session: tools are for a live model; without one they belong to your own loop"
+            )
+        self._tools = tools
         if self._live is not None:
             specs = (
-                [ToolSpec.model_validate(d) for d in self._tools.definitions()]
-                if self._tools is not None
+                [ToolSpec.model_validate(d) for d in tools.definitions()]
+                if tools is not None
                 else []
             )
             self._connection = await self._live.open(tools=specs, instructions=self._instructions)
@@ -227,6 +235,10 @@ class Session:
         self._spawn(self._inbound())
         self._opened = True
         await self._transport.send_control({"type": "ready"})
+
+    async def __aenter__(self) -> Session:
+        if not self._opened:
+            await self.start()
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -350,7 +362,7 @@ class Session:
         if self._closed:
             raise TransportError("session: the session is closed")
         if not self._opened:
-            raise TransportError("session: open the session with async with before using it")
+            raise TransportError("session: start the session before using it")
 
     def _ready(self, text: str) -> None:
         self._check_open()

@@ -71,6 +71,7 @@ def test_the_package_exports_exactly_its_public_names() -> None:
 def test_the_session_has_exactly_its_verbs() -> None:
     public = {n for n in vars(Session) if not n.startswith("_")}
     assert public == {
+        "start",
         "say",
         "prompt",
         "inform",

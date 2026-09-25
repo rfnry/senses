@@ -1,7 +1,6 @@
 import asyncio
 import sys
 from pathlib import Path
-from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -19,7 +18,6 @@ from rfnry_senses import (
     SensesTools,
     Session,
     ToolCalled,
-    Tools,
     Transport,
     serve,
 )
@@ -41,28 +39,16 @@ INSTRUCTIONS = (
 engine = Engine("agents", generation=AnthropicProvider())
 
 
-class Room:
-    def __init__(self) -> None:
-        self.tools = Tools()
-
-    def definitions(self) -> list[dict[str, Any]]:
-        return self.tools.definitions()
-
-    async def dispatch(self, name: str, args: dict[str, Any]) -> Any:
-        return await self.tools.dispatch(name, args)
-
-
-def companion(link: Transport) -> Session:
-    room = Room()
+async def companion(link: Transport) -> Session:
+    session = Session(link, live=GoogleLive(), video=True, instructions=INSTRUCTIONS)
     consult = engine.tool(
         "mind",
         scope=link.scope,
         name="consult",
         description="Ask the mind behind you. It can look through the camera.",
-        tools=room,
+        tools=SensesTools(session, triggered_by=MIND),
     )
-    session = Session(link, live=GoogleLive(), video=True, tools=consult, instructions=INSTRUCTIONS)
-    room.tools = SensesTools(session, triggered_by=MIND)
+    await session.start(tools=consult)
     return session
 
 
@@ -107,7 +93,7 @@ async def camera(link: Loopback) -> None:
 async def headless() -> None:
     link = Loopback(ANA, scope="home")
     answered = asyncio.Event()
-    async with companion(link) as session:
+    async with await companion(link) as session:
         narrating = asyncio.create_task(narrate(session, answered))
         filming = asyncio.create_task(camera(link))
         await asyncio.sleep(1)
@@ -153,7 +139,7 @@ async def senses(ws: WebSocket) -> None:
     await ws.accept()
     link = await serve(Socket(ws), identity=ANA, scope="home")
     if link is not None:
-        async with companion(link) as session:
+        async with await companion(link) as session:
             await narrate(session, asyncio.Event())
 
 

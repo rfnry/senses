@@ -103,7 +103,9 @@ async def test_a_tool_call_made_by_an_interrupted_response_is_answered_once() ->
         return {"open": True}
 
     live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 100)
-    async with Session(link, live=live, tools=Tools([Tool("terrace", "Open?", body=terrace)])) as s:
+    s = Session(link, live=live)
+    await s.start(tools=Tools([Tool("terrace", "Open?", body=terrace)]))
+    async with s:
         events = s.events()
         live.connection.emit(
             LiveStarted(),
@@ -127,9 +129,9 @@ async def test_no_result_is_submitted_after_close() -> None:
         return "never"
 
     live, link = ScriptedLive(), Loopback(ANA, "acme")
-    async with Session(
-        link, live=live, tools=Tools([Tool("forever", "Never", body=forever)]), tool_timeout=None
-    ):
+    s = Session(link, live=live, tool_timeout=None)
+    await s.start(tools=Tools([Tool("forever", "Never", body=forever)]))
+    async with s:
         live.connection.emit(LiveToolCall(call_id="c1", name="forever"))
         await asyncio.sleep(0.01)
     assert live.connection.results == []

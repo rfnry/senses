@@ -55,9 +55,9 @@ async def guest_says(link: Loopback, text: str) -> None:
 async def main() -> None:
     link = Loopback(ANA, scope="acme")
     said: asyncio.Queue[Said] = asyncio.Queue()
-    async with Session(
-        link, live=GoogleLive(), tools=consult, instructions=INSTRUCTIONS
-    ) as session:
+    session = Session(link, live=GoogleLive(), instructions=INSTRUCTIONS)
+    await session.start(tools=consult)
+    async with session:
         narrating = asyncio.create_task(narrate(session, said))
         await guest_says(link, "Hi! Is the terrace open tonight, and until when?")
         await asyncio.wait_for(said.get(), 60)

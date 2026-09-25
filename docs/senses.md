@@ -163,14 +163,19 @@ const senses = await connect({ url: 'wss://example.com/senses', transport: 'webs
 ### Live sessions
 
 ```python
-async with Session(link, live=live, tools=tools, instructions="You are the concierge at Acme.") as session:
+session = Session(link, live=live, instructions="You are the concierge at Acme.")
+await session.start(tools=tools)
+async with session:
     async for event in session.events():
         print(event)
 ```
 
-The model runs inside its vendor's session. Senses opens it with the definitions of `tools` and the
-instructions, sends it the person's audio, and plays its voice. When it calls a tool, senses
-dispatches the call through `tools` — any family `Tools`: an engine agent as a tool, rfnry-thread's
+The model runs inside its vendor's session. `start` opens it with the definitions of `tools` and the
+instructions, sends it the person's audio, and plays its voice. The tools are fixed from then on:
+vendors take tool definitions when their session opens. They are given to `start`, not to
+`Session`, so a tool can hold the session it runs in ([Two minds](#two-minds)). `async with` closes
+the session at the end, and starts it without tools if it has not started. When the model calls a
+tool, senses dispatches the call through `tools` — any family `Tools`: an engine agent as a tool, rfnry-thread's
 `ThreadTools`, rfnry-memory's `MemoryTools`, your own — and submits the result. A string or a list of
 parts goes back as it is, a dict as JSON; an exception goes back as an error the model reads,
 `InputError: tools: unknown tool 'ghost'`. Each call is bounded by `tool_timeout` (30 s by default,
@@ -188,7 +193,8 @@ await session.inform("The terrace closes at nine tonight.", triggered_by=host)
 
 `say` speaks exactly the given words, through the same voice; given a stream of text, it joins the
 chunks and sends them once the stream ends, since a live model's verbatim speech needs the whole
-text. A cascaded session has no model to prompt or inform; both are a `ConfigurationError` there.
+text. A cascaded session has no model to prompt or inform; both are a `ConfigurationError` there, and so
+is `start(tools=)` — without a live model, tools belong to your own loop.
 
 ### Cascaded sessions
 
@@ -357,16 +363,18 @@ source. The values are validated as strictly as an `Identity`'s; one that does n
 A live model in front for the conversation, an engine agent behind for the thinking:
 
 ```python
-consult = engine.tool("core", scope="acme", name="consult", description="Ask the reasoning mind.")
-async with Session(link, live=live, tools=consult + ThreadTools(client, thread_id=thread, triggered_by=ana)) as session:
-    behind = SensesTools(session, triggered_by=assistant)
-    await engine.run("core", scope=session.scope, input="Greet the guest; their order shipped.", tools=behind)
+session = Session(link, live=live, video=True)
+consult = engine.tool("core", scope=session.scope, name="consult", description="Ask the reasoning mind.", tools=SensesTools(session, triggered_by=assistant))
+await session.start(tools=consult + ThreadTools(client, thread_id=thread, triggered_by=ana))
 ```
 
 The live model asks the engine agent with `consult` — rfnry-engine's `engine.tool`, an agent as a
-tool. The engine agent reaches the room through `SensesTools`: `say` speaks its words verbatim,
-`prompt` has the live voice say it in its own words, `inform` keeps the live model current, and
-`look` shows it the camera directly. The transcript both minds read is the thread, mirrored from
+tool. The engine agent reaches the room through `SensesTools`, built before the session starts: it
+needs the session only when a tool is called, and the session needs `consult` only when it starts,
+so the circle closes in three lines. Through them `say` speaks the agent's words verbatim, `prompt`
+has the live voice say it in its own words, `inform` keeps the live model current, and `look` shows
+it the camera directly. The same tools serve the agent when it acts first, passed to its own
+`engine.run`. The transcript both minds read is the thread, mirrored from
 `events()` ([Storage](#storage)). A persona, a floor policy or a mandate gate stays in your product,
 built on `mute`, `unmute`, `interrupt` and tools of your own.
 
@@ -490,7 +498,7 @@ class Tools:
     def without(self, *names) -> Tools
 ```
 
-A live model receives any `Tools` as `Session(tools=)`. `Tool("now", "The current time", body=now)`
+A live model receives any `Tools` as `session.start(tools=)`. `Tool("now", "The current time", body=now)`
 makes one of your own; `engine.tool(agent, scope=…)` makes an engine agent one, returned as a
 `Tools` so it adds to the rest.
 
@@ -548,7 +556,7 @@ tenant — a thread, a memory corpus, an engine agent — are built for the sess
 
 Everything the package exports, by role.
 
-- **Run a session:** `Session`, `SensesTools`.
+- **Run a session:** `Session` — `start(tools=)` or `async with` — and `SensesTools`.
 - **What a session reports:** `Event`; `Heard`, `TurnEnded`, `Said`, `Interrupted`, `Speaking`, `Silent`, `Looked`, `Muted`, `Informed`, `ToolCalled`, `Closed`.
 - **Speak to models:** `LiveModel`, `LiveConnection`, `LiveEvent`, `LiveAudio`, `LiveHeard`, `LiveSaid`, `LiveStarted`, `LiveDone`, `LiveToolCall`, `LiveInterrupted`, `LiveFailed`; `TranscriptionModel`, `Transcription`, `Transcript`, `UtteranceEnd`; `SpeechModel`; `AudioFrame`; `DecisionModel`, `Check`, `CheckAnswer`, `Decided`; parts `Text`, `Image`, `Audio`, `Document`, `Part`, `Content`; `ToolSpec`.
 - **Give models tools:** `Tool`, `Tools`.
@@ -558,7 +566,8 @@ Everything the package exports, by role.
 ## Errors
 
 `ConfigurationError` for a session that cannot do what is asked: a live model given with
-transcription, speech or turn models; `tools=` or `instructions=` without a live model; `turns=`
+transcription, speech or turn models; `instructions=` or `start(tools=)` without a live model;
+`start` on a session already started; `turns=`
 without `transcription=`; `say` or `interrupt` without a voice, `prompt` or `inform` without a live
 model, `look` without `video=True`; a `window`, `window_bytes`, `turn_timeout` or `tool_timeout`
 that is not positive, a `turn_threshold` outside `(0, 1]`. `InputError` for a call the library
@@ -569,7 +578,7 @@ window. `ModelError` when a live model reports `LiveFailed` or breaks the contra
 that ends before it starts, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the
 one `say` that needed it; a turn check that fails is logged and the turn ends. `TransportError`
-for a verb on a closed session, for a `say` or `prompt` whose session closed before it was
+for a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after
 its hello has the frame dropped with a warning, never the session.
 

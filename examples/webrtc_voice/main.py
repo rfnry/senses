@@ -38,9 +38,9 @@ answered = asyncio.Event()
 
 
 async def converse(link: Transport) -> None:
-    async with Session(
-        link, live=GoogleLive(), tools=consult, instructions=INSTRUCTIONS
-    ) as session:
+    session = Session(link, live=GoogleLive(), instructions=INSTRUCTIONS)
+    await session.start(tools=consult)
+    async with session:
         async for event in session.events():
             match event:
                 case Heard(final=True, text=text):

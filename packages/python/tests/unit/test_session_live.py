@@ -47,8 +47,8 @@ def session(link: Loopback, live: ScriptedLive, **kwargs: Any) -> Session:
         ),
         ({"speech": Tone(), "turns": object()}, "^session: turns need a transcription model$"),
         (
-            {"speech": Tone(), "tools": Tools()},
-            "^session: tools and instructions are for a live model$",
+            {"speech": Tone(), "instructions": "Be brief."},
+            "^session: instructions are for a live model$",
         ),
         (
             {"live": ScriptedLive(), "turn_threshold": 0},
@@ -70,9 +70,9 @@ async def test_the_live_model_is_opened_with_the_tools_and_hears_the_person() ->
         return "12:00"
 
     live, link = ScriptedLive(), Loopback(ANA, "acme")
-    async with session(
-        link, live, tools=Tools([Tool("now", "The time", body=now)]), instructions="Be brief."
-    ) as s:
+    s = session(link, live, instructions="Be brief.")
+    await s.start(tools=Tools([Tool("now", "The time", body=now)]))
+    async with s:
         assert s.scope == "acme" and s.person == ANA
         await link.speak(pcm(20))
         await until(lambda: len(live.connection.audio) == 1)
@@ -174,7 +174,9 @@ async def test_the_models_tool_calls_are_dispatched_and_answered() -> None:
         ]
     )
     live, link = ScriptedLive(), Loopback(ANA, "acme")
-    async with session(link, live, tools=tools, tool_timeout=0.05) as s:
+    s = session(link, live, tool_timeout=0.05)
+    await s.start(tools=tools)
+    async with s:
         events = s.events()
         live.connection.emit(
             LiveToolCall(call_id="c1", name="terrace"),
@@ -260,3 +262,25 @@ async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:
         said = await saying
     assert live.connection.calls == [("say", "For two, at eight.")]
     assert said.text == said.heard == "For two, at eight." and said.triggered_by == HOST
+
+
+async def test_start_refuses_tools_without_a_live_model_and_starts_once() -> None:
+    cascaded = Session(Loopback(ANA, "acme"), transcription=ScriptedTranscription(), speech=Tone())
+    camera = Session(Loopback(ANA, "acme"), video=True)
+    for s in (cascaded, camera):
+        with pytest.raises(
+            ConfigurationError,
+            match="^session: tools are for a live model; without one they belong to your own loop$",
+        ):
+            await s.start(tools=Tools())
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    with pytest.raises(TransportError, match="^session: start the session before using it$"):
+        await s.say("Hello.", triggered_by=HOST)
+    await s.start()
+    with pytest.raises(ConfigurationError, match="^session: the session has already started$"):
+        await s.start()
+    async with s:
+        assert live.opened["tools"] == []
+    with pytest.raises(TransportError, match="^session: the session is closed$"):
+        await s.start()

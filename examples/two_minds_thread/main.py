@@ -55,9 +55,9 @@ async def main() -> None:
     transcript = ThreadTools(concierge, thread_id=thread.id).only("read_recent")
     link = Loopback(ANA, scope="acme")
     said: asyncio.Queue[Said] = asyncio.Queue()
-    async with Session(
-        link, live=GoogleLive(), tools=consult + transcript, instructions=INSTRUCTIONS
-    ) as session:
+    session = Session(link, live=GoogleLive(), instructions=INSTRUCTIONS)
+    await session.start(tools=consult + transcript)
+    async with session:
         mirroring = asyncio.create_task(mirror(session, post, said))
         await guest_says(link, "Hi, is the terrace still open tonight?")
         await asyncio.wait_for(said.get(), 60)

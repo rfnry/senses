@@ -87,7 +87,9 @@ class Engine:
                 await on_event(TextDelta(text=word))
         return Run()
 
-    def tool(self, agent: str, *, scope: str, name: str, description: str) -> Tools:
+    def tool(
+        self, agent: str, *, scope: str, name: str, description: str, tools: Any = None
+    ) -> Tools:
         async def body(args: dict[str, Any]) -> str:
             return Run.reply
 
