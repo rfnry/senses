@@ -47,9 +47,6 @@ addopts = "-m 'not integration and not webrtc and not live'"
 line-length = 100
 target-version = "py312"
 
-[tool.ruff.format]
-exclude = ["src/rfnry_senses/models.py", "src/rfnry_senses/tools.py", "tests/integration/socket_adapter.py"]
-
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP", "SIM"]
 ignore = ["E501"]
