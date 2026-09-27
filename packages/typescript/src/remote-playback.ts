@@ -1,11 +1,14 @@
 type Counts = { emitted: number; concealed: number; rate: number }
 
 const POLL_MS = 100
+const FADE_MS = 60
+const FADE_STEPS = 6
 
 export class RemotePlayback {
   private element: HTMLAudioElement | null = null
   private receiver: RTCRtpReceiver | null = null
   private fenced = 0
+  private fading: ReturnType<typeof setInterval> | null = null
   private readonly baselines = new Map<number, Promise<Counts | null>>()
   private readonly reported = new Set<number>()
 
@@ -22,13 +25,17 @@ export class RemotePlayback {
 
   speaking(utterance: number): void {
     if (utterance <= this.fenced || this.baselines.has(utterance) || this.reported.has(utterance)) return
-    if (this.element !== null) this.element.muted = false
+    this.stopFading()
+    if (this.element !== null) {
+      this.element.volume = 1
+      this.element.muted = false
+    }
     this.baselines.set(utterance, this.counts())
   }
 
   async stop(utterance: number): Promise<void> {
     this.fenced = Math.max(this.fenced, utterance)
-    if (this.element !== null) this.element.muted = true
+    this.fadeOut()
     if (!this.baselines.has(utterance) && !this.reported.has(utterance)) {
       this.reported.add(utterance)
       this.report(utterance, 0)
@@ -48,10 +55,29 @@ export class RemotePlayback {
   }
 
   close(): void {
+    this.stopFading()
     this.element?.pause()
     if (this.element !== null) this.element.srcObject = null
     this.element = null
     this.receiver = null
+  }
+
+  private fadeOut(): void {
+    const element = this.element
+    if (element === null || element.muted || this.fading !== null) return
+    let step = 0
+    this.fading = setInterval(() => {
+      step += 1
+      element.volume = Math.max(0, 1 - step / FADE_STEPS)
+      if (step < FADE_STEPS) return
+      element.muted = true
+      this.stopFading()
+    }, FADE_MS / FADE_STEPS)
+  }
+
+  private stopFading(): void {
+    if (this.fading !== null) clearInterval(this.fading)
+    this.fading = null
   }
 
   private async finish(utterance: number): Promise<void> {

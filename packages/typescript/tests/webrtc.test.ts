@@ -238,6 +238,7 @@ describe('connect over WebRTC', () => {
 
 class Element {
   muted = false
+  volume = 1
   autoplay = false
   srcObject: unknown = null
   async play(): Promise<void> {}
@@ -275,10 +276,29 @@ describe('remote playback', () => {
     counts.concealed += 480
     await playback.stop(1)
     expect(reports).toEqual([[1, 190]])
+  })
+
+  it('fades the voice out over 60 ms on a stop, and brings it back for the next utterance', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('Audio', Element)
+    const playback = new RemotePlayback(() => {})
+    playback.start({} as MediaStream, receiver({ emitted: 0, concealed: 0 }))
     const element = (playback as unknown as { element: Element }).element
-    expect(element.muted).toBe(true)
-    playback.speaking(2)
+    playback.speaking(1)
+    await playback.stop(1)
+    expect([element.volume, element.muted]).toEqual([1, false])
+    await vi.advanceTimersByTimeAsync(30)
+    expect(element.volume).toBeCloseTo(0.5)
     expect(element.muted).toBe(false)
+    await vi.advanceTimersByTimeAsync(30)
+    expect([element.volume, element.muted]).toEqual([0, true])
+    playback.speaking(2)
+    expect([element.volume, element.muted]).toEqual([1, false])
+    await playback.stop(2)
+    await vi.advanceTimersByTimeAsync(20)
+    playback.speaking(3)
+    await vi.advanceTimersByTimeAsync(100)
+    expect([element.volume, element.muted]).toEqual([1, false])
   })
 
   it('reports a natural end once the emitted count stops moving', async () => {
