@@ -150,6 +150,23 @@ describe('connect over WebRTC', () => {
     expect(devices.streams[0]?.getAudioTracks()[0]?.stopped).toBe(true)
   })
 
+  it('lets go of the peer and the microphone when the camera it was asked for is refused', async () => {
+    const offers = server()
+    vi.stubGlobal('fetch', offers.fetch)
+    const devices = media()
+    devices.refused.camera = true
+    vi.stubGlobal('navigator', devices.navigator)
+    await expect(
+      connect({ url: '/senses/offer', transport: 'webrtc', camera: { deviceId: 'gone' } })
+    ).rejects.toThrow('NotAllowedError')
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 640, frameRate: 1, deviceId: { exact: 'gone' } },
+    })
+    expect(offers.requests).toEqual([])
+    expect((Peer.made[0] as Peer).closed).toBe(true)
+    expect(devices.streams[0]?.getAudioTracks()[0]?.stopped).toBe(true)
+  })
+
   it('caps the camera at its rate, pauses it, mutes the microphone and changes the rate', async () => {
     vi.stubGlobal('fetch', server().fetch)
     const { senses, peer } = await connected({ camera: { fps: 3 } })

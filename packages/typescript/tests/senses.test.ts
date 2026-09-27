@@ -92,13 +92,16 @@ describe('connect over a WebSocket', () => {
     const connecting = connect({
       url: 'wss://example.com/senses',
       transport: 'websocket',
-      camera: {},
+      camera: { deviceId: 'gone' },
     })
     await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
     const socket = Socket.made[0] as Socket
     socket.open()
     socket.deliver({ type: 'ready' })
     await expect(connecting).rejects.toThrow('NotAllowedError')
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 640, frameRate: 1, deviceId: { exact: 'gone' } },
+    })
     const worklet = WorkletNode.made[0] as WorkletNode
     worklet.port.post(new Uint8Array(640))
     expect(socket.binary()).toEqual([])
