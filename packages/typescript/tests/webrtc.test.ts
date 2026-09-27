@@ -288,6 +288,21 @@ describe('connect over WebRTC', () => {
     }
   })
 
+  it('keeps sending no track when the camera is switched while paused', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const { senses, peer } = await connected({ camera: { facing: 'environment', fps: 1 } })
+    senses.pauseCamera()
+    await senses.useCamera({ facing: 'user' })
+    const front = devices.video().at(-1)
+    expect(peer.sender.replaced).toEqual([null, null])
+    expect(front?.enabled).toBe(false)
+    senses.resumeCamera()
+    expect(peer.sender.replaced).toEqual([null, null, front])
+    expect(front?.enabled).toBe(true)
+  })
+
   it('starts on the screen when asked, and sends no video once the share ends', async () => {
     vi.stubGlobal('fetch', server().fetch)
     const { senses, peer } = await connected({ camera: { source: 'screen', fps: 2 } })

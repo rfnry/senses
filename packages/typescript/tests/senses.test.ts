@@ -306,6 +306,22 @@ describe('connect over a WebSocket', () => {
     expect(devices.video()[0]?.stopped).toBe(false)
   })
 
+  it('sends no frames from a camera switched to while paused, until resumed', async () => {
+    vi.useFakeTimers()
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const { senses, socket } = await opened({ camera: { fps: 1 } })
+    senses.pauseCamera()
+    await senses.useCamera({ facing: 'user' })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(socket.binary()).toHaveLength(0)
+    expect(devices.video().at(-1)?.enabled).toBe(false)
+    senses.resumeCamera()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(1)
+  })
+
   it('never opens the camera again after close', async () => {
     const devices = media()
     vi.stubGlobal('navigator', devices.navigator)
