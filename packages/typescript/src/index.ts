@@ -1,4 +1,4 @@
-export type { VideoSource } from './camera.js'
+export type { CameraChoice, VideoSource } from './camera.js'
 export { SensesError } from './errors.js'
 export type { ConnectOptions, Senses, SensesListener, SensesStatus } from './room.js'
 export { connect } from './senses.js'

@@ -532,6 +532,22 @@ room with `width` (1280 reads a window; 640, the default, suits a face), and rai
 the model guides the person through clicks, then lower it. Screen sharing is a desktop-browser
 feature; mobile browsers mostly have no `getDisplayMedia`.
 
+Which camera is `camera.facing` — `'environment'`, the back of a phone, or `'user'`, the front — or
+`camera.deviceId`, from your own picker over `navigator.mediaDevices.enumerateDevices()`; one or the
+other, never both. Mobile browsers open the front camera unless asked, so a phone pointed at a
+machine needs `facing: 'environment'`:
+
+```ts
+const senses = await connect({ url, transport: 'websocket', camera: { facing: 'environment', width: 1280, fps: 1 } })
+await senses.useCamera({ facing: 'user' })
+```
+
+`facing` is a preference, so a laptop with one camera still opens it; a `deviceId` is exact, so a
+device that is gone rejects. `useCamera` takes the same two and switches in place — the next frame
+comes from the new camera over a WebSocket, and the track is replaced over WebRTC — and without them
+returns to the last camera chosen, as the client does when a screen share ends. Both at once reject
+with a `SensesError`.
+
 It plays the voice, counts what it played, and answers `stop` with it on its own.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and

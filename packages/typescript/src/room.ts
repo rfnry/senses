@@ -1,4 +1,4 @@
-import type { CameraOptions, VideoSource } from './camera.js'
+import type { CameraChoice, CameraOptions, VideoSource } from './camera.js'
 import { SensesError } from './errors.js'
 import type { SensesEvent } from './wire.js'
 
@@ -8,7 +8,7 @@ export type ConnectOptions = {
   protocols?: string | string[]
   headers?: Record<string, string>
   microphone?: boolean
-  camera?: false | { source?: VideoSource; fps?: number; width?: number; quality?: number }
+  camera?: false | ({ source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice)
   sampleRate?: number
   iceServers?: RTCIceServer[]
 }
@@ -25,25 +25,29 @@ export interface Senses {
   mute(): void
   unmute(): void
   shareScreen(): Promise<void>
-  useCamera(): Promise<void>
+  useCamera(choice?: CameraChoice): Promise<void>
   pauseCamera(): void
   resumeCamera(): void
   setFps(fps: number): void
   close(): Promise<void>
 }
 
-export function cameraOptions(camera: {
-  source?: VideoSource
-  fps?: number
-  width?: number
-  quality?: number
-}): CameraOptions {
+export function cameraOptions(
+  camera: { source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice,
+): CameraOptions {
   return {
     source: camera.source ?? 'camera',
     fps: camera.fps ?? 1,
     width: camera.width ?? 640,
     quality: camera.quality ?? 0.7,
+    choice: checkChoice(camera),
   }
+}
+
+export function checkChoice(choice: CameraChoice): CameraChoice {
+  if (choice.facing !== undefined && choice.deviceId !== undefined)
+    throw new SensesError('senses: the camera takes facing or deviceId, not both')
+  return choice
 }
 
 export function checkCamera<T>(camera: T | null, verb: string): T {

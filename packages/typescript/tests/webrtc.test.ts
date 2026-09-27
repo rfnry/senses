@@ -177,6 +177,41 @@ describe('connect over WebRTC', () => {
     expect(peer.closed).toBe(false)
   })
 
+  it('opens the camera asked for and flips it by replacing the track', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const { senses, peer } = await connected({ camera: { facing: 'environment', fps: 1 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    expect(devices.asked.find((a) => a.source === 'camera')?.constraints).toEqual({
+      video: { width: 640, frameRate: 1, facingMode: { ideal: 'environment' } },
+    })
+    const back = peer.added.find((a) => a.track.kind === 'video')?.track
+    await senses.useCamera({ facing: 'user' })
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 640, frameRate: 1, facingMode: { ideal: 'user' } },
+    })
+    const front = peer.sender.replaced[0]
+    expect(front).toBe(devices.video().at(-1))
+    expect(front?.stopped).toBe(false)
+    expect(back?.stopped).toBe(true)
+    expect(peer.added.filter((a) => a.track.kind === 'video')).toHaveLength(1)
+    expect(sources).toEqual(['camera'])
+    await expect(senses.useCamera({ facing: 'user', deviceId: 'desk' })).rejects.toEqual(
+      new SensesError('senses: the camera takes facing or deviceId, not both'),
+    )
+    expect(peer.sender.replaced).toHaveLength(1)
+  })
+
+  it('refuses facing and deviceId together before making a peer', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    await expect(
+      connect({ url: '/senses/offer', transport: 'webrtc', camera: { facing: 'user', deviceId: 'desk' } }),
+    ).rejects.toEqual(new SensesError('senses: the camera takes facing or deviceId, not both'))
+    expect(Peer.made).toHaveLength(0)
+  })
+
   it('starts on the screen when asked, and sends no video once the share ends', async () => {
     vi.stubGlobal('fetch', server().fetch)
     const { senses, peer } = await connected({ camera: { source: 'screen', fps: 2 } })

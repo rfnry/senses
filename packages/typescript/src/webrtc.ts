@@ -2,7 +2,15 @@ import { Camera } from './camera.js'
 import { SensesError } from './errors.js'
 import { MICROPHONE } from './microphone.js'
 import { RemotePlayback } from './remote-playback.js'
-import { type ConnectOptions, cameraOptions, checkCamera, checkFps, Listeners, type Senses } from './room.js'
+import {
+  type ConnectOptions,
+  cameraOptions,
+  checkCamera,
+  checkChoice,
+  checkFps,
+  Listeners,
+  type Senses,
+} from './room.js'
 import { hello, parseControl, played } from './wire.js'
 
 function gathered(pc: RTCPeerConnection): Promise<void> {
@@ -15,6 +23,7 @@ function gathered(pc: RTCPeerConnection): Promise<void> {
 }
 
 export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
+  const settings = options.camera ? cameraOptions(options.camera) : null
   const room = new Listeners()
   const pc = new RTCPeerConnection({ iceServers: options.iceServers ?? [] })
   const channel = pc.createDataChannel('senses', { ordered: true })
@@ -23,7 +32,6 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
   })
   const streams: MediaStream[] = []
   const microphone = () => streams.flatMap((stream) => stream.getAudioTracks())
-  const settings = options.camera ? cameraOptions(options.camera) : null
   let sender: RTCRtpSender | null = null
   const camera = settings
     ? new Camera(
@@ -115,8 +123,8 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     async shareScreen() {
       await checkCamera(camera, 'shareScreen').use('screen')
     },
-    async useCamera() {
-      await checkCamera(camera, 'useCamera').use('camera')
+    async useCamera(choice) {
+      await checkCamera(camera, 'useCamera').use('camera', choice && checkChoice(choice))
     },
     pauseCamera: () => camera?.pause(),
     resumeCamera: () => camera?.resume(),

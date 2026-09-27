@@ -196,6 +196,63 @@ describe('connect over a WebSocket', () => {
     expect(devices.video()[1]?.enabled).toBe(false)
   })
 
+  it('opens the camera asked for, flips it in place, and returns to the last one after a share', async () => {
+    vi.useFakeTimers()
+    const devices = media()
+    const page = documentWithCanvas()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', page)
+    const { senses, socket } = await opened({ camera: { facing: 'environment', width: 1280, fps: 1 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 1280, frameRate: 1, facingMode: { ideal: 'environment' } },
+    })
+    const [back] = devices.video()
+    await senses.useCamera({ facing: 'user' })
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 1280, frameRate: 1, facingMode: { ideal: 'user' } },
+    })
+    expect(back?.stopped).toBe(true)
+    expect((page.createElement('video') as { srcObject: unknown }).srcObject).toBe(devices.streams.at(-1))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(socket.binary()).toHaveLength(1)
+    await senses.useCamera({ deviceId: 'desk' })
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 1280, frameRate: 1, deviceId: { exact: 'desk' } },
+    })
+    await senses.shareScreen()
+    devices.video().at(-1)?.end()
+    await vi.waitFor(() => expect(sources).toEqual(['camera', 'camera', 'screen', 'camera']))
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 1280, frameRate: 1, deviceId: { exact: 'desk' } },
+    })
+    await senses.useCamera()
+    expect(devices.asked.at(-1)?.constraints).toEqual({
+      video: { width: 1280, frameRate: 1, deviceId: { exact: 'desk' } },
+    })
+  })
+
+  it('refuses facing and deviceId together, before opening anything', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const both = new SensesError('senses: the camera takes facing or deviceId, not both')
+    await expect(
+      connect({
+        url: 'wss://example.com/senses',
+        transport: 'websocket',
+        camera: { facing: 'environment', deviceId: 'desk' },
+      }),
+    ).rejects.toEqual(both)
+    expect(Socket.made).toHaveLength(0)
+    expect(devices.asked).toHaveLength(0)
+    const { senses } = await opened({ camera: {} })
+    await expect(senses.useCamera({ facing: 'user', deviceId: 'desk' })).rejects.toEqual(both)
+    expect(devices.video()).toHaveLength(1)
+    expect(devices.video()[0]?.stopped).toBe(false)
+  })
+
   it('refuses a screen without the camera option', async () => {
     const { senses } = await opened()
     await expect(senses.shareScreen()).rejects.toEqual(new SensesError('senses: shareScreen needs the camera option'))

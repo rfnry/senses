@@ -2,7 +2,15 @@ import { Camera } from './camera.js'
 import { Frames } from './frames.js'
 import { Microphone } from './microphone.js'
 import { Playback } from './playback.js'
-import { type ConnectOptions, cameraOptions, checkCamera, checkFps, Listeners, type Senses } from './room.js'
+import {
+  type ConnectOptions,
+  cameraOptions,
+  checkCamera,
+  checkChoice,
+  checkFps,
+  Listeners,
+  type Senses,
+} from './room.js'
 import { overWebRTC } from './webrtc.js'
 import { WebSocketLink } from './websocket.js'
 
@@ -11,6 +19,7 @@ export function connect(options: ConnectOptions): Promise<Senses> {
 }
 
 async function overWebSocket(options: ConnectOptions): Promise<Senses> {
+  const settings = options.camera ? cameraOptions(options.camera) : null
   const room = new Listeners()
   const rate = options.sampleRate ?? 16000
   let report = (_utterance: number, _ms: number) => {}
@@ -34,7 +43,6 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   const microphone = options.microphone === false ? null : new Microphone()
   microphone?.onChunk((pcm) => link.sendAudio(pcm, rate))
   await microphone?.start(rate)
-  const settings = options.camera ? cameraOptions(options.camera) : null
   const frames = settings ? new Frames({ ...settings }, (jpeg) => link.sendImage(jpeg)) : null
   const camera =
     settings && frames
@@ -59,8 +67,8 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
     async shareScreen() {
       await checkCamera(camera, 'shareScreen').use('screen')
     },
-    async useCamera() {
-      await checkCamera(camera, 'useCamera').use('camera')
+    async useCamera(choice) {
+      await checkCamera(camera, 'useCamera').use('camera', choice && checkChoice(choice))
     },
     pauseCamera: () => camera?.pause(),
     resumeCamera: () => camera?.resume(),
