@@ -72,7 +72,8 @@ PAIRS = [(block, name) for block, spec in BLOCKS.items() for name in spec[3]]
 @pytest.mark.parametrize(("block", "name"), PAIRS, ids=[f"{b}-{n}" for b, n in PAIRS])
 def test_the_shared_block_is_byte_identical_with_the_sibling(block: str, name: str) -> None:
     own_file, start, end, _ = BLOCKS[block]
+    if not (FAMILY / name).is_dir():
+        pytest.skip(f"no {name} checkout at {FAMILY / name}")
     theirs = sibling(name, own_file, start)
-    if theirs is None or cut(theirs, start, end) is None:
-        pytest.skip(f"no {block} block in a {name} checkout at {FAMILY / name}")
-    assert cut((OWN / own_file).read_text(encoding="utf-8"), start, end) == cut(theirs, start, end)
+    ours = cut((OWN / own_file).read_text(encoding="utf-8"), start, end)
+    assert ours is not None and ours == (cut(theirs, start, end) if theirs is not None else None)
