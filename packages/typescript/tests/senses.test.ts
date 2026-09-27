@@ -306,6 +306,19 @@ describe('connect over a WebSocket', () => {
     expect(devices.video()[0]?.stopped).toBe(false)
   })
 
+  it('never opens the camera again after close', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const { senses } = await opened({ camera: {} })
+    await senses.close()
+    const asked = devices.asked.length
+    await senses.useCamera({ facing: 'user' })
+    await senses.shareScreen()
+    expect(devices.asked).toHaveLength(asked)
+    expect(devices.video().every((track) => track.stopped)).toBe(true)
+  })
+
   it('refuses a screen without the camera option', async () => {
     const { senses } = await opened()
     await expect(senses.shareScreen()).rejects.toEqual(

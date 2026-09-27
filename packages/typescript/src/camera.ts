@@ -51,6 +51,7 @@ export class Camera {
   }
 
   async use(source: VideoSource, choice = this.choice): Promise<void> {
+    if (this.stopped) return
     const stream = await capture(source, this.options.width, this.fps, choice)
     if (this.stopped) {
       for (const track of stream.getTracks()) track.stop()

@@ -261,19 +261,26 @@ describe('connect over WebRTC', () => {
     expect(screen?.enabled).toBe(true)
   })
 
-  it('leaves the closed peer alone when the camera is paused, resumed or re-rated after close', async () => {
+  it('leaves the closed peer and the camera alone when the camera is used after close', async () => {
     vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
     const rejected: unknown[] = []
     const record = (reason: unknown) => rejected.push(reason)
     process.on('unhandledRejection', record)
     try {
       const { senses, peer } = await connected({ camera: { fps: 1 } })
       await senses.close()
+      const asked = devices.asked.length
       senses.pauseCamera()
       senses.resumeCamera()
       senses.setFps(2)
+      await senses.useCamera({ facing: 'user' })
+      await senses.shareScreen()
       await new Promise((resolve) => setTimeout(resolve, 0))
       expect(rejected).toEqual([])
+      expect(devices.asked).toHaveLength(asked)
+      expect(devices.video().every((track) => track.stopped)).toBe(true)
       expect(peer.sender.replaced).toEqual([])
       expect(peer.sender.parameters.encodings).toEqual([{ maxFramerate: 1 }])
     } finally {
