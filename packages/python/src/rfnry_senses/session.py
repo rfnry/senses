@@ -69,7 +69,7 @@ from rfnry_senses.transport import Played, Transport
 from rfnry_senses.voice import Ledger, sentences_from
 from rfnry_senses.window import FrameWindow
 
-log = logging.getLogger("rfnry_senses")
+logger = logging.getLogger(__name__)
 
 PLAYED_GRACE = 0.25
 PLAYBACK_SLACK = 1.0
@@ -332,7 +332,7 @@ class Session:
         try:
             await self._connection.interrupt(played_ms)
         except Exception as exc:
-            log.warning("session: the live model could not cut its context: %s", exc)
+            logger.warning("session: the live model could not cut its context: %s", exc)
 
     async def _drop_waiting(self) -> None:
         while self._waiting:
@@ -374,7 +374,7 @@ class Session:
         except SensesException as exc:
             await self._close("failed", str(exc), exc)
         except Exception as exc:
-            log.exception("session: a background task failed")
+            logger.exception("session: a background task failed")
             await self._close("failed", f"session: {exc}", ModelError(f"session: {exc}"))
 
     async def _emit(self, event: Event) -> None:
@@ -604,7 +604,7 @@ class Session:
                 finals, partial = [], ""
                 if words:
                     await self._emit(TurnEnded(scope=self.scope, text=words, speaker=self.person))
-        log.warning("session: the transcription stream ended; the session no longer hears")
+        logger.warning("session: the transcription stream ended; the session no longer hears")
 
     async def _speak(self) -> None:
         while True:
@@ -639,7 +639,7 @@ class Session:
                             return
                         await self._send(u, frame)
                 except Exception as exc:
-                    log.warning("session: the speech model failed: %s", exc)
+                    logger.warning("session: the speech model failed: %s", exc)
                     await self._abandon(u, ModelError(f"session: the speech model failed: {exc}"))
                     return
                 if self._utterance is not u:

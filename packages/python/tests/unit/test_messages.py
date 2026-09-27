@@ -60,7 +60,7 @@ def _logs(path: Path) -> list[tuple[int, str, str | None]]:
         if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
             continue
         owner = node.func.value
-        if not (isinstance(owner, ast.Name) and owner.id in {"log", "logger", "logging"}):
+        if not (isinstance(owner, ast.Name) and owner.id in {"logger", "logging"}):
             continue
         if node.func.attr not in LOG_CALLS:
             continue

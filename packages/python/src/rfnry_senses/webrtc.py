@@ -30,7 +30,7 @@ from rfnry_senses.wire import control, parse_played
 
 __all__ = ["WebRTCTransport", "accept_offer"]
 
-log = logging.getLogger("rfnry_senses")
+logger = logging.getLogger(__name__)
 
 
 def fade(frame: AudioFrame, begin: float, end: float) -> AudioFrame:
@@ -161,7 +161,7 @@ class WebRTCTransport:
                 try:
                     self._inbox.put_nowait(parse_played(message))
                 except InputError as exc:
-                    log.warning("transport: dropped a frame: %s", exc)
+                    logger.warning("transport: dropped a frame: %s", exc)
 
         @self._pc.on("connectionstatechange")
         def on_state() -> None:

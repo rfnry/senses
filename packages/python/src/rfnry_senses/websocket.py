@@ -13,7 +13,7 @@ from rfnry_senses.models import Identity, IdentityLike, Image, as_identity
 from rfnry_senses.transport import Played
 from rfnry_senses.wire import PROTOCOL, control, decode, encode_audio, parse_hello, parse_played
 
-log = logging.getLogger("rfnry_senses")
+logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -79,7 +79,7 @@ class WebSocketTransport:
             try:
                 item = decode(message) if isinstance(message, bytes) else parse_played(message)
             except InputError as exc:
-                log.warning("transport: dropped a frame: %s", exc)
+                logger.warning("transport: dropped a frame: %s", exc)
                 continue
             yield item
 

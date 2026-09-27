@@ -106,6 +106,9 @@ async def test_a_session_runs_over_the_socket(caplog: pytest.LogCaptureFixture) 
     )
     assert socket.texts()[-1]["event"]["kind"] == "closed" and socket.closed
     assert "transport: dropped a frame" in caplog.text
+    assert {r.name for r in caplog.records if "dropped a frame" in r.message} == {
+        "rfnry_senses.websocket"
+    }
 
 
 async def test_clearing_drops_queued_audio_and_keeps_controls() -> None:
