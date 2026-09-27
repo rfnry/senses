@@ -25,7 +25,7 @@ export class Frames {
 
   setFps(fps: number): void {
     this.options.fps = fps
-    this.schedule()
+    if (this.timer !== null) this.schedule()
   }
 
   stop(): void {

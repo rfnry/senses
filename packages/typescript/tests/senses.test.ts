@@ -151,6 +151,16 @@ describe('connect over a WebSocket', () => {
     expect(() => senses.setFps(0)).toThrow(new SensesException('senses: fps must be positive'))
   })
 
+  it('keeps the camera stopped when the rate changes after close', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('navigator', media().navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const { senses } = await opened({ camera: { fps: 2 } })
+    await senses.close()
+    senses.setFps(4)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('shares the screen, keeps sending frames, and returns to the camera when the share ends', async () => {
     vi.useFakeTimers()
     const devices = media()
