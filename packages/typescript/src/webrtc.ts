@@ -129,16 +129,16 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     },
     pauseCamera() {
       camera?.pause()
-      void sender?.replaceTrack(null)
+      if (room.status === 'open') void sender?.replaceTrack(null)
     },
     resumeCamera() {
       camera?.resume()
-      void sender?.replaceTrack(camera?.track ?? null)
+      if (room.status === 'open') void sender?.replaceTrack(camera?.track ?? null)
     },
     setFps(fps) {
       checkFps(fps, camera)
       camera?.setFps(fps)
-      if (sender === null) return
+      if (sender === null || room.status === 'closed') return
       const parameters = sender.getParameters()
       for (const encoding of parameters.encodings) encoding.maxFramerate = fps
       void sender.setParameters(parameters)

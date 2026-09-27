@@ -27,13 +27,16 @@ class Channel {
 class Sender {
   replaced: Array<Track | null> = []
   parameters: { encodings: RTCRtpEncodingParameters[] } = { encodings: [] }
+  closed = false
   async replaceTrack(track: Track | null): Promise<void> {
+    if (this.closed) throw new Error('InvalidStateError')
     this.replaced.push(track)
   }
   getParameters() {
     return structuredClone(this.parameters)
   }
   async setParameters(parameters: { encodings: RTCRtpEncodingParameters[] }): Promise<void> {
+    if (this.closed) throw new Error('InvalidStateError')
     this.parameters = parameters
   }
 }
@@ -81,6 +84,7 @@ class Peer {
   addEventListener(): void {}
   close(): void {
     this.closed = true
+    this.sender.closed = true
   }
 }
 
@@ -238,6 +242,26 @@ describe('connect over WebRTC', () => {
     senses.resumeCamera()
     expect(peer.sender.replaced).toEqual([null, null, screen])
     expect(screen?.enabled).toBe(true)
+  })
+
+  it('leaves the closed peer alone when the camera is paused, resumed or re-rated after close', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const rejected: unknown[] = []
+    const record = (reason: unknown) => rejected.push(reason)
+    process.on('unhandledRejection', record)
+    try {
+      const { senses, peer } = await connected({ camera: { fps: 1 } })
+      await senses.close()
+      senses.pauseCamera()
+      senses.resumeCamera()
+      senses.setFps(2)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(rejected).toEqual([])
+      expect(peer.sender.replaced).toEqual([])
+      expect(peer.sender.parameters.encodings).toEqual([{ maxFramerate: 1 }])
+    } finally {
+      process.off('unhandledRejection', record)
+    }
   })
 
   it('starts on the screen when asked, and sends no video once the share ends', async () => {
