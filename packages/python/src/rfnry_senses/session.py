@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import weakref
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
@@ -103,12 +104,14 @@ class Utterance:
 
 
 class Subscription:
-    def __init__(self, subscribers: list[asyncio.Queue[Event | None]], closed: bool) -> None:
+    def __init__(
+        self, subscribers: weakref.WeakSet[asyncio.Queue[Event | None]], closed: bool
+    ) -> None:
         self._queue: asyncio.Queue[Event | None] = asyncio.Queue()
         if closed:
             self._queue.put_nowait(None)
         else:
-            subscribers.append(self._queue)
+            subscribers.add(self._queue)
 
     def __aiter__(self) -> Subscription:
         return self
@@ -161,7 +164,7 @@ class Session:
         self._tool_timeout = tool_timeout
         self._connection: LiveConnection | None = None
         self._stream: Transcription | None = None
-        self._subscribers: list[asyncio.Queue[Event | None]] = []
+        self._subscribers: weakref.WeakSet[asyncio.Queue[Event | None]] = weakref.WeakSet()
         self._tasks: set[asyncio.Task[None]] = set()
         self._opened = False
         self._closed = False

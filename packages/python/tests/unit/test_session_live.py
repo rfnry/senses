@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import weakref
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -241,6 +243,18 @@ async def test_every_subscription_sees_every_event() -> None:
             await s.say("  ", triggered_by=HOST)
         with pytest.raises(ConfigurationError, match="^session: look needs video=True$"):
             await s.look(triggered_by=HOST)
+
+
+async def test_a_dropped_subscription_is_let_go() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        kept, dropped = s.events(), s.events()
+        queue = weakref.ref(dropped._queue)
+        del dropped
+        gc.collect()
+        live.connection.emit(LiveHeard(text="hi", final=True))
+        assert (await next_of(kept, Heard)).text == "hi"
+        assert queue() is None
 
 
 async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:

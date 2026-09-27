@@ -316,7 +316,8 @@ raises `NotFoundError`. The model sees the frame itself; there is no vision mode
 ### Events
 
 `events()` yields everything the session reports, from the moment it is called; call it twice and
-both streams see every event. Each event carries the session's `scope` and the time `at`:
+both streams see every event, and a stream you stop holding is let go. Each event carries the
+session's `scope` and the time `at`:
 
 | event | fields | when |
 | --- | --- | --- |
