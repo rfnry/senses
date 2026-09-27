@@ -106,7 +106,7 @@ class WebSocketTransport:
             await self._connection.close()
 
     def _put(self, item: str | bytes) -> None:
-        if self._closed:
+        if self._closed or (self._writer is not None and self._writer.done()):
             return
         self._pending.append(item)
         self._idle.clear()

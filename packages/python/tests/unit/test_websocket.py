@@ -124,3 +124,25 @@ async def test_clearing_drops_queued_audio_and_keeps_controls() -> None:
         "type": "stop",
         "utterance": 1,
     }
+
+
+class Broken(Socket):
+    failed = False
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.failed = True
+        raise ConnectionError("gone")
+
+
+async def test_a_socket_that_failed_a_send_takes_no_more_and_closes_at_once() -> None:
+    socket = Broken(HELLO)
+    link = await serve(socket, identity=ANA, scope="acme")
+    assert link is not None
+    await link.send_audio(pcm(20), 1)
+    await until(lambda: socket.failed)
+    for _ in range(100):
+        await link.send_audio(pcm(20), 1)
+    await link.send_control({"type": "silent", "utterance": 1})
+    async with asyncio.timeout(0.5):
+        await link.close()
+    assert socket.closed and socket.sent == []
