@@ -603,11 +603,8 @@ class Session:
                 words = " ".join([*finals, partial] if partial else finals)
                 finals, partial = [], ""
                 if words:
-                    await self._utterance_ended(words)
+                    await self._emit(TurnEnded(scope=self.scope, text=words, speaker=self.person))
         log.warning("session: the transcription stream ended; the session no longer hears")
-
-    async def _utterance_ended(self, text: str) -> None:
-        await self._emit(TurnEnded(scope=self.scope, text=text, speaker=self.person))
 
     async def _speak(self) -> None:
         while True:
