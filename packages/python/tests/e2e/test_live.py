@@ -39,13 +39,23 @@ async def test_the_voice_round_trips_through_speech_and_transcription(adapters: 
         data=bytes(frames[0].sample_rate // 10 * 2), sample_rate=frames[0].sample_rate
     )
     link = Loopback(ANA, "acme")
-    async with Session(link, transcription=adapters.transcription()) as session:
-        events = session.events()
-        for frame in [*frames, *[silence] * 20]:
+
+    async def microphone() -> None:
+        for frame in frames:
             await link.speak(frame)
             await asyncio.sleep(frame.duration_ms / 1000)
-        heard = await next_of(events, Heard, timeout=30)
-        turn = await next_of(events, TurnEnded, timeout=30)
+        while True:
+            await link.speak(silence)
+            await asyncio.sleep(silence.duration_ms / 1000)
+
+    async with Session(link, transcription=adapters.transcription()) as session:
+        events = session.events()
+        speaking = asyncio.create_task(microphone())
+        try:
+            heard = await next_of(events, Heard, timeout=30)
+            turn = await next_of(events, TurnEnded, timeout=30)
+        finally:
+            speaking.cancel()
     print(f"\nround trip: heard {heard.text!r}, turn {turn.text!r}")
     assert "table" in turn.text.lower()
 

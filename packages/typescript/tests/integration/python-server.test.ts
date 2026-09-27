@@ -143,15 +143,21 @@ describe.skipIf(!hasUv || !LIVE)(
       const { rate, pcm } = synthesize('A table for two at eight.')
       const server = await start(true)
       const step = (rate / 10) * 2
+      let answered = false
       const result = await talk(server, async (link) => {
         const speech = [...Array(Math.ceil(pcm.length / step)).keys()].map((i) =>
           pcm.slice(i * step, (i + 1) * step)
         )
-        for (const chunk of [...speech, ...Array(20).fill(new Uint8Array(step))]) {
+        for (const chunk of speech) {
           link.sendAudio(chunk, rate)
           await new Promise((resolve) => setTimeout(resolve, 100))
         }
+        while (!answered) {
+          link.sendAudio(new Uint8Array(step), rate)
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
       })
+      answered = true
       expectTheRoundTrip(result, 'table')
       result.link?.close()
       await waitFor(server.output, /closed hung_up/)
