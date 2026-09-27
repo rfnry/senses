@@ -562,7 +562,7 @@ visualizers and framework bindings are yours.
 ## Tools
 
 A **tool** is a name, a description, an input schema and a body; a **`Tools`** is a set of them —
-the family block, the same class as in rfnry-engine and rfnry-memory:
+the family block, the same class as in rfnry-engine, rfnry-memory and rfnry-thread:
 
 ```python
 class Tools:
