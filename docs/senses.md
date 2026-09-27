@@ -72,8 +72,9 @@ class SpeechModel(Protocol):
     def speak(self, text: str) -> AsyncIterator[AudioFrame]: ...
 ```
 
-Audio is `AudioFrame(data, sample_rate, channels)`: 16-bit little-endian PCM, one or two channels.
-Frames carry their rate, so an adapter whose vendor wants another rate converts in the adapter.
+Audio is `AudioFrame(data, sample_rate, channels)`: 16-bit little-endian PCM, one or two channels;
+`duration_ms` is how long it plays. Frames carry their rate, so an adapter whose vendor wants
+another rate converts in the adapter.
 Images are the family's `Image` part — frames travel as JPEG.
 
 A live connection reports what happens as `LiveEvent`s. Every response the model gives is
@@ -469,6 +470,7 @@ async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
 same function the WebSocket endpoint runs over its `link`. The client sends its hello on the data
 channel, and a refused one ends the transport. The inbound audio is resampled to
 `sample_rate` (16 kHz) and camera frames are encoded to JPEG at the client's rate, inside the extra.
+`ice_servers=` takes STUN and TURN servers in the shape of the browser's `iceServers`.
 
 `Loopback` is an in-process transport for tests — and for anything that is not a browser:
 
@@ -480,8 +482,10 @@ async with Session(link, transcription=Script("A table for two."), speech=Tone()
     said.heard, len(link.audio)
 ```
 
-It records the audio and control frames the person would receive, and answers every `stop` with a
-`Played` — all of it by default, or what `played=` says. A telephone line, a meeting bot's bridge or
+`speak` and `show(jpeg)` are the person's microphone and camera, and `hang_up()` is them leaving.
+It records the audio (`link.audio`) and control frames (`link.controls`) the person would receive,
+and answers every `stop` and `silent` with a `Played` — all of it by default, what `played=` says, or
+nothing with `answer=False`. A telephone line, a meeting bot's bridge or
 a robot's microphone is a `Transport` of your own: an `identity`, a `scope`, `inbound()` yielding
 `AudioFrame`s, JPEG `Image`s and `Played` reports, `send_audio`, `send_control`, `clear_audio` and
 `close`.
@@ -513,12 +517,12 @@ senses.subscribe((event) => {
 })
 ```
 
-It captures the microphone with echo cancellation and noise suppression and sends 16 kHz PCM, or an
-Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer endpoint and optional
-`iceServers`). It authenticates as your endpoint expects: cookies go with the request on their own,
+It captures the microphone with echo cancellation and noise suppression and sends PCM at
+`sampleRate` (16 kHz), or an Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer
+endpoint and optional `iceServers`); `microphone: false` connects to listen only. It authenticates as your endpoint expects: cookies go with the request on their own,
 a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`. With
-`camera` it sends frames at `fps` for as long as the camera runs: JPEG over a WebSocket, a video
-track capped at `fps` over WebRTC. `setFps(fps)` changes the rate while it runs — the sampling
+`camera` it sends frames at `fps` for as long as the camera runs: JPEG at `quality` (0.7) over a
+WebSocket, a video track capped at `fps` over WebRTC. `setFps(fps)` changes the rate while it runs — the sampling
 interval over a WebSocket, the track's frame rate and its cap over WebRTC; without a camera it throws.
 
 `camera` is the video the client sends, from one source at a time: the camera, or the screen with
@@ -552,8 +556,8 @@ with a `SensesException`.
 It plays the voice, counts what it played, and answers `stop` with it on its own.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
-`{ kind: 'status', status: 'open' | 'closed' }`. Device pickers, visualizers and framework bindings
-are yours.
+`{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,
+visualizers and framework bindings are yours.
 
 ## Tools
 
@@ -619,7 +623,8 @@ Post `heard`, not `text`: the record should hold what the person heard.
 ## Tenancy
 
 `scope` is the tenant: your endpoint names it with the person, the transport carries it, the
-session takes it from the transport (`session.scope`), and every event carries it. Nothing is
+session takes it from the transport (`session.scope`, with the person as `session.person`), and
+every event carries it. Nothing is
 shared between sessions: each has its own model connections, window and queues. Tools pinned to a
 tenant — a thread, a memory corpus, an engine agent — are built for the session's scope.
 
