@@ -3,6 +3,7 @@ name = "rfnry-senses"
 version = "0.1.0"
 description = "Eyes, ears and a voice for models, in real time"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 authors = [{name = "rfnry", email = "contact@rfnry.dev"}]
 dependencies = [
