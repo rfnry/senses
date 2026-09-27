@@ -606,7 +606,8 @@ conversation's record is a thread's job and the agent's record the engine refine
 would repeat them.
 
 To keep a record, mirror the events — a few lines of your own, and neither library imports the
-other. With rfnry-thread, `post` is `ThreadClient.send`:
+other. With rfnry-thread, `post(who, text)` sends `text` with `Client.send(thread_id, text)` on the
+client connected as `who`:
 
 ```python
 async def mirror(session, post):
