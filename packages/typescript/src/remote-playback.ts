@@ -24,7 +24,8 @@ export class RemotePlayback {
   }
 
   speaking(utterance: number): void {
-    if (utterance <= this.fenced || this.baselines.has(utterance) || this.reported.has(utterance)) return
+    if (utterance <= this.fenced || this.baselines.has(utterance) || this.reported.has(utterance))
+      return
     this.stopFading()
     if (this.element !== null) {
       this.element.volume = 1
@@ -40,7 +41,9 @@ export class RemotePlayback {
       this.reported.add(utterance)
       this.report(utterance, 0)
     }
-    const ending = [...this.baselines.keys()].filter((number) => number <= utterance).sort((a, b) => a - b)
+    const ending = [...this.baselines.keys()]
+      .filter((number) => number <= utterance)
+      .sort((a, b) => a - b)
     for (const number of ending) await this.finish(number)
   }
 
@@ -87,7 +90,8 @@ export class RemotePlayback {
     this.reported.add(utterance)
     const [before, now] = [await baseline, await this.counts()]
     if (before === null || now === null) return this.report(utterance, 0)
-    const samples = Math.max(0, now.emitted - before.emitted) - Math.max(0, now.concealed - before.concealed)
+    const samples =
+      Math.max(0, now.emitted - before.emitted) - Math.max(0, now.concealed - before.concealed)
     this.report(utterance, Math.max(0, Math.round((samples / now.rate) * 1000)))
   }
 
@@ -100,6 +104,10 @@ export class RemotePlayback {
     const { jitterBufferEmittedCount: emitted, concealedSamples: concealed, codecId } = inbound
     if (typeof emitted !== 'number' || typeof concealed !== 'number') return null
     const codec = entries.find((entry) => entry.id === codecId)
-    return { emitted, concealed, rate: typeof codec?.clockRate === 'number' ? codec.clockRate : 48000 }
+    return {
+      emitted,
+      concealed,
+      rate: typeof codec?.clockRate === 'number' ? codec.clockRate : 48000,
+    }
   }
 }

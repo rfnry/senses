@@ -6,7 +6,7 @@ import { WebSocketLink } from '../../src/websocket'
 import type { AudioOut, SensesEvent, ServerControl } from '../../src/wire'
 import { Context } from '../fakes'
 
-const PYTHON = join(__dirname, '../../../python')
+const PYTHON = join(import.meta.dirname, '../../../python')
 const EXAMPLE = join(PYTHON, '../../examples/cascaded_voice_agent')
 const KEYS = join(PYTHON, '../../../.env.examples')
 const LIVE = process.env.RFNRY_LIVE_ADAPTERS
@@ -32,7 +32,8 @@ function waitFor(output: string[], pattern: RegExp, timeout = 30_000): Promise<R
     const check = () => {
       const found = output.join('').match(pattern)
       if (found) return resolve(found)
-      if (Date.now() - started > timeout) return reject(new Error(`no ${pattern} in: ${output.join('')}`))
+      if (Date.now() - started > timeout)
+        return reject(new Error(`no ${pattern} in: ${output.join('')}`))
       setTimeout(check, 20)
     }
     check()
@@ -42,7 +43,10 @@ function waitFor(output: string[], pattern: RegExp, timeout = 30_000): Promise<R
 async function start(live: boolean): Promise<Server> {
   const env: NodeJS.ProcessEnv = { ...process.env, PYTHONPATH: EXAMPLE }
   if (!live) delete env.RFNRY_LIVE_ADAPTERS
-  const child = spawn('uv', uv(live, 'python', 'tests/integration/serve_for_client.py', '0'), { cwd: PYTHON, env })
+  const child = spawn('uv', uv(live, 'python', 'tests/integration/serve_for_client.py', '0'), {
+    cwd: PYTHON,
+    env,
+  })
   const output: string[] = []
   child.stdout?.on('data', (chunk) => output.push(String(chunk)))
   child.stderr?.on('data', (chunk) => output.push(String(chunk)))
@@ -72,7 +76,9 @@ async function talk(server: Server, send: (link: WebSocketLink) => Promise<void>
   const audio: AudioOut[] = []
   const context = new Context()
   let link: WebSocketLink | null = null
-  const playback = new Playback(context as unknown as AudioContextLike, (utterance, ms) => link?.played(utterance, ms))
+  const playback = new Playback(context as unknown as AudioContextLike, (utterance, ms) =>
+    link?.played(utterance, ms)
+  )
   const said = new Promise<SensesEvent>((resolve) => {
     const handlers = {
       control(frame: ServerControl) {
@@ -130,20 +136,25 @@ describe.skipIf(!hasUv)('the TypeScript client against the Python server', () =>
   })
 })
 
-describe.skipIf(!hasUv || !LIVE)('the TypeScript client against real transcription and speech', () => {
-  it('is heard by the transcription model and answered by the speech model', async () => {
-    const { rate, pcm } = synthesize('A table for two at eight.')
-    const server = await start(true)
-    const step = (rate / 10) * 2
-    const result = await talk(server, async (link) => {
-      const speech = [...Array(Math.ceil(pcm.length / step)).keys()].map((i) => pcm.slice(i * step, (i + 1) * step))
-      for (const chunk of [...speech, ...Array(20).fill(new Uint8Array(step))]) {
-        link.sendAudio(chunk, rate)
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
+describe.skipIf(!hasUv || !LIVE)(
+  'the TypeScript client against real transcription and speech',
+  () => {
+    it('is heard by the transcription model and answered by the speech model', async () => {
+      const { rate, pcm } = synthesize('A table for two at eight.')
+      const server = await start(true)
+      const step = (rate / 10) * 2
+      const result = await talk(server, async (link) => {
+        const speech = [...Array(Math.ceil(pcm.length / step)).keys()].map((i) =>
+          pcm.slice(i * step, (i + 1) * step)
+        )
+        for (const chunk of [...speech, ...Array(20).fill(new Uint8Array(step))]) {
+          link.sendAudio(chunk, rate)
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+      })
+      expectTheRoundTrip(result, 'table')
+      result.link?.close()
+      await waitFor(server.output, /closed hung_up/)
     })
-    expectTheRoundTrip(result, 'table')
-    result.link?.close()
-    await waitFor(server.output, /closed hung_up/)
-  })
-})
+  }
+)

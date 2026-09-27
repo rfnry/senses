@@ -64,7 +64,9 @@ class Peer {
   addTransceiver(what: Track | string, init?: RTCRtpTransceiverInit): { sender: Sender } {
     if (typeof what === 'string') this.transceivers.push({ kind: what, init })
     else this.added.push({ track: what, ...(init ? { init } : {}) })
-    this.sender.parameters.encodings = (init?.sendEncodings ?? []).map((encoding) => ({ ...encoding }))
+    this.sender.parameters.encodings = (init?.sendEncodings ?? []).map((encoding) => ({
+      ...encoding,
+    }))
     return { sender: this.sender }
   }
   async createOffer(): Promise<{ type: string; sdp: string }> {
@@ -122,7 +124,10 @@ describe('connect over WebRTC', () => {
     const request = offers.requests[0] as Request
     expect(request.url).toBe('/senses/offer')
     expect(JSON.parse(String(request.init.body))).toEqual({ sdp: 'v=0 offer' })
-    expect(request.init.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer t' })
+    expect(request.init.headers).toEqual({
+      'content-type': 'application/json',
+      authorization: 'Bearer t',
+    })
     expect(request.init.credentials).toBe('same-origin')
     expect(peer.remote).toEqual({ type: 'answer', sdp: 'v=0 answer' })
     expect(channel.sent).toEqual([hello()])
@@ -135,7 +140,7 @@ describe('connect over WebRTC', () => {
     const devices = media()
     vi.stubGlobal('navigator', devices.navigator)
     await expect(connect({ url: '/senses/offer', transport: 'webrtc' })).rejects.toEqual(
-      new SensesException('webrtc: the offer was refused with status 401'),
+      new SensesException('webrtc: the offer was refused with status 401')
     )
     expect((Peer.made[0] as Peer).closed).toBe(true)
     expect(devices.streams[0]?.getAudioTracks()[0]?.stopped).toBe(true)
@@ -202,7 +207,7 @@ describe('connect over WebRTC', () => {
     expect(peer.added.filter((a) => a.track.kind === 'video')).toHaveLength(1)
     expect(sources).toEqual(['camera'])
     await expect(senses.useCamera({ facing: 'user', deviceId: 'desk' })).rejects.toEqual(
-      new SensesException('senses: the camera takes facing or deviceId, not both'),
+      new SensesException('senses: the camera takes facing or deviceId, not both')
     )
     expect(peer.sender.replaced).toHaveLength(1)
   })
@@ -210,7 +215,11 @@ describe('connect over WebRTC', () => {
   it('refuses facing and deviceId together before making a peer', async () => {
     vi.stubGlobal('fetch', server().fetch)
     await expect(
-      connect({ url: '/senses/offer', transport: 'webrtc', camera: { facing: 'user', deviceId: 'desk' } }),
+      connect({
+        url: '/senses/offer',
+        transport: 'webrtc',
+        camera: { facing: 'user', deviceId: 'desk' },
+      })
     ).rejects.toEqual(new SensesException('senses: the camera takes facing or deviceId, not both'))
     expect(Peer.made).toHaveLength(0)
   })

@@ -8,7 +8,12 @@ export const MICROPHONE: MediaTrackConstraints = {
 
 const PROCESSOR = 'senses-capture'
 
-export function downsample(state: Resampling, input: Float32Array, inRate: number, outRate: number): Float32Array {
+export function downsample(
+  state: Resampling,
+  input: Float32Array,
+  inRate: number,
+  outRate: number
+): Float32Array {
   const buffer = new Float32Array(state.tail.length + input.length)
   buffer.set(state.tail, 0)
   buffer.set(input, state.tail.length)

@@ -37,7 +37,10 @@ export class Context {
     Context.made.push(this)
   }
   createBuffer(_channels: number, length: number, rate: number): AudioBuffer {
-    return { duration: length / rate, getChannelData: () => new Float32Array(length) } as unknown as AudioBuffer
+    return {
+      duration: length / rate,
+      getChannelData: () => new Float32Array(length),
+    } as unknown as AudioBuffer
   }
   createBufferSource(): AudioBufferSourceNode {
     const node = new Node()
@@ -68,7 +71,7 @@ export class Socket {
   onclose: (() => void) | null = null
   constructor(
     readonly url: string,
-    readonly protocols?: string | string[],
+    readonly protocols?: string | string[]
   ) {
     Socket.made.push(this)
   }
@@ -85,7 +88,9 @@ export class Socket {
     this.onopen?.()
   }
   deliver(data: unknown): void {
-    this.onmessage?.({ data: typeof data === 'string' || data instanceof ArrayBuffer ? data : JSON.stringify(data) })
+    this.onmessage?.({
+      data: typeof data === 'string' || data instanceof ArrayBuffer ? data : JSON.stringify(data),
+    })
   }
   texts(): unknown[] {
     return this.sent.filter((m): m is string => typeof m === 'string').map((m) => JSON.parse(m))
@@ -102,7 +107,7 @@ export class Track {
   onended: (() => void) | null = null
   constructor(
     readonly kind: 'audio' | 'video',
-    readonly source: 'microphone' | 'camera' | 'screen' = kind === 'audio' ? 'microphone' : 'camera',
+    readonly source: 'microphone' | 'camera' | 'screen' = kind === 'audio' ? 'microphone' : 'camera'
   ) {}
   stop(): void {
     this.stopped = true
@@ -142,7 +147,7 @@ export class WorkletNode {
   constructor(
     readonly context: unknown,
     readonly name: string,
-    readonly options: unknown,
+    readonly options: unknown
   ) {
     WorkletNode.made.push(this)
   }
@@ -153,7 +158,10 @@ export const JPEG = Uint8Array.of(0xff, 0xd8, 0xff, 0xd9)
 
 export function media() {
   const streams: Stream[] = []
-  const asked: Array<{ source: 'microphone' | 'camera' | 'screen'; constraints: MediaStreamConstraints }> = []
+  const asked: Array<{
+    source: 'microphone' | 'camera' | 'screen'
+    constraints: MediaStreamConstraints
+  }> = []
   const refused = { screen: false, camera: false }
   const made = (track: Track) => {
     const stream = new Stream([track])
@@ -171,7 +179,13 @@ export function media() {
     return made(new Track('video', 'screen'))
   }
   const video = () => streams.flatMap((stream) => stream.getVideoTracks())
-  return { streams, asked, refused, video, navigator: { mediaDevices: { getUserMedia, getDisplayMedia } } }
+  return {
+    streams,
+    asked,
+    refused,
+    video,
+    navigator: { mediaDevices: { getUserMedia, getDisplayMedia } },
+  }
 }
 
 export function documentWithCanvas() {

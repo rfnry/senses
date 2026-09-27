@@ -32,7 +32,7 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
       ? new Camera(
           settings,
           (stream) => frames.show(stream),
-          (source) => room.tell({ kind: 'video', source }),
+          (source) => room.tell({ kind: 'video', source })
         )
       : null
   const stop = async () => {

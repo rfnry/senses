@@ -4,8 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { SensesException } from '../src/errors'
 import { decodeAudio, encodeAudio, encodeImage, hello, parseControl, played } from '../src/wire'
 
-const FIXTURES = join(__dirname, '../../python/tests/fixtures/wire')
-const json = (name: string): unknown => JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), 'utf8'))
+const FIXTURES = join(import.meta.dirname, '../../python/tests/fixtures/wire')
+const json = (name: string): unknown =>
+  JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), 'utf8'))
 const hex = (name: string): Uint8Array =>
   Uint8Array.from(Buffer.from(readFileSync(join(FIXTURES, `${name}.hex`), 'utf8').trim(), 'hex'))
 
@@ -41,8 +42,14 @@ describe('the wire', () => {
   })
 
   it('refuses what it cannot read', () => {
-    expect(() => parseControl('{"type":"nope"}')).toThrow(new SensesException('wire: unknown control frame nope'))
-    expect(() => decodeAudio(new Uint8Array([2, 1]).buffer)).toThrow(new SensesException('wire: not an audio frame'))
-    expect(() => decodeAudio(new ArrayBuffer(0))).toThrow(expect.objectContaining({ name: 'SensesException' }))
+    expect(() => parseControl('{"type":"nope"}')).toThrow(
+      new SensesException('wire: unknown control frame nope')
+    )
+    expect(() => decodeAudio(new Uint8Array([2, 1]).buffer)).toThrow(
+      new SensesException('wire: not an audio frame')
+    )
+    expect(() => decodeAudio(new ArrayBuffer(0))).toThrow(
+      expect.objectContaining({ name: 'SensesException' })
+    )
   })
 })

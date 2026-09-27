@@ -2,7 +2,13 @@ export type VideoSource = 'camera' | 'screen'
 
 export type CameraChoice = { facing?: 'user' | 'environment'; deviceId?: string }
 
-export type CameraOptions = { source: VideoSource; fps: number; width: number; quality: number; choice: CameraChoice }
+export type CameraOptions = {
+  source: VideoSource
+  fps: number
+  width: number
+  quality: number
+  choice: CameraChoice
+}
 
 function device(choice: CameraChoice): MediaTrackConstraints {
   if (choice.facing !== undefined) return { facingMode: { ideal: choice.facing } }
@@ -10,7 +16,12 @@ function device(choice: CameraChoice): MediaTrackConstraints {
   return {}
 }
 
-function capture(source: VideoSource, width: number, fps: number, choice: CameraChoice): Promise<MediaStream> {
+function capture(
+  source: VideoSource,
+  width: number,
+  fps: number,
+  choice: CameraChoice
+): Promise<MediaStream> {
   const video = { width, frameRate: fps }
   return source === 'screen'
     ? navigator.mediaDevices.getDisplayMedia({ video, audio: false })
@@ -29,7 +40,7 @@ export class Camera {
   constructor(
     private readonly options: CameraOptions,
     private readonly show: (stream: MediaStream | null) => Promise<void>,
-    private readonly told: (source: VideoSource | null) => void,
+    private readonly told: (source: VideoSource | null) => void
   ) {
     this.fps = options.fps
     this.choice = options.choice
@@ -71,7 +82,8 @@ export class Camera {
 
   setFps(fps: number): void {
     this.fps = fps
-    for (const track of this.stream?.getVideoTracks() ?? []) void track.applyConstraints({ frameRate: fps })
+    for (const track of this.stream?.getVideoTracks() ?? [])
+      void track.applyConstraints({ frameRate: fps })
   }
 
   stop(): void {
@@ -86,7 +98,7 @@ export class Camera {
     if (this.source === 'screen' && this.back === 'camera') {
       const returned = await this.use('camera').then(
         () => true,
-        () => false,
+        () => false
       )
       if (returned) return
     }

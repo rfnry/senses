@@ -10,12 +10,20 @@ import {
   type ServerControl,
 } from './wire.js'
 
-export type LinkHandlers = { control(frame: ServerControl): void; audio(frame: AudioOut): void; closed(): void }
+export type LinkHandlers = {
+  control(frame: ServerControl): void
+  audio(frame: AudioOut): void
+  closed(): void
+}
 
 export class WebSocketLink {
   private constructor(private readonly socket: WebSocket) {}
 
-  static open(url: string, protocols: string | string[] | undefined, handlers: LinkHandlers): Promise<WebSocketLink> {
+  static open(
+    url: string,
+    protocols: string | string[] | undefined,
+    handlers: LinkHandlers
+  ): Promise<WebSocketLink> {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(url, protocols)
       socket.binaryType = 'arraybuffer'
@@ -34,7 +42,8 @@ export class WebSocketLink {
         }
       }
       socket.onclose = () => {
-        if (!ready) reject(new SensesException('transport: the connection closed before it was ready'))
+        if (!ready)
+          reject(new SensesException('transport: the connection closed before it was ready'))
         handlers.closed()
       }
     })

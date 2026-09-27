@@ -8,7 +8,9 @@ export type ConnectOptions = {
   protocols?: string | string[]
   headers?: Record<string, string>
   microphone?: boolean
-  camera?: false | ({ source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice)
+  camera?:
+    | false
+    | ({ source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice)
   sampleRate?: number
   iceServers?: RTCIceServer[]
 }
@@ -16,7 +18,10 @@ export type ConnectOptions = {
 export type SensesStatus = 'open' | 'closed'
 
 export type SensesListener = (
-  event: SensesEvent | { kind: 'status'; status: SensesStatus } | { kind: 'video'; source: VideoSource | null },
+  event:
+    | SensesEvent
+    | { kind: 'status'; status: SensesStatus }
+    | { kind: 'video'; source: VideoSource | null }
 ) => void
 
 export interface Senses {
@@ -33,7 +38,7 @@ export interface Senses {
 }
 
 export function cameraOptions(
-  camera: { source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice,
+  camera: { source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice
 ): CameraOptions {
   return {
     source: camera.source ?? 'camera',

@@ -7,7 +7,7 @@ export class Frames {
 
   constructor(
     private readonly options: { fps: number; width: number; quality: number },
-    private readonly send: (jpeg: Uint8Array) => void,
+    private readonly send: (jpeg: Uint8Array) => void
   ) {}
 
   async show(stream: MediaStream | null): Promise<void> {
@@ -45,7 +45,8 @@ export class Frames {
 
   private async capture(): Promise<void> {
     const { video, canvas } = this
-    if (this.busy || !this.live() || video === null || canvas === null || video.videoWidth === 0) return
+    if (this.busy || !this.live() || video === null || canvas === null || video.videoWidth === 0)
+      return
     this.busy = true
     try {
       const scale = Math.min(1, this.options.width / video.videoWidth)
@@ -53,7 +54,7 @@ export class Frames {
       canvas.height = Math.round(video.videoHeight * scale)
       canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
       const blob = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/jpeg', this.options.quality),
+        canvas.toBlob(resolve, 'image/jpeg', this.options.quality)
       )
       if (blob !== null && this.live()) this.send(new Uint8Array(await blob.arrayBuffer()))
     } finally {

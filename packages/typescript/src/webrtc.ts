@@ -39,7 +39,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
         async (stream) => {
           await sender?.replaceTrack(camera?.paused ? null : (stream?.getVideoTracks()[0] ?? null))
         },
-        (source) => room.tell({ kind: 'video', source }),
+        (source) => room.tell({ kind: 'video', source })
       )
     : null
   const ready = new Promise<void>((resolve, reject) => {
@@ -99,7 +99,8 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       body: JSON.stringify({ sdp: pc.localDescription?.sdp }),
       credentials: 'same-origin',
     })
-    if (!response.ok) throw new SensesException(`webrtc: the offer was refused with status ${response.status}`)
+    if (!response.ok)
+      throw new SensesException(`webrtc: the offer was refused with status ${response.status}`)
     const answer = (await response.json()) as { sdp: string }
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
     await ready

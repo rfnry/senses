@@ -12,9 +12,14 @@ function audio(utterance: number, ms = 100): ArrayBuffer {
 }
 
 async function opened(
-  options: Partial<Parameters<typeof connect>[0]> = {},
+  options: Partial<Parameters<typeof connect>[0]> = {}
 ): Promise<{ senses: Senses; socket: Socket }> {
-  const connecting = connect({ url: 'wss://example.com/senses', transport: 'websocket', microphone: false, ...options })
+  const connecting = connect({
+    url: 'wss://example.com/senses',
+    transport: 'websocket',
+    microphone: false,
+    ...options,
+  })
   await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
   const socket = Socket.made[0] as Socket
   socket.open()
@@ -61,13 +66,20 @@ describe('connect over a WebSocket', () => {
   })
 
   it('rejects with the server error before ready', async () => {
-    const connecting = connect({ url: 'wss://example.com/senses', transport: 'websocket', microphone: false })
+    const connecting = connect({
+      url: 'wss://example.com/senses',
+      transport: 'websocket',
+      microphone: false,
+    })
     await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
     const socket = Socket.made[0] as Socket
     socket.open()
-    socket.deliver({ type: 'error', message: 'transport: protocol 2 is not supported; this server speaks 1' })
+    socket.deliver({
+      type: 'error',
+      message: 'transport: protocol 2 is not supported; this server speaks 1',
+    })
     await expect(connecting).rejects.toEqual(
-      new SensesException('transport: protocol 2 is not supported; this server speaks 1'),
+      new SensesException('transport: protocol 2 is not supported; this server speaks 1')
     )
     expect((Context.made[0] as Context).closed).toBe(true)
   })
@@ -77,7 +89,11 @@ describe('connect over a WebSocket', () => {
     devices.refused.camera = true
     vi.stubGlobal('navigator', devices.navigator)
     vi.stubGlobal('document', documentWithCanvas())
-    const connecting = connect({ url: 'wss://example.com/senses', transport: 'websocket', camera: {} })
+    const connecting = connect({
+      url: 'wss://example.com/senses',
+      transport: 'websocket',
+      camera: {},
+    })
     await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
     const socket = Socket.made[0] as Socket
     socket.open()
@@ -232,7 +248,9 @@ describe('connect over a WebSocket', () => {
     const page = documentWithCanvas()
     vi.stubGlobal('navigator', devices.navigator)
     vi.stubGlobal('document', page)
-    const { senses, socket } = await opened({ camera: { facing: 'environment', width: 1280, fps: 1 } })
+    const { senses, socket } = await opened({
+      camera: { facing: 'environment', width: 1280, fps: 1 },
+    })
     const sources: unknown[] = []
     senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
     expect(devices.asked.at(-1)?.constraints).toEqual({
@@ -244,7 +262,9 @@ describe('connect over a WebSocket', () => {
       video: { width: 1280, frameRate: 1, facingMode: { ideal: 'user' } },
     })
     expect(back?.stopped).toBe(true)
-    expect((page.createElement('video') as { srcObject: unknown }).srcObject).toBe(devices.streams.at(-1))
+    expect((page.createElement('video') as { srcObject: unknown }).srcObject).toBe(
+      devices.streams.at(-1)
+    )
     await vi.advanceTimersByTimeAsync(1000)
     expect(socket.binary()).toHaveLength(1)
     await senses.useCamera({ deviceId: 'desk' })
@@ -273,7 +293,7 @@ describe('connect over a WebSocket', () => {
         url: 'wss://example.com/senses',
         transport: 'websocket',
         camera: { facing: 'environment', deviceId: 'desk' },
-      }),
+      })
     ).rejects.toEqual(both)
     expect(Socket.made).toHaveLength(0)
     expect(devices.asked).toHaveLength(0)
@@ -286,9 +306,11 @@ describe('connect over a WebSocket', () => {
   it('refuses a screen without the camera option', async () => {
     const { senses } = await opened()
     await expect(senses.shareScreen()).rejects.toEqual(
-      new SensesException('senses: shareScreen needs the camera option'),
+      new SensesException('senses: shareScreen needs the camera option')
     )
-    await expect(senses.useCamera()).rejects.toEqual(new SensesException('senses: useCamera needs the camera option'))
+    await expect(senses.useCamera()).rejects.toEqual(
+      new SensesException('senses: useCamera needs the camera option')
+    )
   })
 
   it('refuses a rate without a camera', async () => {
@@ -300,7 +322,10 @@ describe('connect over a WebSocket', () => {
     const first = await opened()
     const statuses: string[] = []
     first.senses.subscribe((event) => event.kind === 'status' && statuses.push(event.status))
-    first.socket.deliver({ type: 'event', event: { ...at, kind: 'closed', reason: 'hung_up', message: null } })
+    first.socket.deliver({
+      type: 'event',
+      event: { ...at, kind: 'closed', reason: 'hung_up', message: null },
+    })
     expect(first.senses.status).toBe('closed')
     expect(statuses).toEqual(['open', 'closed'])
 

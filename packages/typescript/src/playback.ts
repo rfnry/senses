@@ -20,7 +20,7 @@ export class Playback {
 
   constructor(
     private readonly context: AudioContextLike,
-    private readonly report: (utterance: number, ms: number) => void,
+    private readonly report: (utterance: number, ms: number) => void
   ) {}
 
   speaking(utterance: number): void {
@@ -76,7 +76,8 @@ export class Playback {
     }
     this.scheduled.clear()
     this.next = now
-    for (const number of [...this.played.keys()].sort((a, b) => a - b)) if (number <= utterance) this.finish(number)
+    for (const number of [...this.played.keys()].sort((a, b) => a - b))
+      if (number <= utterance) this.finish(number)
   }
 
   async close(): Promise<void> {

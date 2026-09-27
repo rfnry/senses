@@ -17,7 +17,13 @@ type Stamp = { scope: string; at: string }
 export type SensesEvent =
   | (Stamp & { kind: 'heard'; text: string; final: boolean; speaker: Identity })
   | (Stamp & { kind: 'turn_ended'; text: string; speaker: Identity })
-  | (Stamp & { kind: 'said'; text: string; heard: string; interrupted: boolean; triggered_by: Identity | null })
+  | (Stamp & {
+      kind: 'said'
+      text: string
+      heard: string
+      interrupted: boolean
+      triggered_by: Identity | null
+    })
   | (Stamp & { kind: 'interrupted'; heard: string; triggered_by: Identity })
   | (Stamp & { kind: 'speaking' })
   | (Stamp & { kind: 'silent' })
@@ -43,7 +49,12 @@ export function played(utterance: number, ms: number): string {
   return JSON.stringify({ type: 'played', utterance, ms: Math.max(0, Math.round(ms)) })
 }
 
-export function encodeAudio(pcm: Uint8Array, sampleRate: number, channels = 1, utterance = 0): Uint8Array<ArrayBuffer> {
+export function encodeAudio(
+  pcm: Uint8Array,
+  sampleRate: number,
+  channels = 1,
+  utterance = 0
+): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(HEADER + pcm.byteLength)
   const view = new DataView(out.buffer)
   view.setUint8(0, AUDIO)
@@ -63,7 +74,8 @@ export function encodeImage(jpeg: Uint8Array): Uint8Array<ArrayBuffer> {
 
 export function decodeAudio(data: ArrayBuffer): AudioOut {
   const view = new DataView(data)
-  if (data.byteLength < HEADER || view.getUint8(0) !== AUDIO) throw new SensesException('wire: not an audio frame')
+  if (data.byteLength < HEADER || view.getUint8(0) !== AUDIO)
+    throw new SensesException('wire: not an audio frame')
   return {
     channels: view.getUint8(1),
     sampleRate: view.getUint32(2, true),
@@ -74,7 +86,8 @@ export function decodeAudio(data: ArrayBuffer): AudioOut {
 
 export function parseControl(text: string): ServerControl {
   const frame: unknown = JSON.parse(text)
-  const type = typeof frame === 'object' && frame !== null ? (frame as { type?: unknown }).type : undefined
+  const type =
+    typeof frame === 'object' && frame !== null ? (frame as { type?: unknown }).type : undefined
   if (typeof type !== 'string' || !CONTROLS.has(type))
     throw new SensesException(`wire: unknown control frame ${String(type)}`)
   return frame as ServerControl

@@ -12,7 +12,9 @@ const frame = (utterance: number, ms = 100) => ({
 function setup() {
   const context = new Context()
   const reports: Array<[number, number]> = []
-  const playback = new Playback(context as unknown as AudioContextLike, (u, ms) => reports.push([u, ms]))
+  const playback = new Playback(context as unknown as AudioContextLike, (u, ms) =>
+    reports.push([u, ms])
+  )
   return { context, reports, playback }
 }
 
