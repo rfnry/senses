@@ -215,6 +215,22 @@ describe('connect over WebRTC', () => {
     expect(Peer.made).toHaveLength(0)
   })
 
+  it('sends no track while the camera is paused, across a switch, and the track again on resume', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    senses.pauseCamera()
+    expect(peer.sender.replaced).toEqual([null])
+    await senses.shareScreen()
+    expect(peer.sender.replaced).toEqual([null, null])
+    const screen = devices.video()[1]
+    expect(screen?.enabled).toBe(false)
+    senses.resumeCamera()
+    expect(peer.sender.replaced).toEqual([null, null, screen])
+    expect(screen?.enabled).toBe(true)
+  })
+
   it('starts on the screen when asked, and sends no video once the share ends', async () => {
     vi.stubGlobal('fetch', server().fetch)
     const { senses, peer } = await connected({ camera: { source: 'screen', fps: 2 } })

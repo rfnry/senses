@@ -20,10 +20,10 @@ function capture(source: VideoSource, width: number, fps: number, choice: Camera
 export class Camera {
   source: VideoSource | null = null
   fps: number
+  paused = false
   private choice: CameraChoice
   private stream: MediaStream | null = null
   private back: VideoSource | null = null
-  private paused = false
   private stopped = false
 
   constructor(

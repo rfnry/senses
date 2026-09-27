@@ -37,7 +37,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     ? new Camera(
         settings,
         async (stream) => {
-          await sender?.replaceTrack(stream?.getVideoTracks()[0] ?? null)
+          await sender?.replaceTrack(camera?.paused ? null : (stream?.getVideoTracks()[0] ?? null))
         },
         (source) => room.tell({ kind: 'video', source }),
       )
@@ -126,8 +126,14 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     async useCamera(choice) {
       await checkCamera(camera, 'useCamera').use('camera', choice && checkChoice(choice))
     },
-    pauseCamera: () => camera?.pause(),
-    resumeCamera: () => camera?.resume(),
+    pauseCamera() {
+      camera?.pause()
+      void sender?.replaceTrack(null)
+    },
+    resumeCamera() {
+      camera?.resume()
+      void sender?.replaceTrack(camera?.track ?? null)
+    },
     setFps(fps) {
       checkFps(fps, camera)
       camera?.setFps(fps)
