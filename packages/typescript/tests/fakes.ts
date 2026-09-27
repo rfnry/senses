@@ -154,7 +154,7 @@ export const JPEG = Uint8Array.of(0xff, 0xd8, 0xff, 0xd9)
 export function media() {
   const streams: Stream[] = []
   const asked: Array<{ source: 'microphone' | 'camera' | 'screen'; constraints: MediaStreamConstraints }> = []
-  const refused = { screen: false }
+  const refused = { screen: false, camera: false }
   const made = (track: Track) => {
     const stream = new Stream([track])
     streams.push(stream)
@@ -162,6 +162,7 @@ export function media() {
   }
   const getUserMedia = async (constraints: MediaStreamConstraints) => {
     asked.push({ source: constraints.video ? 'camera' : 'microphone', constraints })
+    if (constraints.video && refused.camera) throw new Error('NotAllowedError')
     return made(constraints.video ? new Track('video') : new Track('audio'))
   }
   const getDisplayMedia = async (constraints: DisplayMediaStreamOptions) => {

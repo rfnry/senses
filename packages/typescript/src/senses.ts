@@ -22,28 +22,11 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   const settings = options.camera ? cameraOptions(options.camera) : null
   const room = new Listeners()
   const rate = options.sampleRate ?? 16000
-  let report = (_utterance: number, _ms: number) => {}
-  const playback = new Playback(new AudioContext(), (utterance, ms) => report(utterance, ms))
-  const link = await WebSocketLink.open(options.url, options.protocols, {
-    control(frame) {
-      if (frame.type === 'speaking') playback.speaking(frame.utterance)
-      else if (frame.type === 'silent') playback.silent(frame.utterance)
-      else if (frame.type === 'stop') playback.stop(frame.utterance)
-      else if (frame.type === 'event') {
-        room.tell(frame.event)
-        if (frame.event.kind === 'closed') room.end()
-      }
-    },
-    audio(frame) {
-      playback.push(frame)
-    },
-    closed: () => room.end(),
-  })
-  report = (utterance, ms) => link.played(utterance, ms)
+  let link: WebSocketLink | null = null
+  const playback = new Playback(new AudioContext(), (utterance, ms) => link?.played(utterance, ms))
   const microphone = options.microphone === false ? null : new Microphone()
-  microphone?.onChunk((pcm) => link.sendAudio(pcm, rate))
-  await microphone?.start(rate)
-  const frames = settings ? new Frames({ ...settings }, (jpeg) => link.sendImage(jpeg)) : null
+  microphone?.onChunk((pcm) => link?.sendAudio(pcm, rate))
+  const frames = settings ? new Frames({ ...settings }, (jpeg) => link?.sendImage(jpeg)) : null
   const camera =
     settings && frames
       ? new Camera(
@@ -52,7 +35,36 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
           (source) => room.tell({ kind: 'video', source }),
         )
       : null
-  if (camera !== null && settings !== null) await camera.use(settings.source)
+  const stop = async () => {
+    camera?.stop()
+    frames?.stop()
+    await microphone?.stop()
+    link?.close()
+    await playback.close()
+    room.end()
+  }
+  try {
+    link = await WebSocketLink.open(options.url, options.protocols, {
+      control(frame) {
+        if (frame.type === 'speaking') playback.speaking(frame.utterance)
+        else if (frame.type === 'silent') playback.silent(frame.utterance)
+        else if (frame.type === 'stop') playback.stop(frame.utterance)
+        else if (frame.type === 'event') {
+          room.tell(frame.event)
+          if (frame.event.kind === 'closed') room.end()
+        }
+      },
+      audio(frame) {
+        playback.push(frame)
+      },
+      closed: () => room.end(),
+    })
+    await microphone?.start(rate)
+    if (camera !== null && settings !== null) await camera.use(settings.source)
+  } catch (error) {
+    await stop()
+    throw error
+  }
   return {
     get status() {
       return room.status
@@ -77,13 +89,6 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
       camera?.setFps(fps)
       frames?.setFps(fps)
     },
-    async close() {
-      camera?.stop()
-      frames?.stop()
-      await microphone?.stop()
-      link.close()
-      await playback.close()
-      room.end()
-    },
+    close: stop,
   }
 }

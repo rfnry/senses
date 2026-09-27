@@ -69,6 +69,26 @@ describe('connect over a WebSocket', () => {
     await expect(connecting).rejects.toEqual(
       new SensesError('transport: protocol 2 is not supported; this server speaks 1'),
     )
+    expect((Context.made[0] as Context).closed).toBe(true)
+  })
+
+  it('lets go of the socket, the microphone and the audio when the camera is refused', async () => {
+    const devices = media()
+    devices.refused.camera = true
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const connecting = connect({ url: 'wss://example.com/senses', transport: 'websocket', camera: {} })
+    await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
+    const socket = Socket.made[0] as Socket
+    socket.open()
+    socket.deliver({ type: 'ready' })
+    await expect(connecting).rejects.toThrow('NotAllowedError')
+    const worklet = WorkletNode.made[0] as WorkletNode
+    worklet.port.post(new Uint8Array(640))
+    expect(socket.binary()).toEqual([])
+    expect(devices.streams[0]?.getAudioTracks()[0]?.stopped).toBe(true)
+    expect(socket.readyState).toBe(3)
+    expect(Context.made.map((context) => context.closed)).toEqual([true, true])
   })
 
   it('tells subscribers the status, then every event, until they leave', async () => {

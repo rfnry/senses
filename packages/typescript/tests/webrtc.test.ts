@@ -130,12 +130,15 @@ describe('connect over WebRTC', () => {
     expect(senses.status).toBe('open')
   })
 
-  it('rejects a refused offer and closes the peer', async () => {
+  it('rejects a refused offer, closes the peer and stops the microphone', async () => {
     vi.stubGlobal('fetch', server(401).fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
     await expect(connect({ url: '/senses/offer', transport: 'webrtc' })).rejects.toEqual(
       new SensesError('webrtc: the offer was refused with status 401'),
     )
     expect((Peer.made[0] as Peer).closed).toBe(true)
+    expect(devices.streams[0]?.getAudioTracks()[0]?.stopped).toBe(true)
   })
 
   it('caps the camera at its rate, pauses it, mutes the microphone and changes the rate', async () => {
