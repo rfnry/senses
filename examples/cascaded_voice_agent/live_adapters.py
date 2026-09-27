@@ -1,4 +1,4 @@
-from providers import GoogleLive, GoogleSpeech, OpenAIProvider, TypeSafeProvider
+from providers import GoogleLive, GoogleSpeech, OpenAIProvider
 
 
 def live() -> GoogleLive:
@@ -11,7 +11,3 @@ def transcription() -> OpenAIProvider:
 
 def speech() -> GoogleSpeech:
     return GoogleSpeech()
-
-
-def decision() -> TypeSafeProvider:
-    return TypeSafeProvider()

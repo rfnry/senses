@@ -48,7 +48,7 @@ build`), then run `main.py browser` and open `http://localhost:8000`.
 git. Lint an example with its own ruff: `uv run ruff format . && uv run ruff check .`.
 
 The live test tier uses `cascaded_voice_agent/live_adapters.py`, which builds the live,
-transcription, speech and decision models from that folder's `providers.py`. From
+transcription and speech models from that folder's `providers.py`. From
 `packages/python`:
 
 ```bash
