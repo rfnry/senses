@@ -339,9 +339,9 @@ class Session:
             await self._finish(self._waiting.popleft(), "", interrupted=True)
 
     async def _drop_causes(self) -> None:
-        async with self._lock:
-            while self._causes:
-                await self._finish(self._causes.popleft(), "", interrupted=True)
+        dropped, self._causes = self._causes, deque()
+        for u in dropped:
+            await self._finish(u, "", interrupted=True)
 
     def _check_open(self) -> None:
         if self._closed:
@@ -554,7 +554,8 @@ class Session:
             try:
                 await send()
             except BaseException:
-                self._causes.remove(u)
+                with contextlib.suppress(ValueError):
+                    self._causes.remove(u)
                 raise
         return await u.done
 

@@ -7,18 +7,19 @@ from rfnry_senses import session as session_module
 from rfnry_senses.contracts import (
     LiveAudio,
     LiveDone,
+    LiveHeard,
     LiveInterrupted,
     LiveSaid,
     LiveStarted,
     LiveToolCall,
 )
-from rfnry_senses.events import Interrupted, Muted, Said, ToolCalled
+from rfnry_senses.events import Heard, Interrupted, Muted, Said, ToolCalled
 from rfnry_senses.session import Session
 from rfnry_senses.tools import Tool, Tools
 from rfnry_senses.transport import Loopback
 
 from .conftest import Clock
-from .fakes import ANA, HOST, ScriptedLive, next_of, pcm, response, until
+from .fakes import ANA, HOST, ScriptedConnection, ScriptedLive, next_of, pcm, response, until
 
 
 async def test_the_person_cutting_in_truncates_to_what_they_heard() -> None:
@@ -197,3 +198,61 @@ async def test_the_person_cutting_in_ends_the_queued_says_and_a_late_answer_has_
     assert said_first.heard == "Your table " and said_first.interrupted
     assert all(q.heard == "" and q.interrupted and q.triggered_by == HOST for q in queued)
     assert saids[3].text == "Sure, what would you like?" and saids[3].triggered_by is None
+
+
+class Unanswered(ScriptedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.answer = asyncio.Event()
+        self.refusal: Exception | None = None
+
+    async def say(self, text: str) -> None:
+        await super().say(text)
+        if len(self.calls) > 1:
+            await self.answer.wait()
+            if self.refusal is not None:
+                raise self.refusal
+
+
+async def cut_in_while_a_say_is_unanswered(
+    s: Session, connection: Unanswered
+) -> tuple[asyncio.Task[Said], asyncio.Task[Said]]:
+    first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+    await until(lambda: len(connection.calls) == 1)
+    unanswered = asyncio.create_task(s.say("Shall I order the usual?", triggered_by=HOST))
+    await until(lambda: len(connection.calls) == 2)
+    connection.emit(
+        LiveStarted(),
+        LiveSaid(text="Your table "),
+        LiveAudio(frame=pcm(100, 24000)),
+        LiveInterrupted(),
+        LiveHeard(text="wait", final=True),
+    )
+    return first, unanswered
+
+
+async def test_a_barge_in_does_not_wait_on_a_say_the_vendor_has_not_answered() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 100)
+    live.connection = connection = Unanswered()
+    async with Session(link, live=live) as s:
+        events = s.events()
+        first, unanswered = await cut_in_while_a_say_is_unanswered(s, connection)
+        heard = await next_of(events, Heard)
+        said_first = await first
+        connection.answer.set()
+        said_unanswered = await unanswered
+    assert heard.text == "wait" and said_first.heard == "Your table " and said_first.interrupted
+    assert said_unanswered.heard == "" and said_unanswered.interrupted
+
+
+async def test_a_say_the_vendor_refuses_after_a_barge_in_raises_the_vendors_error() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 100)
+    live.connection = connection = Unanswered()
+    async with Session(link, live=live) as s:
+        events = s.events()
+        _, unanswered = await cut_in_while_a_say_is_unanswered(s, connection)
+        await next_of(events, Heard)
+        connection.refusal = RuntimeError("the vendor refused")
+        connection.answer.set()
+        with pytest.raises(RuntimeError, match="^the vendor refused$"):
+            await unanswered
