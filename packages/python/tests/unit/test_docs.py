@@ -47,6 +47,32 @@ def test_the_typescript_exports_follow_an_export_star() -> None:
     )
 
 
+def typescript_fields(name: str) -> set[str]:
+    declaration = f"export type {name} = {{"
+    for path in sorted(TYPESCRIPT.glob("*.ts")):
+        source = path.read_text(encoding="utf-8")
+        if declaration in source:
+            break
+    start = source.index(declaration) + len(declaration) - 1
+    depth = 0
+    for end in range(start, len(source)):
+        depth += {"{": 1, "}": -1}.get(source[end], 0)
+        if depth == 0:
+            break
+    block = source[start : end + 1]
+    names = set(re.findall(r"(\w+)\??:", block))
+    for other in re.findall(r"& (\w+)", block):
+        names |= typescript_fields(other)
+    return names
+
+
+def test_every_typescript_connect_option_is_documented() -> None:
+    text = DOCS.read_text(encoding="utf-8")
+    names = typescript_fields("ConnectOptions")
+    assert {"microphone", "camera", "quality", "facing", "deviceId"} <= names
+    assert sorted(n for n in names if not re.search(rf"`[^`\n]*\b{n}\b[^`\n]*`", text)) == []
+
+
 def test_no_vendor_is_named_in_the_library_or_its_contract() -> None:
     files = [
         DOCS,
