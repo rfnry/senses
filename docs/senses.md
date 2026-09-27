@@ -257,7 +257,7 @@ that point — whole sentences in a cascaded session, the model's own transcript
 `Interrupted`, and, in a live session, calls `interrupt(played_ms)` so the model's context holds only
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
-in the client. Queued `say` calls end too: the person is talking, and they return
+in the client. Queued `say` and `prompt` calls end too: the person is talking, and they return
 `Said(heard="", interrupted=True)`.
 
 If the client never reports, senses estimates from its own clock — the audio sent, capped by the

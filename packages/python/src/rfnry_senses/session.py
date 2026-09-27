@@ -333,6 +333,11 @@ class Session:
         while self._waiting:
             await self._finish(self._waiting.popleft(), "", interrupted=True)
 
+    async def _drop_causes(self) -> None:
+        async with self._lock:
+            while self._causes:
+                await self._finish(self._causes.popleft(), "", interrupted=True)
+
     def _check_open(self) -> None:
         if self._closed:
             raise TransportError("session: the session is closed")
@@ -458,6 +463,7 @@ class Session:
                 self._spawn(self._call(event))
             elif isinstance(event, LiveInterrupted):
                 await self._cut(self.person)
+                await self._drop_causes()
             elif isinstance(event, LiveFailed):
                 raise ModelError(f"session: the live model failed: {event.message}")
         raise ModelError("session: the live connection ended")

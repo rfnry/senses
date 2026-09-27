@@ -173,3 +173,27 @@ async def test_muting_cuts_the_voice_and_gates_what_follows() -> None:
         gated.heard == "" and gated.interrupted and ("say", "Hello?") not in live.connection.calls
     )
     assert not unmuted.muted and len(link.audio) == 1
+
+
+async def test_the_person_cutting_in_ends_the_queued_says_and_a_late_answer_has_no_cause() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 100)
+    async with Session(link, live=live) as s:
+        events = s.events()
+        first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        second = asyncio.create_task(s.say("Shall I order the usual?", triggered_by=HOST))
+        third = asyncio.create_task(s.prompt("Offer the terrace.", triggered_by=HOST))
+        await until(lambda: len(live.connection.calls) == 3)
+        live.connection.emit(
+            LiveStarted(),
+            LiveSaid(text="Your table "),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveInterrupted(),
+            LiveDone(),
+        )
+        said_first = await first
+        queued = await asyncio.wait_for(asyncio.gather(second, third), 1)
+        live.connection.emit(*response("Sure, what would you like?"))
+        saids = [await next_of(events, Said) for _ in range(4)]
+    assert said_first.heard == "Your table " and said_first.interrupted
+    assert all(q.heard == "" and q.interrupted and q.triggered_by == HOST for q in queued)
+    assert saids[3].text == "Sure, what would you like?" and saids[3].triggered_by is None
