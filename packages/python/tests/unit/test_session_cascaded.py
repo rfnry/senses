@@ -4,8 +4,9 @@ from typing import Any
 
 import pytest
 
+from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import ConfigurationError, ModelError
-from rfnry_senses.events import Heard, TurnEnded
+from rfnry_senses.events import Closed, Heard, Silent, Speaking, TurnEnded
 from rfnry_senses.session import Session
 from rfnry_senses.transport import Loopback
 
@@ -70,6 +71,28 @@ async def test_a_failing_speech_model_fails_only_its_say() -> None:
             await s.say("Hello.", triggered_by=HOST)
         tts.fail = False
         assert (await s.say("Hello again.", triggered_by=HOST)).heard == "Hello again."
+
+
+class FailsOnSecond(Tone):
+    async def speak(self, text: str) -> AsyncIterator[AudioFrame]:
+        self.fail = bool(self.spoken)
+        async for frame in super().speak(text):
+            yield frame
+
+
+async def test_a_speech_model_failing_after_the_voice_started_still_ends_it() -> None:
+    link = Loopback(ANA, "acme")
+    async with Session(link, speech=FailsOnSecond()) as s:
+        events = s.events()
+        with pytest.raises(
+            ModelError, match="^session: the speech model failed: synthesis failed$"
+        ):
+            await s.say("One two. Three four.", triggered_by=HOST)
+    assert [type(event) async for event in events] == [Speaking, Silent, Closed]
+    assert [c for c in link.controls if c["type"] in ("speaking", "silent", "stop")] == [
+        {"type": "speaking", "utterance": 1},
+        {"type": "silent", "utterance": 1},
+    ]
 
 
 async def test_each_model_is_optional() -> None:

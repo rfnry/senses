@@ -638,13 +638,13 @@ class Session:
                         await self._send(u, frame)
                 except Exception as exc:
                     log.warning("session: the speech model failed: %s", exc)
-                    self._abandon(u, ModelError(f"session: the speech model failed: {exc}"))
+                    await self._abandon(u, ModelError(f"session: the speech model failed: {exc}"))
                     return
                 if self._utterance is not u:
                     return
                 u.ledger.mark(sentence)
         except Exception as exc:
-            self._abandon(u, exc)
+            await self._abandon(u, exc)
             return
         finally:
             await pieces.aclose()
@@ -653,12 +653,15 @@ class Session:
                 await close()
         await self._conclude(u)
 
-    def _abandon(self, u: Utterance, error: Exception) -> None:
+    async def _abandon(self, u: Utterance, error: Exception) -> None:
         if self._utterance is u:
             self._utterance = None
             self._transport.clear_audio()
         u.finished = True
         self._played.pop(u.number, None)
+        if u.spoke:
+            await self._transport.send_control({"type": "silent", "utterance": u.number})
+            await self._emit(Silent(scope=self.scope))
         if u.done is not None and not u.done.done():
             u.done.set_exception(error)
 
