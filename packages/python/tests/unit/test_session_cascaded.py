@@ -104,6 +104,11 @@ async def test_each_model_is_optional() -> None:
             await listener.say("Hello.", triggered_by=HOST)
         with pytest.raises(ConfigurationError, match="^session: prompt needs a live model$"):
             await listener.prompt("Hello.", triggered_by=HOST)
+        await listener.mute(triggered_by=HOST)
+        with pytest.raises(
+            ConfigurationError, match="^session: say needs a live model or a speech model$"
+        ):
+            await listener.say("Hello.", triggered_by=HOST)
         await stt.close()
         await asyncio.sleep(0.01)
         with pytest.raises(

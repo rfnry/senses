@@ -233,6 +233,8 @@ class Session:
             self._ready(text)
         else:
             self._check_open()
+        if not self._voice:
+            raise ConfigurationError("session: say needs a live model or a speech model")
         done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
         u = Utterance(
             cause,
@@ -254,11 +256,9 @@ class Session:
                     return await done
                 u.text = joined
             return await self._ask(u, lambda: connection.say(u.text))
-        if self._speech is not None:
-            self._waiting.append(u)
-            self._queue.put_nowait(u)
-            return await done
-        raise ConfigurationError("session: say needs a live model or a speech model")
+        self._waiting.append(u)
+        self._queue.put_nowait(u)
+        return await done
 
     async def prompt(self, text: str, *, triggered_by: IdentityLike) -> Said:
         cause = as_identity(triggered_by)
