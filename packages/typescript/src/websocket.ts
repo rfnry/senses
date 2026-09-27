@@ -1,4 +1,4 @@
-import { SensesError } from './errors.js'
+import { SensesException } from './errors.js'
 import {
   type AudioOut,
   decodeAudio,
@@ -28,13 +28,13 @@ export class WebSocketLink {
           ready = true
           resolve(new WebSocketLink(socket))
         } else if (!ready && frame.type === 'error') {
-          reject(new SensesError(frame.message))
+          reject(new SensesException(frame.message))
         } else {
           handlers.control(frame)
         }
       }
       socket.onclose = () => {
-        if (!ready) reject(new SensesError('transport: the connection closed before it was ready'))
+        if (!ready) reject(new SensesException('transport: the connection closed before it was ready'))
         handlers.closed()
       }
     })

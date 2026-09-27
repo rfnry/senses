@@ -1,5 +1,5 @@
 import type { CameraChoice, CameraOptions, VideoSource } from './camera.js'
-import { SensesError } from './errors.js'
+import { SensesException } from './errors.js'
 import type { SensesEvent } from './wire.js'
 
 export type ConnectOptions = {
@@ -46,18 +46,18 @@ export function cameraOptions(
 
 export function checkChoice(choice: CameraChoice): CameraChoice {
   if (choice.facing !== undefined && choice.deviceId !== undefined)
-    throw new SensesError('senses: the camera takes facing or deviceId, not both')
+    throw new SensesException('senses: the camera takes facing or deviceId, not both')
   return choice
 }
 
 export function checkCamera<T>(camera: T | null, verb: string): T {
-  if (camera === null) throw new SensesError(`senses: ${verb} needs the camera option`)
+  if (camera === null) throw new SensesException(`senses: ${verb} needs the camera option`)
   return camera
 }
 
 export function checkFps(fps: number, camera: unknown): void {
-  if (!(fps > 0)) throw new SensesError('senses: fps must be positive')
-  if (camera === null) throw new SensesError('senses: setFps needs a camera')
+  if (!(fps > 0)) throw new SensesException('senses: fps must be positive')
+  if (camera === null) throw new SensesException('senses: setFps needs a camera')
 }
 
 export class Listeners {

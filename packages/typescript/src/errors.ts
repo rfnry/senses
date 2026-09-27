@@ -1,6 +1,6 @@
-export class SensesError extends Error {
+export class SensesException extends Error {
   constructor(message: string) {
     super(message)
-    this.name = 'SensesError'
+    this.name = 'SensesException'
   }
 }

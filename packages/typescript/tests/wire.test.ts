@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { SensesError } from '../src/errors'
+import { SensesException } from '../src/errors'
 import { decodeAudio, encodeAudio, encodeImage, hello, parseControl, played } from '../src/wire'
 
 const FIXTURES = join(__dirname, '../../python/tests/fixtures/wire')
@@ -41,7 +41,8 @@ describe('the wire', () => {
   })
 
   it('refuses what it cannot read', () => {
-    expect(() => parseControl('{"type":"nope"}')).toThrow(new SensesError('wire: unknown control frame nope'))
-    expect(() => decodeAudio(new Uint8Array([2, 1]).buffer)).toThrow(new SensesError('wire: not an audio frame'))
+    expect(() => parseControl('{"type":"nope"}')).toThrow(new SensesException('wire: unknown control frame nope'))
+    expect(() => decodeAudio(new Uint8Array([2, 1]).buffer)).toThrow(new SensesException('wire: not an audio frame'))
+    expect(() => decodeAudio(new ArrayBuffer(0))).toThrow(expect.objectContaining({ name: 'SensesException' }))
   })
 })

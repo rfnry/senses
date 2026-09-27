@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { connect, type Senses, SensesError, type SensesListener } from '../src/index'
+import { connect, type Senses, SensesException, type SensesListener } from '../src/index'
 import { encodeAudio, encodeImage, hello, played } from '../src/wire'
 import { Context, documentWithCanvas, JPEG, media, Socket, WorkletNode } from './fakes'
 
@@ -67,7 +67,7 @@ describe('connect over a WebSocket', () => {
     socket.open()
     socket.deliver({ type: 'error', message: 'transport: protocol 2 is not supported; this server speaks 1' })
     await expect(connecting).rejects.toEqual(
-      new SensesError('transport: protocol 2 is not supported; this server speaks 1'),
+      new SensesException('transport: protocol 2 is not supported; this server speaks 1'),
     )
     expect((Context.made[0] as Context).closed).toBe(true)
   })
@@ -148,7 +148,7 @@ describe('connect over a WebSocket', () => {
     senses.pauseCamera()
     await vi.advanceTimersByTimeAsync(1000)
     expect(socket.binary()).toHaveLength(6)
-    expect(() => senses.setFps(0)).toThrow(new SensesError('senses: fps must be positive'))
+    expect(() => senses.setFps(0)).toThrow(new SensesException('senses: fps must be positive'))
   })
 
   it('shares the screen, keeps sending frames, and returns to the camera when the share ends', async () => {
@@ -257,7 +257,7 @@ describe('connect over a WebSocket', () => {
     const devices = media()
     vi.stubGlobal('navigator', devices.navigator)
     vi.stubGlobal('document', documentWithCanvas())
-    const both = new SensesError('senses: the camera takes facing or deviceId, not both')
+    const both = new SensesException('senses: the camera takes facing or deviceId, not both')
     await expect(
       connect({
         url: 'wss://example.com/senses',
@@ -275,13 +275,15 @@ describe('connect over a WebSocket', () => {
 
   it('refuses a screen without the camera option', async () => {
     const { senses } = await opened()
-    await expect(senses.shareScreen()).rejects.toEqual(new SensesError('senses: shareScreen needs the camera option'))
-    await expect(senses.useCamera()).rejects.toEqual(new SensesError('senses: useCamera needs the camera option'))
+    await expect(senses.shareScreen()).rejects.toEqual(
+      new SensesException('senses: shareScreen needs the camera option'),
+    )
+    await expect(senses.useCamera()).rejects.toEqual(new SensesException('senses: useCamera needs the camera option'))
   })
 
   it('refuses a rate without a camera', async () => {
     const { senses } = await opened()
-    expect(() => senses.setFps(2)).toThrow(new SensesError('senses: setFps needs a camera'))
+    expect(() => senses.setFps(2)).toThrow(new SensesException('senses: setFps needs a camera'))
   })
 
   it('closes on the server closed event, on the socket closing, and on close()', async () => {

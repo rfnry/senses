@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SensesError } from '../src/errors'
+import { SensesException } from '../src/errors'
 import { connect } from '../src/index'
 import { RemotePlayback } from '../src/remote-playback'
 import { hello, played } from '../src/wire'
@@ -135,7 +135,7 @@ describe('connect over WebRTC', () => {
     const devices = media()
     vi.stubGlobal('navigator', devices.navigator)
     await expect(connect({ url: '/senses/offer', transport: 'webrtc' })).rejects.toEqual(
-      new SensesError('webrtc: the offer was refused with status 401'),
+      new SensesException('webrtc: the offer was refused with status 401'),
     )
     expect((Peer.made[0] as Peer).closed).toBe(true)
     expect(devices.streams[0]?.getAudioTracks()[0]?.stopped).toBe(true)
@@ -202,7 +202,7 @@ describe('connect over WebRTC', () => {
     expect(peer.added.filter((a) => a.track.kind === 'video')).toHaveLength(1)
     expect(sources).toEqual(['camera'])
     await expect(senses.useCamera({ facing: 'user', deviceId: 'desk' })).rejects.toEqual(
-      new SensesError('senses: the camera takes facing or deviceId, not both'),
+      new SensesException('senses: the camera takes facing or deviceId, not both'),
     )
     expect(peer.sender.replaced).toHaveLength(1)
   })
@@ -211,7 +211,7 @@ describe('connect over WebRTC', () => {
     vi.stubGlobal('fetch', server().fetch)
     await expect(
       connect({ url: '/senses/offer', transport: 'webrtc', camera: { facing: 'user', deviceId: 'desk' } }),
-    ).rejects.toEqual(new SensesError('senses: the camera takes facing or deviceId, not both'))
+    ).rejects.toEqual(new SensesException('senses: the camera takes facing or deviceId, not both'))
     expect(Peer.made).toHaveLength(0)
   })
 
@@ -232,7 +232,7 @@ describe('connect over WebRTC', () => {
     vi.stubGlobal('fetch', server().fetch)
     const { senses, peer } = await connected({ microphone: false })
     expect(peer.transceivers).toEqual([{ kind: 'audio', init: { direction: 'recvonly' } }])
-    expect(() => senses.setFps(2)).toThrow(new SensesError('senses: setFps needs a camera'))
+    expect(() => senses.setFps(2)).toThrow(new SensesException('senses: setFps needs a camera'))
   })
 })
 

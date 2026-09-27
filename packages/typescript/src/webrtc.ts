@@ -1,5 +1,5 @@
 import { Camera } from './camera.js'
-import { SensesError } from './errors.js'
+import { SensesException } from './errors.js'
 import { MICROPHONE } from './microphone.js'
 import { RemotePlayback } from './remote-playback.js'
 import {
@@ -51,7 +51,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
         if (frame.type === 'ready') {
           open = true
           resolve()
-        } else if (frame.type === 'error') reject(new SensesError(frame.message))
+        } else if (frame.type === 'error') reject(new SensesException(frame.message))
         return
       }
       if (frame.type === 'speaking') remote.speaking(frame.utterance)
@@ -63,7 +63,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       }
     }
     channel.onclose = () => {
-      if (!open) reject(new SensesError('transport: the connection closed before it was ready'))
+      if (!open) reject(new SensesException('transport: the connection closed before it was ready'))
       room.end()
     }
   })
@@ -99,7 +99,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       body: JSON.stringify({ sdp: pc.localDescription?.sdp }),
       credentials: 'same-origin',
     })
-    if (!response.ok) throw new SensesError(`webrtc: the offer was refused with status ${response.status}`)
+    if (!response.ok) throw new SensesException(`webrtc: the offer was refused with status ${response.status}`)
     const answer = (await response.json()) as { sdp: string }
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
     await ready

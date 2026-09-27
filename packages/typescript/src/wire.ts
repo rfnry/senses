@@ -1,4 +1,4 @@
-import { SensesError } from './errors.js'
+import { SensesException } from './errors.js'
 
 export const PROTOCOL = 1
 const AUDIO = 1
@@ -63,7 +63,7 @@ export function encodeImage(jpeg: Uint8Array): Uint8Array<ArrayBuffer> {
 
 export function decodeAudio(data: ArrayBuffer): AudioOut {
   const view = new DataView(data)
-  if (data.byteLength < HEADER || view.getUint8(0) !== AUDIO) throw new SensesError('wire: not an audio frame')
+  if (data.byteLength < HEADER || view.getUint8(0) !== AUDIO) throw new SensesException('wire: not an audio frame')
   return {
     channels: view.getUint8(1),
     sampleRate: view.getUint32(2, true),
@@ -76,6 +76,6 @@ export function parseControl(text: string): ServerControl {
   const frame: unknown = JSON.parse(text)
   const type = typeof frame === 'object' && frame !== null ? (frame as { type?: unknown }).type : undefined
   if (typeof type !== 'string' || !CONTROLS.has(type))
-    throw new SensesError(`wire: unknown control frame ${String(type)}`)
+    throw new SensesException(`wire: unknown control frame ${String(type)}`)
   return frame as ServerControl
 }

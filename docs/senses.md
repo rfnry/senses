@@ -546,7 +546,7 @@ await senses.useCamera({ facing: 'user' })
 device that is gone rejects. `useCamera` takes the same two and switches in place — the next frame
 comes from the new camera over a WebSocket, and the track is replaced over WebRTC — and without them
 returns to the last camera chosen, as the client does when a screen share ends. Both at once reject
-with a `SensesError`.
+with a `SensesException`.
 
 It plays the voice, counts what it played, and answers `stop` with it on its own.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
@@ -632,6 +632,11 @@ Everything the package exports, by role.
 - **Give models tools:** `Tool`, `Tools`.
 - **Connect people:** `serve`, `Connection`, `Transport`, `Played`, `Loopback`, `Identity`; with the `webrtc` extra, `accept_offer` and `WebRTCTransport` from `rfnry_senses.webrtc`.
 - **Fail loudly:** `SensesException`, `ConfigurationError`, `InputError`, `NotFoundError`, `ModelError`, `TransportError`.
+
+The TypeScript package exports `connect` and its `ConnectOptions`, with `CameraChoice` for the
+camera's `facing` or `deviceId`; the `Senses` it returns, with `SensesStatus`; `SensesListener`,
+`SensesEvent`, `Identity` and `VideoSource` for what `subscribe` receives; and one error class,
+`SensesException`, whose messages have the same shape.
 
 ## Errors
 
