@@ -648,7 +648,8 @@ live model, `look` without `video=True`; a `window`, `window_bytes` or `tool_tim
 positive. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
 audio frame whose bytes do not fill its samples, a tool called with bad arguments, an
-identity whose fields do not fit, an empty scope given to `serve` or `accept_offer`. `NotFoundError` when `look` finds no frame in the
+identity whose fields do not fit, an empty scope given to `serve` or `accept_offer`, or a transport
+with an empty scope given to `Session`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the

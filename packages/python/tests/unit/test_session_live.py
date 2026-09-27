@@ -61,6 +61,11 @@ def test_a_session_that_cannot_work_is_refused(kwargs: dict[str, Any], message: 
         Session(Loopback(ANA, "acme"), **kwargs)
 
 
+def test_a_transport_with_no_scope_is_refused() -> None:
+    with pytest.raises(InputError, match="^session: scope is empty$"):
+        Session(Loopback(ANA, ""), transcription=ScriptedTranscription())
+
+
 async def test_the_live_model_is_opened_with_the_tools_and_hears_the_person() -> None:
     async def now(args: dict[str, Any]) -> str:
         return "12:00"

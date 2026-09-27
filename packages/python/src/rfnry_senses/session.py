@@ -152,6 +152,8 @@ class Session:
                 raise ConfigurationError(f"session: {name} must be positive")
         if tool_timeout is not None and tool_timeout <= 0:
             raise ConfigurationError("session: tool_timeout must be positive or None")
+        if not transport.scope:
+            raise InputError("session: scope is empty")
         self.scope = transport.scope
         self.person = as_identity(transport.identity)
         self._transport = transport
