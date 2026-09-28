@@ -14,6 +14,8 @@ A session is input and output only. It hears, sees, speaks and reports what happ
 decides what to say. A framework-free TypeScript client captures the microphone and camera in a
 browser and plays the voice back.
 
+Every public name, with its signature, is in [the API reference](api.md).
+
 ## Philosophy
 
 **The senses, not the mind.** The loop that decides — your code, an engine agent, a live model's
