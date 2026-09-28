@@ -218,6 +218,7 @@ class GoogleLiveConnection:
         self.handle: str | None = None
         self.leaving = False
         self.ready = asyncio.Event()
+        self.idle = asyncio.Event()
         self.names: dict[str, str] = {}
         self.responding = False
         self.heard = ""
@@ -232,6 +233,7 @@ class GoogleLiveConnection:
         context = self.client.aio.live.connect(model=self.model, config=config)
         self.session = await context.__aenter__()
         self.context, self.leaving = context, False
+        self.idle.set()
         self.ready.set()
 
     async def send_audio(self, frame: AudioFrame) -> None:
@@ -244,6 +246,10 @@ class GoogleLiveConnection:
 
     async def send_text(self, text: str, *, respond: bool) -> None:
         turn = types.Content(role="user", parts=[types.Part(text=text)])
+        if respond:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self.idle.wait(), 30)
+            self.idle.clear()
         await self._send(
             lambda session: session.send_client_content(turns=turn, turn_complete=respond)
         )
@@ -342,6 +348,7 @@ class GoogleLiveConnection:
         speaking = content.output_transcription is not None or content.model_turn is not None
         if speaking and not self.responding:
             self.responding = True
+            self.idle.clear()
             self._end_heard(events)
             events.append(LiveStarted())
         if content.output_transcription is not None and content.output_transcription.text:
@@ -358,6 +365,8 @@ class GoogleLiveConnection:
                 )
         if content.interrupted:
             events.append(LiveInterrupted())
+        if content.interrupted or content.turn_complete:
+            self.idle.set()
         if (content.interrupted or content.turn_complete) and self.responding:
             self.responding = False
             events.append(LiveDone())
