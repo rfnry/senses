@@ -6,6 +6,7 @@ export type AudioContextLike = Pick<
 >
 
 const FADE_S = 0.06
+const START_S = 0.12
 
 type Scheduled = { utterance: number; start: number; duration: number; node: AudioBufferSourceNode }
 
@@ -45,7 +46,8 @@ export class Playback {
     const node = this.context.createBufferSource()
     node.buffer = buffer
     node.connect(this.output())
-    const start = Math.max(this.context.currentTime, this.next)
+    const now = this.context.currentTime
+    const start = this.next > now ? this.next : now + START_S
     const entry: Scheduled = { utterance: frame.utterance, start, duration: buffer.duration, node }
     node.onended = () => {
       this.scheduled.delete(entry)

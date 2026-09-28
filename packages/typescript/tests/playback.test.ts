@@ -23,7 +23,7 @@ describe('playback', () => {
     const { context, reports, playback } = setup()
     playback.push(frame(1))
     playback.push(frame(1))
-    expect(context.nodes.map((n) => n.started)).toEqual([0, 0.1])
+    expect(context.nodes.map((n) => n.started)).toEqual([0.12, 0.22])
     playback.silent(1)
     expect(reports).toEqual([])
     for (const node of context.nodes) node.onended?.()
@@ -34,7 +34,7 @@ describe('playback', () => {
     const { context, reports, playback } = setup()
     for (let i = 0; i < 3; i++) playback.push(frame(1))
     context.nodes[0]?.onended?.()
-    context.currentTime = 0.15
+    context.currentTime = 0.27
     playback.stop(1)
     expect(reports).toEqual([[1, 150]])
     expect(context.nodes.slice(1).every((n) => n.stopped)).toBe(true)
@@ -44,13 +44,38 @@ describe('playback', () => {
     const { context, playback } = setup()
     playback.push(frame(1))
     playback.push(frame(1))
-    context.currentTime = 0.05
+    context.currentTime = 0.17
     playback.stop(1)
-    expect(context.gains[0]?.ramps).toEqual([[0, 0.11]])
-    expect(context.nodes.map((n) => n.stoppedAt)).toEqual([0.11, 0.11])
+    expect(context.gains[0]?.ramps).toEqual([[0, 0.23]])
+    expect(context.nodes.map((n) => n.stoppedAt)).toEqual([0.23, 0.23])
     playback.push(frame(2))
     expect(context.gains).toHaveLength(2)
     expect(context.gains[1]?.ramps).toEqual([])
+  })
+
+  it('starts a stretch of voice 120 ms ahead, so a late second chunk leaves no hole', () => {
+    const { context, playback } = setup()
+    playback.push(frame(1, 40))
+    context.currentTime = 0.1
+    playback.push(frame(1))
+    expect(context.nodes.map((n) => n.started)).toEqual([0.12, 0.16])
+    context.currentTime = 0.2
+    playback.push(frame(2))
+    expect(context.nodes[2]?.started).toBeCloseTo(0.26)
+    context.currentTime = 1
+    playback.push(frame(3))
+    expect(context.nodes[3]?.started).toBeCloseTo(1.12)
+  })
+
+  it('counts only audio that played, not audio still buffered, and a stop takes effect at once', () => {
+    const { context, reports, playback } = setup()
+    playback.push(frame(1))
+    playback.push(frame(1))
+    context.currentTime = 0.1
+    playback.stop(1)
+    expect(reports).toEqual([[1, 0]])
+    expect(context.gains[0]?.ramps).toEqual([[0, 0.16]])
+    expect(context.nodes.map((n) => n.stoppedAt)).toEqual([0.16, 0.22])
   })
 
   it('drops audio of a stopped utterance', () => {

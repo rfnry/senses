@@ -573,7 +573,9 @@ comes from the new camera over a WebSocket, and the track is replaced over WebRT
 returns to the last camera chosen, as the client does when a screen share ends. Both at once reject
 with a `SensesException`.
 
-It plays the voice, counts what it played, and answers `stop` with it on its own.
+It plays the voice, counts what it played, and answers `stop` with it on its own. Each stretch of
+voice starts 120 ms after its first audio arrives, over a WebSocket in the client and over WebRTC on
+the server, so uneven first chunks play without a hole. Only audio that has played is counted.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,
