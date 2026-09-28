@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import contextlib
 import os
@@ -168,7 +169,7 @@ class AnthropicProvider:
 
 
 class GoogleLive:
-    def __init__(self, model: str = "gemini-3.1-flash-live-preview", voice: str = "Kore") -> None:
+    def __init__(self, model: str = "gemini-3.8-live", voice: str = "Kore") -> None:
         self.model = model
         self.voice = voice
         self.client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
@@ -181,6 +182,7 @@ class GoogleLive:
                 name=spec.name,
                 description=spec.description,
                 parameters_json_schema=spec.input_schema,
+                behavior=types.Behavior.BLOCKING,
             )
             for spec in tools
         ]
@@ -213,20 +215,22 @@ class GoogleLiveConnection:
         self.session: Any = None
         self.handle: str | None = None
         self.leaving = False
+        self.ready = asyncio.Event()
         self.names: dict[str, str] = {}
         self.responding = False
         self.heard = ""
 
     async def connect(self) -> None:
+        self.ready.clear()
+        if self.context is not None:
+            with contextlib.suppress(Exception):
+                await self.context.__aexit__(None, None, None)
         resumption = types.SessionResumptionConfig(handle=self.handle)
         config = self.config.model_copy(update={"session_resumption": resumption})
         context = self.client.aio.live.connect(model=self.model, config=config)
-        session = await context.__aenter__()
-        previous = self.context
-        self.context, self.session, self.leaving = context, session, False
-        if previous is not None:
-            with contextlib.suppress(Exception):
-                await previous.__aexit__(None, None, None)
+        self.session = await context.__aenter__()
+        self.context, self.leaving = context, False
+        self.ready.set()
 
     async def send_audio(self, frame: AudioFrame) -> None:
         blob = types.Blob(data=frame.data, mime_type=f"audio/pcm;rate={frame.sample_rate}")
@@ -290,12 +294,14 @@ class GoogleLiveConnection:
         await self.context.__aexit__(None, None, None)
 
     async def _send(self, send: Callable[[Any], Awaitable[None]]) -> None:
+        await self.ready.wait()
         session = self.session
         try:
             await send(session)
         except Exception:
-            if self.session is session:
+            if self.session is session and self.ready.is_set():
                 raise
+            await self.ready.wait()
             await send(self.session)
 
     def _quiet(self) -> bool:
