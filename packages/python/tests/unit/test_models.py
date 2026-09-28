@@ -4,10 +4,10 @@ from rfnry_senses.errors import InputError
 from rfnry_senses.models import Identity, Image, Text
 
 
-def test_a_media_part_carries_data_or_url_not_both() -> None:
-    with pytest.raises(InputError, match="^models: image carries data or url, not both$"):
+def test_a_media_part_carries_exactly_one_of_data_or_url() -> None:
+    with pytest.raises(InputError, match="^models: image carries exactly one of data or url$"):
         Image(media_type="image/jpeg", data=b"x", url="https://example.com/a.jpg")
-    with pytest.raises(InputError, match="^models: image carries data or url, not both$"):
+    with pytest.raises(InputError, match="^models: image carries exactly one of data or url$"):
         Image(media_type="image/jpeg")
 
 
