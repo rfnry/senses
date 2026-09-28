@@ -250,6 +250,50 @@ async def test_every_subscription_sees_every_event() -> None:
             await s.look(triggered_by=HOST)
 
 
+async def test_a_consumer_nobody_holds_lives_as_long_as_its_session() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    seen: list[Heard] = []
+
+    async def converse(s: Session) -> None:
+        async for event in s.events():
+            if isinstance(event, Heard):
+                seen.append(event)
+
+    async with session(link, live) as s:
+        consumer = weakref.ref(asyncio.create_task(converse(s)))
+        await asyncio.sleep(0)
+        gc.collect()
+        live.connection.emit(LiveHeard(text="hi", final=True))
+        await until(lambda: bool(seen))
+        task = consumer()
+        assert task is not None and not task.done()
+
+
+async def test_a_consumer_that_breaks_or_is_cancelled_is_let_go() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+
+    async def first(s: Session) -> None:
+        async for _ in s.events():
+            break
+
+    async def forever(s: Session) -> None:
+        async for _ in s.events():
+            pass
+
+    async with session(link, live) as s:
+        breaking = asyncio.create_task(first(s))
+        cancelled = asyncio.create_task(forever(s))
+        await asyncio.sleep(0)
+        queues = [weakref.ref(q) for q in s._subscribers]
+        live.connection.emit(LiveHeard(text="hi", final=True))
+        cancelled.cancel()
+        await asyncio.wait({breaking, cancelled})
+        del breaking, cancelled
+        gc.collect()
+        assert len(queues) == 2 and [q() for q in queues] == [None, None]
+        assert not s._subscribers
+
+
 async def test_a_dropped_subscription_is_let_go() -> None:
     live, link = ScriptedLive(), Loopback(ANA, "acme")
     async with session(link, live) as s:

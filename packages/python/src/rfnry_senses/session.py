@@ -104,14 +104,13 @@ class Utterance:
 
 
 class Subscription:
-    def __init__(
-        self, subscribers: weakref.WeakSet[asyncio.Queue[Event | None]], closed: bool
-    ) -> None:
+    def __init__(self, subscribers: set[asyncio.Queue[Event | None]], closed: bool) -> None:
         self._queue: asyncio.Queue[Event | None] = asyncio.Queue()
         if closed:
             self._queue.put_nowait(None)
         else:
             subscribers.add(self._queue)
+            weakref.finalize(self, subscribers.discard, self._queue)
 
     def __aiter__(self) -> Subscription:
         return self
@@ -166,7 +165,7 @@ class Session:
         self._tool_timeout = tool_timeout
         self._connection: LiveConnection | None = None
         self._stream: Transcription | None = None
-        self._subscribers: weakref.WeakSet[asyncio.Queue[Event | None]] = weakref.WeakSet()
+        self._subscribers: set[asyncio.Queue[Event | None]] = set()
         self._tasks: set[asyncio.Task[None]] = set()
         self._opened = False
         self._closed = False
@@ -378,7 +377,7 @@ class Session:
             await self._close("failed", f"session: {exc}", ModelError(f"session: {exc}"))
 
     async def _emit(self, event: Event) -> None:
-        for queue in self._subscribers:
+        for queue in list(self._subscribers):
             queue.put_nowait(event)
         if not isinstance(event, Informed | ToolCalled):
             with contextlib.suppress(Exception):
@@ -691,7 +690,7 @@ class Session:
                 with contextlib.suppress(Exception):
                     await closing.close()
         await self._emit(Closed(scope=self.scope, reason=reason, message=message))
-        for queue in self._subscribers:
+        for queue in list(self._subscribers):
             queue.put_nowait(None)
         with contextlib.suppress(Exception):
             await self._transport.close()
