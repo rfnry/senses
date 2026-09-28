@@ -5,6 +5,7 @@ import io
 import json
 import os
 import re
+import time
 import wave
 from array import array
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -353,6 +354,9 @@ class GoogleLiveConnection:
         self.context: Any = None
         self.session: Any = None
         self.handle: str | None = None
+        self.resuming: str | None = None
+        self.resumed_at = 0.0
+        self.retries = 0
         self.leaving = False
         self.ready = asyncio.Event()
         self.idle = asyncio.Event()
@@ -421,12 +425,18 @@ class GoogleLiveConnection:
                         break
                 if not (self.leaving and self._quiet()):
                     continue
+                self.retries = 0
             except Exception as exc:
-                if not self.leaving or self.handle is None:
+                if self._shaky(exc):
+                    self.retries += 1
+                    self.handle = self.resuming
+                elif not self.leaving or self.handle is None:
                     yield LiveFailed(message=str(exc))
                     return
+                else:
+                    self.retries = 0
             try:
-                await self.connect()
+                await self._resume()
             except Exception as exc:
                 yield LiveFailed(message=str(exc))
                 return
@@ -448,6 +458,23 @@ class GoogleLiveConnection:
                 raise
             await self.ready.wait()
             await send(self.session)
+
+    async def _resume(self) -> None:
+        self.resuming = self.handle
+        while True:
+            try:
+                await self.connect()
+            except Exception as exc:
+                if getattr(exc, "code", None) != 1011 or self.retries >= 2:
+                    raise
+                self.retries += 1
+                continue
+            self.resumed_at = time.monotonic()
+            return
+
+    def _shaky(self, exc: Exception) -> bool:
+        recent = time.monotonic() - self.resumed_at < 1
+        return getattr(exc, "code", None) == 1011 and recent and self.retries < 2
 
     def _quiet(self) -> bool:
         return not self.responding and not self.names
