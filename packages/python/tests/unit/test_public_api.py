@@ -1,3 +1,6 @@
+import inspect
+import re
+
 import pytest
 
 import rfnry_senses
@@ -78,6 +81,11 @@ def test_the_session_has_exactly_its_verbs() -> None:
         "events",
         "close",
     }
+
+
+def test_serve_returns_a_type_the_package_exports() -> None:
+    returned = inspect.signature(rfnry_senses.serve).return_annotation
+    assert set(re.findall(r"\w+", returned)) - {"None"} <= set(rfnry_senses.__all__)
 
 
 def test_the_webrtc_extra_exports_its_names() -> None:

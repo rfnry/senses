@@ -10,7 +10,7 @@ from typing import Any, Protocol, runtime_checkable
 from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import InputError
 from rfnry_senses.models import Identity, IdentityLike, Image, as_identity
-from rfnry_senses.transport import Played
+from rfnry_senses.transport import Played, Transport
 from rfnry_senses.wire import PROTOCOL, control, decode, encode_audio, parse_hello, parse_played
 
 logger = logging.getLogger(__name__)
@@ -24,9 +24,7 @@ class Connection(Protocol):
     async def close(self) -> None: ...
 
 
-async def serve(
-    connection: Connection, *, identity: IdentityLike, scope: str
-) -> WebSocketTransport | None:
+async def serve(connection: Connection, *, identity: IdentityLike, scope: str) -> Transport | None:
     person = as_identity(identity)
     if not scope:
         raise InputError("transport: scope is empty")

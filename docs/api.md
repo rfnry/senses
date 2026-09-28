@@ -579,7 +579,7 @@ Raises `InputError` when `triggered_by` does not fit.
 ### `serve`
 
 ```python
-async def serve(connection: Connection, *, identity: IdentityLike, scope: str) -> WebSocketTransport | None: ...
+async def serve(connection: Connection, *, identity: IdentityLike, scope: str) -> Transport | None: ...
 ```
 
 Reads the client's hello from `connection`, checks its protocol version, and returns a `Transport` over the socket for the person and scope you name. Returns `None` when the hello is refused, after sending the client an `error` frame and closing, or when the connection ends before a hello.
