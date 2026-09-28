@@ -533,8 +533,10 @@ cancelled picker rejects `shareScreen` and leaves the camera on. When the person
 the browser's own controls, the client returns to the camera if it had one before the share, or
 sends no video until `useCamera()`. Each switch is told to `subscribe` as
 `{ kind: 'video', source: 'camera' | 'screen' | null }`. A screen's detail is small text: give it
-room with `width` (1280 reads a window; 640, the default, suits a face), and raise `setFps` while
-the model guides the person through clicks, then lower it. Screen sharing is a desktop-browser
+room with `width` (1280 reads a window; 640, the default, suits a face, and blurs a menu's words),
+and raise `setFps` while the model guides the person through clicks, then lower it. The client marks
+a screen's track as text (`contentHint`), so over WebRTC the encoder keeps its resolution and drops
+frames instead when the network tightens. Screen sharing is a desktop-browser
 feature; mobile browsers mostly have no `getDisplayMedia`.
 
 Which camera is `camera.facing` — `'environment'`, the back of a phone, or `'user'`, the front — or

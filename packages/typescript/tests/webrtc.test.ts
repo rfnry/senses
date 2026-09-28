@@ -303,6 +303,21 @@ describe('connect over WebRTC', () => {
     expect(front?.enabled).toBe(true)
   })
 
+  it('marks a screen track as text, so the encoder keeps its resolution, and leaves the camera alone', async () => {
+    vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    const camera = peer.added.find((a) => a.track.kind === 'video')?.track
+    await senses.shareScreen()
+    expect(peer.sender.replaced[0]?.source).toBe('screen')
+    expect(peer.sender.replaced[0]?.contentHint).toBe('text')
+    expect(camera?.contentHint).toBe('')
+    Peer.made = []
+    const started = await connected({ camera: { source: 'screen', fps: 1 } })
+    expect(started.peer.added.find((a) => a.track.kind === 'video')?.track.contentHint).toBe('text')
+  })
+
   it('starts on the screen when asked, and sends no video once the share ends', async () => {
     vi.stubGlobal('fetch', server().fetch)
     const { senses, peer } = await connected({ camera: { source: 'screen', fps: 2 } })

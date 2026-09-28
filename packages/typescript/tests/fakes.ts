@@ -103,6 +103,7 @@ export class Socket {
 export class Track {
   enabled = true
   stopped = false
+  contentHint = ''
   constraints: MediaTrackConstraints[] = []
   onended: (() => void) | null = null
   constructor(

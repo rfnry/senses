@@ -59,6 +59,7 @@ export class Camera {
     }
     for (const track of stream.getVideoTracks()) {
       track.enabled = !this.paused
+      if (source === 'screen') track.contentHint = 'text'
       track.onended = () => void this.ended(stream)
     }
     if (source === 'screen' && this.source !== 'screen') this.back = this.source
