@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import contextlib
 import os
@@ -214,8 +213,6 @@ class GoogleLiveConnection:
         self.session: Any = None
         self.handle: str | None = None
         self.leaving = False
-        self.fresh = True
-        self.swapped = asyncio.Condition()
         self.names: dict[str, str] = {}
         self.responding = False
         self.heard = ""
@@ -226,9 +223,7 @@ class GoogleLiveConnection:
         context = self.client.aio.live.connect(model=self.model, config=config)
         session = await context.__aenter__()
         previous = self.context
-        self.context, self.session, self.leaving, self.fresh = context, session, False, True
-        async with self.swapped:
-            self.swapped.notify_all()
+        self.context, self.session, self.leaving = context, session, False
         if previous is not None:
             with contextlib.suppress(Exception):
                 await previous.__aexit__(None, None, None)
@@ -271,7 +266,6 @@ class GoogleLiveConnection:
         while True:
             try:
                 async for message in self.session.receive():
-                    self.fresh = False
                     for event in self._events(message):
                         yield event
                     if self.leaving and self._quiet():
@@ -279,7 +273,7 @@ class GoogleLiveConnection:
                 if not (self.leaving and self._quiet()):
                     continue
             except Exception as exc:
-                if self.fresh or self.handle is None:
+                if not self.leaving or self.handle is None:
                     yield LiveFailed(message=str(exc))
                     return
             try:
@@ -300,12 +294,8 @@ class GoogleLiveConnection:
         try:
             await send(session)
         except Exception:
-            if self.handle is None:
+            if self.session is session:
                 raise
-            async with self.swapped:
-                await asyncio.wait_for(
-                    self.swapped.wait_for(lambda: self.session is not session), 10
-                )
             await send(self.session)
 
     def _quiet(self) -> bool:
