@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.voice import Ledger, sentences, sentences_from
 
 from .fakes import pcm
@@ -75,3 +76,12 @@ async def test_a_sentence_is_ready_as_soon_as_text_follows_it() -> None:
     queue.put_nowait("ree.")
     queue.put_nowait(None)
     assert [s async for s in pieces] == ["Three."]
+
+
+def test_nothing_is_heard_when_nothing_played() -> None:
+    ledger = Ledger()
+    ledger.mark("The terrace is open. ", ahead=True)
+    ledger.sent(AudioFrame(data=bytes(2), sample_rate=24000), 0.0)
+    ledger.sent(AudioFrame(data=bytes(4800), sample_rate=24000), 0.0)
+    assert ledger.heard(0) == ""
+    assert ledger.heard(100) == "The terrace is open. "

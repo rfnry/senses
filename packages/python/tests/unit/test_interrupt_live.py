@@ -13,10 +13,10 @@ from rfnry_senses.contracts import (
     LiveStarted,
     LiveToolCall,
 )
-from rfnry_senses.events import Heard, Interrupted, Muted, Said, ToolCalled
+from rfnry_senses.events import Event, Heard, Interrupted, Muted, Said, Silent, Speaking, ToolCalled
 from rfnry_senses.session import Session
 from rfnry_senses.tools import Tool, Tools
-from rfnry_senses.transport import Loopback
+from rfnry_senses.transport import Loopback, Played
 
 from .conftest import Clock
 from .fakes import ANA, HOST, ScriptedConnection, ScriptedLive, next_of, pcm, response, until
@@ -256,3 +256,130 @@ async def test_a_say_the_vendor_refuses_after_a_barge_in_raises_the_vendors_erro
         connection.answer.set()
         with pytest.raises(RuntimeError, match="^the vendor refused$"):
             await unanswered
+
+
+class Client(Loopback):
+    def __init__(self, stops: dict[int, int] | None = None) -> None:
+        super().__init__(ANA, "acme", answer=False)
+        self.stops = stops or {}
+
+    def report(self, utterance: int, ms: int) -> None:
+        self._inbox.put_nowait(Played(utterance=utterance, ms=ms))
+
+    async def send_control(self, control: dict[str, Any]) -> None:
+        await super().send_control(control)
+        if control["type"] == "stop":
+            for number, ms in self.stops.items():
+                if number <= control["utterance"]:
+                    self.report(number, ms)
+
+
+def voice(events: list[Event]) -> list[str]:
+    return [
+        f"{type(e).__name__}:{e.heard}" if isinstance(e, Said | Interrupted) else type(e).__name__
+        for e in events
+        if isinstance(e, Speaking | Silent | Said | Interrupted)
+    ]
+
+
+async def collecting(s: Session) -> tuple[list[Event], asyncio.Task[None]]:
+    seen: list[Event] = []
+    events = s.events()
+
+    async def collect() -> None:
+        async for event in events:
+            seen.append(event)
+
+    return seen, asyncio.create_task(collect())
+
+
+async def test_an_overtaken_utterance_is_what_the_client_reported_of_it() -> None:
+    live, link = ScriptedLive(), Client()
+    async with Session(link, live=live) as s:
+        seen, collector = await collecting(s)
+        live.connection.emit(*response("Let me ", "check that. "))
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(*response("It is open. "))
+        await until(lambda: {"type": "silent", "utterance": 2} in link.controls)
+        await asyncio.sleep(0.01)
+        assert voice(seen) == ["Speaking"]
+        link.report(1, 100)
+        link.report(2, 100)
+        await until(lambda: len(voice(seen)) == 4)
+    await collector
+    assert voice(seen) == ["Speaking", "Said:Let me ", "Silent", "Said:It is open. "]
+
+
+async def test_a_cut_in_the_older_tail_keeps_what_was_heard_and_nothing_of_the_newer() -> None:
+    live, link = ScriptedLive(), Client(stops={1: 100, 2: 0})
+    async with Session(link, live=live) as s:
+        seen, collector = await collecting(s)
+        live.connection.emit(*response("Let me ", "check that. "))
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(
+            LiveStarted(), LiveSaid(text="It is open. "), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 3)
+        live.connection.emit(LiveInterrupted())
+        await until(lambda: len(voice(seen)) == 5)
+    await collector
+    assert voice(seen) == [
+        "Speaking",
+        "Interrupted:Let me ",
+        "Said:Let me ",
+        "Silent",
+        "Said:",
+    ]
+    saids = [e for e in seen if isinstance(e, Said)]
+    assert all(said.interrupted for said in saids) and saids[1].text == "It is open. "
+    assert live.connection.interrupts == [0]
+    assert [c for c in link.controls if c["type"] == "stop"] == [{"type": "stop", "utterance": 2}]
+
+
+async def test_back_to_back_utterances_are_one_stretch_of_voice() -> None:
+    live, link = ScriptedLive(), Client()
+    async with Session(link, live=live) as s:
+        seen, collector = await collecting(s)
+        live.connection.emit(*response("One. "))
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(*response("Two. "))
+        await until(lambda: {"type": "silent", "utterance": 2} in link.controls)
+        link.report(1, 100)
+        await until(lambda: len(voice(seen)) == 2)
+        link.report(2, 100)
+        await until(lambda: len(voice(seen)) == 4)
+    await collector
+    assert voice(seen) == ["Speaking", "Said:One. ", "Silent", "Said:Two. "]
+    assert [c["type"] for c in link.controls if c["type"] in ("speaking", "silent")] == [
+        "speaking",
+        "silent",
+        "speaking",
+        "silent",
+    ]
+
+
+async def test_a_silent_client_is_estimated_from_where_each_utterance_began_to_play(
+    clock: Clock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(session_module, "PLAYED_GRACE", 0.01)
+    live, link = ScriptedLive(), Client()
+    async with Session(link, live=live) as s:
+        seen, collector = await collecting(s)
+        live.connection.emit(*response("Let me ", "check that. "))
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(
+            LiveStarted(), LiveSaid(text="It is open. "), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 3)
+        clock.advance(0.15)
+        live.connection.emit(LiveInterrupted())
+        await until(lambda: len(voice(seen)) == 5)
+    await collector
+    assert voice(seen) == [
+        "Speaking",
+        "Interrupted:Let me ",
+        "Said:Let me ",
+        "Silent",
+        "Said:",
+    ]
+    assert live.connection.interrupts == [0]

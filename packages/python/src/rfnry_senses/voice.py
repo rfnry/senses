@@ -64,12 +64,14 @@ class Ledger:
     def heard(self, played_ms: float | None) -> str:
         if played_ms is None:
             return "".join([*(text for text, _ in self._marks), *self._ahead])
+        if played_ms <= 0:
+            return ""
         return "".join(text for text, end in self._marks if end <= played_ms + 1)
 
     def estimate(self, now: float) -> float:
         if self.started_at is None:
             return 0.0
-        return min(self.sent_ms, (now - self.started_at) * 1000)
+        return max(0.0, min(self.sent_ms, (now - self.started_at) * 1000))
 
     def remaining(self, now: float) -> float:
         if self.started_at is None:

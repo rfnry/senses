@@ -98,6 +98,7 @@ class Utterance:
     done: asyncio.Future[Said] | None = None
     number: int = 0
     spoke: bool = False
+    cut: bool = False
     finished: bool = False
     ledger: Ledger = field(default_factory=Ledger)
     source: str | AsyncIterator[str] = ""
@@ -172,6 +173,8 @@ class Session:
         self._muted = False
         self._numbers = count(1)
         self._utterance: Utterance | None = None
+        self._out: list[Utterance] = []
+        self._playhead = 0.0
         self._playing: asyncio.Task[None] | None = None
         self._waiting: deque[Utterance] = deque()
         self._queue: asyncio.Queue[Utterance] = asyncio.Queue()
@@ -308,22 +311,31 @@ class Session:
 
     async def _cut(self, cause: Identity) -> Interrupted | None:
         u = self._utterance
-        if u is None:
+        taken = [v for v in self._out if v is not u and not v.finished]
+        if u is not None:
+            taken.append(u)
+        if not taken:
             return None
         self._utterance = None
+        for v in taken:
+            v.cut = True
         if self._playing is not None:
             self._playing.cancel()
         self._transport.clear_audio()
-        played = 0.0
-        if u.spoke:
-            await self._transport.send_control({"type": "stop", "utterance": u.number})
-            played = await self._await_played(u, PLAYED_GRACE, None)
-        heard = u.ledger.heard(played) if u.spoke else ""
-        if self._connection is not None:
-            await self._interrupt_model(round(played))
-        cut = Interrupted(scope=self.scope, heard=heard, triggered_by=cause)
+        self._playhead = 0.0
+        spoken = [v for v in taken if v.spoke]
+        if spoken:
+            await self._transport.send_control({"type": "stop", "utterance": spoken[-1].number})
+        reports = await asyncio.gather(*(self._await_played(v, PLAYED_GRACE, None) for v in spoken))
+        played = dict(zip(spoken, reports, strict=True))
+        heard = {v: v.ledger.heard(played[v]) if v.spoke else "" for v in taken}
+        if self._connection is not None and u is not None:
+            await self._interrupt_model(round(played.get(u, 0.0)))
+        landed = next((heard[v] for v in reversed(taken) if heard[v]), "")
+        cut = Interrupted(scope=self.scope, heard=landed, triggered_by=cause)
         await self._emit(cut)
-        await self._finish(u, heard, interrupted=True)
+        for v in taken:
+            await self._finish(v, heard[v], interrupted=True)
         return cut
 
     async def _interrupt_model(self, played_ms: int) -> None:
@@ -476,10 +488,6 @@ class Session:
         if self._responding:
             raise ModelError("session: a response started before the last one was done")
         self._responding = True
-        previous = self._utterance
-        if previous is not None:
-            self._utterance = None
-            await self._finish(previous, previous.ledger.heard(None), interrupted=False)
         u = self._causes.popleft() if self._causes else Utterance(None)
         self._start(u)
         if self._muted:
@@ -503,10 +511,14 @@ class Session:
         if not u.spoke:
             u.spoke = True
             await self._transport.send_control({"type": "speaking", "utterance": u.number})
-            await self._emit(Speaking(scope=self.scope))
+            if not self._out:
+                await self._emit(Speaking(scope=self.scope))
+            self._out.append(u)
         if self._utterance is not u:
             return
-        u.ledger.sent(frame, monotonic())
+        start = max(monotonic(), self._playhead)
+        u.ledger.sent(frame, start)
+        self._playhead = start + frame.duration_ms / 1000
         await self._transport.send_audio(frame, u.number)
 
     async def _conclude(self, u: Utterance) -> None:
@@ -516,9 +528,11 @@ class Session:
             played = await self._await_played(
                 u, u.ledger.remaining(monotonic()) + PLAYBACK_SLACK, u.ledger.sent_ms
             )
+        if u.cut:
+            return
         if self._utterance is u:
             self._utterance = None
-            await self._finish(u, u.ledger.heard(played) if u.spoke else "", interrupted=False)
+        await self._finish(u, u.ledger.heard(played) if u.spoke else "", interrupted=False)
 
     async def _await_played(self, u: Utterance, timeout: float, fallback: float | None) -> float:
         future = self._played.get(u.number)
@@ -539,8 +553,7 @@ class Session:
             interrupted=interrupted,
             triggered_by=u.triggered_by,
         )
-        if u.spoke:
-            await self._emit(Silent(scope=self.scope))
+        await self._unvoice(u)
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
         if u.done is not None or u.spoke or u.text:
@@ -663,9 +676,15 @@ class Session:
         self._played.pop(u.number, None)
         if u.spoke:
             await self._transport.send_control({"type": "silent", "utterance": u.number})
-            await self._emit(Silent(scope=self.scope))
+        await self._unvoice(u)
         if u.done is not None and not u.done.done():
             u.done.set_exception(error)
+
+    async def _unvoice(self, u: Utterance) -> None:
+        if u in self._out:
+            self._out.remove(u)
+            if not self._out:
+                await self._emit(Silent(scope=self.scope))
 
     async def _close(
         self,
@@ -682,7 +701,7 @@ class Session:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         failure = error or TransportError("session: the session closed before the reply was spoken")
-        for u in (self._utterance, *self._waiting, *self._causes):
+        for u in (self._utterance, *self._out, *self._waiting, *self._causes):
             if u is not None and u.done is not None and not u.done.done():
                 u.done.set_exception(failure)
         for closing in (self._connection, self._stream):

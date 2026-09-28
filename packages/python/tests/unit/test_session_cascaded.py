@@ -162,3 +162,14 @@ async def test_an_empty_stream_says_nothing_and_a_failing_one_fails_only_its_say
         after = await s.say("Still here.", triggered_by=HOST)
     assert nothing.text == nothing.heard == "" and not nothing.interrupted
     assert after.heard == "Still here." and tts.spoken == ["Still here."]
+
+
+async def test_cascaded_utterances_each_start_and_end_the_voice() -> None:
+    s, _, _, _ = cascaded()
+    async with s:
+        events = s.events()
+        first = asyncio.create_task(s.say("One.", triggered_by=HOST))
+        second = asyncio.create_task(s.say("Two.", triggered_by=HOST))
+        await first, await second
+        kinds = [type(await anext(events)).__name__ for _ in range(6)]
+    assert kinds == ["Speaking", "Silent", "Said", "Speaking", "Silent", "Said"]

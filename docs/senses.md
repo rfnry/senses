@@ -261,9 +261,18 @@ finished synthesizing a moment too late, a frame already on the wire — is drop
 in the client. Queued `say` and `prompt` calls end too: the person is talking, and they return
 `Said(heard="", interrupted=True)`.
 
+A live model can start its next response while the last one is still playing. The client plays them
+back to back, one stretch of voice: `Speaking` when it starts after quiet, `Silent` when all of it
+has played or been cut, and never between the two. Each utterance still ends on its own, when the
+client reports how much of it played, so the first one's `Said` can come after the second has begun.
+A cut stops everything still playing: the utterance it lands in is cut where it was, the ones queued
+behind it were not heard at all, and `Interrupted.heard` is what the person heard of the utterance
+it landed in. `Said` events come oldest first, and `Silent` comes right before the `Said` of the
+utterance that left the voice quiet.
+
 If the client never reports, senses estimates from its own clock — the audio sent, capped by the
-time since it started — after a quarter of a second, so an interruption never waits on a silent
-client. A live model whose vendor cannot cut its context raises from `interrupt`; senses logs that
+time since it began to play, after anything queued ahead of it — after a quarter of a second, so an
+interruption never waits on a silent client. A live model whose vendor cannot cut its context raises from `interrupt`; senses logs that
 as a warning and goes on — the voice is already stopped.
 
 Your code can do the same:
@@ -324,9 +333,9 @@ session's `scope` and the time `at`:
 | --- | --- | --- |
 | `Heard` | `text, final, speaker` | the person's words, partial and final |
 | `TurnEnded` | `text, speaker` | a cascaded turn ended |
-| `Said` | `text, heard, interrupted, triggered_by` | an utterance ended |
+| `Said` | `text, heard, interrupted, triggered_by` | an utterance ended: once each, when what was heard of it is final |
 | `Interrupted` | `heard, triggered_by` | the voice was cut |
-| `Speaking` / `Silent` | — | the voice started / stopped |
+| `Speaking` / `Silent` | — | the voice started after quiet / went quiet: all of it played, or was cut |
 | `Looked` | `frames, triggered_by` | someone looked through the camera |
 | `Muted` | `muted, triggered_by` | the output gate closed or opened |
 | `Informed` | `text, triggered_by` | a live model was told something |
