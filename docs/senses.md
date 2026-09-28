@@ -432,7 +432,8 @@ extra. The transport is your choice per endpoint, never negotiated.
 `serve(connection, identity=, scope=)` takes any object with four methods — `receive()` returning
 text or bytes, `send_text`, `send_bytes`, `close` — and the person and scope your endpoint
 authenticated. It reads the hello, checks its protocol version, and returns the transport, or
-`None` after telling the client why it was refused. Senses never sees a credential: who opened the
+`None` after telling the client why it was refused; a connection that drops before its hello gets
+`None` too, with no error frame. Senses never sees a credential: who opened the
 socket is decided by your framework on the upgrade, as in rfnry-thread. Authenticating a WebSocket
 is yours, and a short checklist covers it:
 
@@ -545,7 +546,8 @@ endpoint and optional `iceServers`); `microphone: false` connects to listen only
 a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`. With
 `camera` it sends frames at `fps` for as long as the camera runs: JPEG at `quality` (0.7) over a
 WebSocket, a video track capped at `fps` over WebRTC. `setFps(fps)` changes the rate while it runs — the sampling
-interval over a WebSocket, the track's frame rate and its cap over WebRTC; without a camera it throws.
+interval over a WebSocket, the track's frame rate and its cap over WebRTC; without a camera, or for
+an `fps` that is not positive, it throws a `SensesException`.
 
 `camera` is the video the client sends, from one source at a time: the camera, or the screen with
 `camera: { source: 'screen' }`. `shareScreen()` switches to the screen while it runs and
@@ -608,7 +610,7 @@ loop — pinned to one session and one cause:
 
 | tool | returns | offered when |
 | --- | --- | --- |
-| `look(frames)` | the frames as parts: `[Image, Text("frame at 12:03:04.200")]` | `video=True` |
+| `look(frames)` | the newest `frames`, 1 to 10, as parts: `[Image, Text("frame at 12:03:04.200")]` | `video=True` |
 | `say(text)` | `{"heard": …, "interrupted": …}` — text only; a streamed `say` is for code | the session has a voice |
 | `prompt(text)` | `{"said": …, "heard": …, "interrupted": …}` | live |
 | `inform(text)` | `"informed"` | live |
@@ -679,7 +681,8 @@ on a session already started; `say` or `interrupt` without a voice, `prompt` or 
 live model, `look` without `video=True`; a `window`, `window_bytes` or `tool_timeout` that is not
 positive. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
-audio frame whose bytes do not fill its samples, a tool called with bad arguments, an
+audio frame whose sample rate is not positive, whose channels are not one or two, or whose bytes
+do not fill its samples, a tool called with bad arguments, an
 identity whose fields do not fit, an empty scope given to `serve` or `accept_offer`, or a transport
 with an empty scope given to `Session`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
