@@ -72,6 +72,9 @@ class Run:
 
 
 class Engine:
+    def __init__(self) -> None:
+        self.given: dict[str, Any] = {}
+
     async def run(
         self,
         agent: str,
@@ -89,6 +92,8 @@ class Engine:
     def tool(
         self, agent: str, *, scope: str, name: str, description: str, tools: Any = None
     ) -> Tools:
+        self.given[name] = tools
+
         async def body(args: dict[str, Any]) -> str:
             return Run.reply
 
@@ -195,6 +200,16 @@ async def hang_up(links: list[Loopback]) -> None:
 
 @pytest.mark.parametrize("block", runnable())
 async def test_docs_example_runs(block: str) -> None:
+    await run(block)
+
+
+async def test_a_mind_inside_consult_is_given_look_and_inform_only() -> None:
+    namespace = await run(named("session = Session(link, live=live, video=True)"))
+    given = namespace["engine"].given["consult"]
+    assert [d["name"] for d in given.definitions()] == ["look", "inform"]
+
+
+async def run(block: str) -> dict[str, Any]:
     namespace, links = await context()
     if first_line(block) in SHOWN_A_FRAME:
         await links[0].show(JPEG)
@@ -215,6 +230,7 @@ async def test_docs_example_runs(block: str) -> None:
             ending.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await ending
+    return namespace
 
 
 async def test_a_mirror_posts_what_was_heard() -> None:

@@ -363,19 +363,21 @@ A live model in front for the conversation, an engine agent behind for the think
 
 ```python
 session = Session(link, live=live, video=True)
-consult = engine.tool("core", scope=session.scope, name="consult", description="Ask the reasoning mind.", tools=SensesTools(session, triggered_by=assistant))
+consult = engine.tool("core", scope=session.scope, name="consult", description="Ask the reasoning mind.", tools=SensesTools(session, triggered_by=assistant).only("look", "inform"))
 await session.start(tools=consult + ThreadTools(client, thread_id=thread, triggered_by=ana))
 ```
 
 The live model asks the engine agent with `consult` — rfnry-engine's `engine.tool`, an agent as a
 tool. The engine agent reaches the room through `SensesTools`, built before the session starts: it
 needs the session only when a tool is called, and the session needs `consult` only when it starts,
-so the circle closes in three lines. Through them `say` speaks the agent's words verbatim, `prompt`
-has the live voice say it in its own words, `inform` keeps the live model current, and `look` shows
-it the camera directly. The same tools serve the agent when it acts first, passed to its own
-`engine.run`. The transcript both minds read is the thread, mirrored from
-`events()` ([Storage](#storage)). A persona, a floor policy or a mandate gate stays in your product,
-built on `mute`, `unmute`, `interrupt` and tools of your own.
+so the circle closes in three lines. Inside `consult` the agent gets `look`, which shows it the
+camera directly, and `inform`, which keeps the live model current; its reply is what the voice says.
+It gets no `prompt` or `say` there: the voice is waiting on that call, so a `prompt` or `say` from
+inside it reads as the person cutting in. Those two are for the agent acting on its own, outside a
+consult: the full `SensesTools`, passed to its own `engine.run`, where `say` speaks its words
+verbatim and `prompt` has the live voice say them in its own words. The transcript both minds read
+is the thread, mirrored from `events()` ([Storage](#storage)). A persona, a floor policy or a
+mandate gate stays in your product, built on `mute`, `unmute`, `interrupt` and tools of your own.
 
 ### Three ways to use the screen
 
@@ -385,9 +387,9 @@ three; only the session around it changes.
 **Two minds.** A live model watches continuously, frames streaming at `fps`, and holds the
 conversation; for anything that needs thought it asks the engine agent through `consult`. The agent
 looks at the screen itself with `look` from its `SensesTools` — the same current frame, as an image,
-never the live model's description of it — and answers through the live voice with `say` or
-`prompt`, or keeps it current with `inform`. Best for fluid help while the person works; the live
-model is billed for every frame it watches.
+never the live model's description of it — and its reply is what the live voice says; `inform`
+keeps the voice current. Best for fluid help while the person works; the live model is billed for
+every frame it watches.
 
 **Cascaded, one mind.** Transcription, then an engine agent on a strong model, then speech; the
 agent calls `look` when it needs to see. Turns take seconds and nothing watches between them, but
