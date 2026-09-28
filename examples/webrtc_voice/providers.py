@@ -311,6 +311,11 @@ class GoogleLiveConnection:
     def _quiet(self) -> bool:
         return not self.responding and not self.names
 
+    def _end_heard(self, events: list[LiveEvent]) -> None:
+        if self.heard.strip():
+            events.append(LiveHeard(text=self.heard.strip(), final=True))
+        self.heard = ""
+
     def _events(self, message: Any) -> list[LiveEvent]:
         events: list[LiveEvent] = []
         update = message.session_resumption_update
@@ -318,8 +323,12 @@ class GoogleLiveConnection:
             self.handle = update.new_handle
         if message.go_away is not None:
             self.leaving = True
+        if message.tool_call_cancellation is not None:
+            for call_id in message.tool_call_cancellation.ids or []:
+                self.names.pop(call_id, None)
         content = message.server_content
         if message.tool_call is not None:
+            self._end_heard(events)
             for call in message.tool_call.function_calls or []:
                 self.names[call.id] = call.name
                 events.append(
@@ -328,14 +337,14 @@ class GoogleLiveConnection:
         if content is None:
             return events
         if content.input_transcription is not None and content.input_transcription.text:
-            self.heard += content.input_transcription.text
+            piece = content.input_transcription.text
+            apart = self.heard and not self.heard[-1].isspace() and not piece[0].isspace()
+            self.heard += " " + piece if apart else piece
             events.append(LiveHeard(text=self.heard, final=False))
         speaking = content.output_transcription is not None or content.model_turn is not None
         if speaking and not self.responding:
             self.responding = True
-            if self.heard.strip():
-                events.append(LiveHeard(text=self.heard.strip(), final=True))
-            self.heard = ""
+            self._end_heard(events)
             events.append(LiveStarted())
         if content.output_transcription is not None and content.output_transcription.text:
             events.append(LiveSaid(text=content.output_transcription.text))
