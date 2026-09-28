@@ -365,10 +365,10 @@ has `triggered_by=None`. The client receives every event except `Informed` and `
 are between you and the model.
 
 Every identity the library takes — `serve`, `accept_offer`, `Loopback`, a transport's `identity`,
-each verb's `triggered_by=`, `SensesTools(triggered_by=)` — is read by its fields: any object with
-`role`, `id`, `name` and `metadata` will do, such as rfnry-thread's `Identity`, which has the same
-source. The values are validated as strictly as an `Identity`'s; one that does not fit is an
-`InputError`.
+each verb's `triggered_by=`, `SensesTools(triggered_by=)` — is an `IdentityLike`, read by its
+fields: any object with `role`, `id`, `name` and `metadata` will do, such as rfnry-thread's
+`Identity`, which has the same source. The values are validated as strictly as an `Identity`'s;
+one that does not fit is an `InputError`.
 
 ### Two minds
 
@@ -665,7 +665,7 @@ Everything the package exports, by role.
 - **What a session reports:** `Event`; `Heard`, `TurnEnded`, `Said`, `Interrupted`, `Speaking`, `Silent`, `Looked`, `Muted`, `Informed`, `ToolCalled`, `Closed`.
 - **Speak to models:** `LiveModel`, `LiveConnection`, `LiveEvent`, `LiveAudio`, `LiveHeard`, `LiveSaid`, `LiveStarted`, `LiveDone`, `LiveToolCall`, `LiveInterrupted`, `LiveFailed`; `TranscriptionModel`, `Transcription`, `Transcript`, `UtteranceEnd`; `SpeechModel`; `AudioFrame`; parts `Text`, `Image`, `Audio`, `Document`, `Part`, `Content`; `ToolSpec`.
 - **Give models tools:** `Tool`, `Tools`.
-- **Connect people:** `serve`, `Connection`, `Transport`, `Played`, `Loopback`, `Identity`; with the `webrtc` extra, `accept_offer` and `WebRTCTransport` from `rfnry_senses.webrtc`.
+- **Connect people:** `serve`, `Connection`, `Transport`, `Played`, `Loopback`, `Identity`, `IdentityLike`; with the `webrtc` extra, `accept_offer` and `WebRTCTransport` from `rfnry_senses.webrtc`.
 - **Fail loudly:** `SensesException`, `ConfigurationError`, `InputError`, `NotFoundError`, `ModelError`, `TransportError`.
 
 The TypeScript package exports `connect` and its `ConnectOptions`, with `CameraChoice` for the

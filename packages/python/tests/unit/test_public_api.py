@@ -4,7 +4,7 @@ import re
 import pytest
 
 import rfnry_senses
-from rfnry_senses import Session
+from rfnry_senses import Session, models
 
 EXPECTED = {
     "Session",
@@ -53,6 +53,7 @@ EXPECTED = {
     "Played",
     "Loopback",
     "Identity",
+    "IdentityLike",
     "SensesException",
     "ConfigurationError",
     "InputError",
@@ -81,6 +82,13 @@ def test_the_session_has_exactly_its_verbs() -> None:
         "events",
         "close",
     }
+
+
+def test_the_identity_the_verbs_take_is_exported() -> None:
+    assert rfnry_senses.IdentityLike is models.IdentityLike
+    for verb in ("say", "prompt", "inform", "interrupt", "mute", "unmute", "look"):
+        cause = inspect.signature(getattr(Session, verb)).parameters["triggered_by"]
+        assert cause.annotation == "IdentityLike"
 
 
 def test_serve_returns_a_type_the_package_exports() -> None:

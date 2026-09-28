@@ -796,7 +796,23 @@ class Identity(BaseModel):
     metadata: dict[str, Any] = {}
 ```
 
-Who is speaking or who caused something, the family's shared block. Every identity the library takes is read by these fields, so any object that has them will do; a verb given one whose fields do not fit raises `InputError`.
+Who is speaking or who caused something, the family's shared block. Every identity the library takes is an `IdentityLike`, read by these fields, and it comes back as an `Identity`.
+
+### `IdentityLike`
+
+```python
+class IdentityLike(Protocol):
+    @property
+    def role(self) -> Literal["user", "assistant", "system"]: ...
+    @property
+    def id(self) -> str: ...
+    @property
+    def name(self) -> str | None: ...
+    @property
+    def metadata(self) -> dict[str, Any]: ...
+```
+
+What everything that takes an identity accepts: `serve`, `accept_offer`, `Loopback`, a transport's `identity`, each verb's `triggered_by`, `SensesTools`. Any object with these four fields will do, such as an `Identity` or rfnry-thread's; its values are validated as strictly as an `Identity`'s, and one that does not fit raises `InputError` from the call that took it.
 
 ### `Text`
 
