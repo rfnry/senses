@@ -1,8 +1,10 @@
 import asyncio
 import base64
 import contextlib
+import io
 import os
 import re
+import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -363,7 +365,7 @@ class GoogleLiveConnection:
 
 
 class GoogleSpeech:
-    def __init__(self, model: str = "gemini-3.1-flash-tts-preview", voice: str = "Kore") -> None:
+    def __init__(self, model: str = "gemini-3.8-flash-tts", voice: str = "Kore") -> None:
         self.model = model
         self.voice = voice
         self.client = genai.Client(
@@ -389,8 +391,16 @@ class GoogleSpeech:
         audio = [part.inline_data for part in parts or [] if part.inline_data is not None]
         if not audio:
             raise RuntimeError("GoogleSpeech: the model returned no audio")
-        rate = int(re.search(r"rate=(\d+)", audio[0].mime_type or "").group(1))
-        data = b"".join(blob.data for blob in audio)
-        step = rate // 10 * 2
-        for start in range(0, len(data) - len(data) % 2, step):
-            yield AudioFrame(data=data[start : start + step], sample_rate=rate)
+        rate, channels, data = 24000, 1, b""
+        for blob in audio:
+            if (blob.mime_type or "").startswith("audio/wav"):
+                with wave.open(io.BytesIO(blob.data)) as wav:
+                    rate, channels = wav.getframerate(), wav.getnchannels()
+                    data += wav.readframes(wav.getnframes())
+            else:
+                rate = int(re.search(r"rate=(\d+)", blob.mime_type or "").group(1))
+                data += blob.data
+        data = data[: len(data) - len(data) % (2 * channels)]
+        step = rate // 10 * 2 * channels
+        for start in range(0, len(data), step):
+            yield AudioFrame(data=data[start : start + step], sample_rate=rate, channels=channels)
