@@ -6,7 +6,16 @@ from typing import Any
 
 import pytest
 
-from rfnry_senses.contracts import LiveDone, LiveFailed, LiveHeard, LiveToolCall
+from rfnry_senses.contracts import (
+    LiveAudio,
+    LiveDone,
+    LiveFailed,
+    LiveHeard,
+    LiveInterrupted,
+    LiveSaid,
+    LiveStarted,
+    LiveToolCall,
+)
 from rfnry_senses.errors import ConfigurationError, InputError, ModelError, TransportError
 from rfnry_senses.events import Closed, Heard, Informed, Said, Silent, Speaking, ToolCalled
 from rfnry_senses.models import Image, Text
@@ -341,3 +350,43 @@ async def test_start_refuses_tools_without_a_live_model_and_starts_once() -> Non
         assert live.opened["tools"] == []
     with pytest.raises(TransportError, match="^session: the session is closed$"):
         await s.start()
+
+
+def trailing_words() -> list[Any]:
+    return [
+        LiveStarted(),
+        LiveSaid(text="Good "),
+        LiveAudio(frame=pcm(100, 24000)),
+        LiveAudio(frame=pcm(100, 24000)),
+        LiveSaid(text="morning."),
+        LiveDone(),
+    ]
+
+
+async def test_words_sent_after_the_last_audio_count_when_all_of_it_played() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        events = s.events()
+        live.connection.emit(*trailing_words())
+        said = await next_of(events, Said)
+    assert said.heard == "Good morning." and not said.interrupted
+
+
+async def test_a_partial_report_still_cuts_by_time() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 100)
+    async with session(link, live) as s:
+        events = s.events()
+        live.connection.emit(*trailing_words())
+        said = await next_of(events, Said)
+    assert said.heard == "Good "
+
+
+async def test_a_cut_still_cuts_by_time_when_words_run_ahead_of_the_audio() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 200)
+    async with session(link, live) as s:
+        events = s.events()
+        live.connection.emit(*trailing_words()[:-1])
+        await until(lambda: len(link.audio) == 2)
+        live.connection.emit(LiveInterrupted())
+        said = await next_of(events, Said)
+    assert said.heard == "Good " and said.interrupted

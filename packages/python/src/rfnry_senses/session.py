@@ -532,7 +532,9 @@ class Session:
             return
         if self._utterance is u:
             self._utterance = None
-        await self._finish(u, u.ledger.heard(played) if u.spoke else "", interrupted=False)
+        whole = played > 0 and played + 1 >= u.ledger.sent_ms
+        heard = u.ledger.heard(None if whole else played) if u.spoke else ""
+        await self._finish(u, heard, interrupted=False)
 
     async def _await_played(self, u: Utterance, timeout: float, fallback: float | None) -> float:
         future = self._played.get(u.number)
