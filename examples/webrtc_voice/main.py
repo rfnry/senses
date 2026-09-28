@@ -39,6 +39,7 @@ consult = engine.tool(
     description="Look up tonight's tables, hours and the terrace.",
 )
 answered = asyncio.Event()
+tasks: set[asyncio.Task[None]] = set()
 
 
 async def converse(link: Transport) -> None:
@@ -77,7 +78,9 @@ async def page() -> HTMLResponse:
 @app.post("/senses/offer")
 async def offer(body: dict, guest: Identity = Depends(signed_in)) -> dict:
     link = await accept_offer(body["sdp"], identity=guest, scope="acme")
-    asyncio.create_task(converse(link))
+    task = asyncio.create_task(converse(link))
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
     return {"sdp": link.answer}
 
 
@@ -136,7 +139,9 @@ async def headless() -> None:
                 while True:
                     await track.recv()
 
-        asyncio.create_task(collect())
+        task = asyncio.create_task(collect())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     await pc.setLocalDescription(await pc.createOffer())
     async with httpx.AsyncClient() as http:

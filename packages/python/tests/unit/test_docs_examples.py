@@ -35,7 +35,7 @@ def named(start: str) -> str:
 ILLUSTRATIVE = {
     '@app.websocket("/senses")': "needs a web framework; the integration tier runs it through FastAPI",
     "class Socket:": "pinned against tests/integration/socket_adapter.py",
-    '@app.post("/senses/offer")': "needs a web framework and a peer; the webrtc tier runs accept_offer",
+    "tasks: set[asyncio.Task[None]] = set()": "needs a web framework and a peer; the webrtc tier runs accept_offer",
 }
 
 SIGNATURES = {

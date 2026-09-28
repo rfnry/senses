@@ -461,15 +461,22 @@ the signalling endpoint — your own HTTP endpoint, authenticated like any other
 its offer to it, and `accept_offer` answers it for the person and scope you name:
 
 ```python
+tasks: set[asyncio.Task[None]] = set()
+
+
 @app.post("/senses/offer")
 async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
     link = await accept_offer(body["sdp"], identity=user.identity, scope=user.org)
-    asyncio.create_task(converse(link))
+    task = asyncio.create_task(converse(link))
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
     return {"sdp": link.answer}
 ```
 
 `accept_offer` lives in `rfnry_senses.webrtc` and returns a `WebRTCTransport`; `converse` is the
-same function the WebSocket endpoint runs over its `link`. The client sends its hello on the data
+same function the WebSocket endpoint runs over its `link`. The endpoint keeps each conversation's
+task in `tasks` until it ends, since the event loop holds a task only weakly and one nobody
+references can be collected mid-conversation. The client sends its hello on the data
 channel, and a refused one ends the transport. The inbound audio is resampled to
 `sample_rate` (16 kHz) and camera frames are encoded to JPEG at the client's rate, inside the extra.
 `ice_servers=` takes STUN and TURN servers in the shape of the browser's `iceServers`.
