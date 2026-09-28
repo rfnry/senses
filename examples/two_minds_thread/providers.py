@@ -1,4 +1,6 @@
+import asyncio
 import base64
+import contextlib
 import os
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -194,31 +196,56 @@ class GoogleLive:
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=self.voice)
                 )
             ),
+            context_window_compression=types.ContextWindowCompressionConfig(
+                sliding_window=types.SlidingWindow()
+            ),
         )
-        context = self.client.aio.live.connect(model=self.model, config=config)
-        return GoogleLiveConnection(context, await context.__aenter__())
+        connection = GoogleLiveConnection(self.client, self.model, config)
+        await connection.connect()
+        return connection
 
 
 class GoogleLiveConnection:
-    def __init__(self, context: Any, session: Any) -> None:
-        self.context = context
-        self.session = session
+    def __init__(self, client: Any, model: str, config: types.LiveConnectConfig) -> None:
+        self.client = client
+        self.model = model
+        self.config = config
+        self.context: Any = None
+        self.session: Any = None
+        self.handle: str | None = None
+        self.leaving = False
+        self.fresh = True
+        self.swapped = asyncio.Condition()
         self.names: dict[str, str] = {}
         self.responding = False
         self.heard = ""
 
+    async def connect(self) -> None:
+        resumption = types.SessionResumptionConfig(handle=self.handle)
+        config = self.config.model_copy(update={"session_resumption": resumption})
+        context = self.client.aio.live.connect(model=self.model, config=config)
+        session = await context.__aenter__()
+        previous = self.context
+        self.context, self.session, self.leaving, self.fresh = context, session, False, True
+        async with self.swapped:
+            self.swapped.notify_all()
+        if previous is not None:
+            with contextlib.suppress(Exception):
+                await previous.__aexit__(None, None, None)
+
     async def send_audio(self, frame: AudioFrame) -> None:
         blob = types.Blob(data=frame.data, mime_type=f"audio/pcm;rate={frame.sample_rate}")
-        await self.session.send_realtime_input(audio=blob)
+        await self._send(lambda session: session.send_realtime_input(audio=blob))
 
     async def send_image(self, image: Image) -> None:
-        await self.session.send_realtime_input(
-            video=types.Blob(data=image.data, mime_type="image/jpeg")
-        )
+        blob = types.Blob(data=image.data, mime_type="image/jpeg")
+        await self._send(lambda session: session.send_realtime_input(video=blob))
 
     async def send_text(self, text: str, *, respond: bool) -> None:
         turn = types.Content(role="user", parts=[types.Part(text=text)])
-        await self.session.send_client_content(turns=turn, turn_complete=respond)
+        await self._send(
+            lambda session: session.send_client_content(turns=turn, turn_complete=respond)
+        )
 
     async def say(self, text: str) -> None:
         await self.send_text(f"Say exactly this, nothing else: {text}", respond=True)
@@ -229,31 +256,68 @@ class GoogleLiveConnection:
         )
 
     async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None:
+        if call_id not in self.names:
+            return
         text = (
             result
             if isinstance(result, str)
             else " ".join(p.text for p in result if hasattr(p, "text"))
         )
         response = {"error": text} if is_error else {"result": text}
-        name = self.names.pop(call_id, "")
-        await self.session.send_tool_response(
-            function_responses=[types.FunctionResponse(id=call_id, name=name, response=response)]
-        )
+        answer = types.FunctionResponse(id=call_id, name=self.names.pop(call_id), response=response)
+        await self._send(lambda session: session.send_tool_response(function_responses=[answer]))
 
     async def events(self) -> AsyncIterator[LiveEvent]:
-        try:
-            while True:
+        while True:
+            try:
                 async for message in self.session.receive():
+                    self.fresh = False
                     for event in self._events(message):
                         yield event
-        except Exception as exc:
-            yield LiveFailed(message=str(exc))
+                    if self.leaving and self._quiet():
+                        break
+                if not (self.leaving and self._quiet()):
+                    continue
+            except Exception as exc:
+                if self.fresh or self.handle is None:
+                    yield LiveFailed(message=str(exc))
+                    return
+            try:
+                await self.connect()
+            except Exception as exc:
+                yield LiveFailed(message=str(exc))
+                return
+            self.names.clear()
+            if self.responding:
+                self.responding = False
+                yield LiveDone()
 
     async def close(self) -> None:
         await self.context.__aexit__(None, None, None)
 
+    async def _send(self, send: Callable[[Any], Awaitable[None]]) -> None:
+        session = self.session
+        try:
+            await send(session)
+        except Exception:
+            if self.handle is None:
+                raise
+            async with self.swapped:
+                await asyncio.wait_for(
+                    self.swapped.wait_for(lambda: self.session is not session), 10
+                )
+            await send(self.session)
+
+    def _quiet(self) -> bool:
+        return not self.responding and not self.names
+
     def _events(self, message: Any) -> list[LiveEvent]:
         events: list[LiveEvent] = []
+        update = message.session_resumption_update
+        if update is not None and update.resumable and update.new_handle:
+            self.handle = update.new_handle
+        if message.go_away is not None:
+            self.leaving = True
         content = message.server_content
         if message.tool_call is not None:
             for call in message.tool_call.function_calls or []:
