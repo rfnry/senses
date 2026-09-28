@@ -277,7 +277,7 @@ time since it began to play, after anything queued ahead of it — after a quart
 interruption never waits on a silent client. A live model whose vendor cannot cut its context raises from `interrupt`; senses logs that
 as a warning and goes on — the voice is already stopped.
 
-Your code can do the same:
+Your code can cut the voice too, or close the gate on it:
 
 ```python
 cut = await session.interrupt(triggered_by=host)     # Interrupted(heard=...), or None when silent
@@ -285,11 +285,13 @@ await session.mute(triggered_by=host)                # nothing reaches the perso
 await session.unmute(triggered_by=host)
 ```
 
-`mute` is the output gate: while muted, no audio reaches the person, and anything being said is
-stopped and cut as an interruption would be. A `say` or `prompt` while muted returns at once with
-nothing heard, and a response a live model starts on its own is cut before a word of it plays. The
-session still hears and sees. A product's floor policy or mandate gate is built on these two
-verbs.
+`interrupt` stops what is playing and cuts it to what the person heard, and ends nothing else:
+unlike the person cutting in, it leaves the `say` and `prompt` calls queued behind it, and they play
+next. `mute` is the output gate: while muted, no audio reaches the person. It stops and cuts
+anything being said, and it ends the calls queued behind it with nothing heard. A `say` or `prompt`
+while muted returns at once with nothing heard, and a response a live model starts while muted is
+cut before a word of it plays. The session still hears and sees. A product's floor policy or mandate
+gate is built on these two verbs.
 
 ### Seeing
 
