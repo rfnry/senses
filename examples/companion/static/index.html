@@ -24,7 +24,7 @@
         senses.subscribe((event) => {
           if (event.kind === 'heard' && event.final) show(event.speaker.name, event.text)
           if (event.kind === 'looked') show('mind', 'looked')
-          if (event.kind === 'said') show('companion', event.heard)
+          if (event.kind === 'said' && event.heard) show('companion', event.heard)
           if (event.kind === 'status') show('line', event.status)
           if (event.kind === 'video') {
             show('line', event.source === null ? 'no video' : `sending the ${event.source}`)

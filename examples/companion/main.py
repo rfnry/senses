@@ -47,7 +47,7 @@ async def companion(link: Transport) -> Session:
         scope=link.scope,
         name="consult",
         description="Ask the mind behind you. It sees what you see: the camera or the screen.",
-        tools=SensesTools(session, triggered_by=MIND),
+        tools=SensesTools(session, triggered_by=MIND).only("look", "inform"),
     )
     await session.start(tools=consult)
     return session
