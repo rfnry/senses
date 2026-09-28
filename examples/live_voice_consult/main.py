@@ -3,6 +3,7 @@ import asyncio
 from rfnry_engine import Engine
 from rfnry_senses import (
     AudioFrame,
+    Closed,
     Heard,
     Identity,
     Informed,
@@ -45,6 +46,8 @@ async def narrate(session: Session, said: asyncio.Queue[Said]) -> None:
             case Said(text=text, heard=heard, triggered_by=cause):
                 print(f"said     {heard or text!r} (caused by {cause.name if cause else 'nobody'})")
                 said.put_nowait(event)
+            case Closed(reason=reason, message=message):
+                print(f"closed   {reason}: {message}")
 
 
 async def guest_says(link: Loopback, text: str) -> None:

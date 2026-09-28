@@ -26,6 +26,7 @@
           if (event.kind === 'looked') show('mind', 'looked')
           if (event.kind === 'said' && event.heard) show('companion', event.heard)
           if (event.kind === 'status') show('line', event.status)
+          if (event.kind === 'closed') show('line', `${event.reason}${event.message ? `: ${event.message}` : ''}`)
           if (event.kind === 'video') {
             show('line', event.source === null ? 'no video' : `sending the ${event.source}`)
             screen.hidden = event.source === 'screen'

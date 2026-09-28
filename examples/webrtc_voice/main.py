@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from rfnry_engine import Engine
-from rfnry_senses import Heard, Identity, Said, Session, ToolCalled, Transport
+from rfnry_senses import Closed, Heard, Identity, Said, Session, ToolCalled, Transport
 from rfnry_senses.webrtc import accept_offer
 
 from providers import AnthropicProvider, GoogleLive, GoogleSpeech
@@ -55,6 +55,8 @@ async def converse(link: Transport) -> None:
                 case Said(heard=heard, interrupted=interrupted):
                     print(f"said     {heard!r} interrupted={interrupted}")
                     answered.set()
+                case Closed(reason=reason, message=message):
+                    print(f"closed   {reason}: {message}")
 
 
 def signed_in(request: Request) -> Identity:

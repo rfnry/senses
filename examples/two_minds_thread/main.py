@@ -1,7 +1,7 @@
 import asyncio
 
 from rfnry_engine import Engine
-from rfnry_senses import AudioFrame, Heard, Identity, Loopback, Said, SensesTools, Session
+from rfnry_senses import AudioFrame, Closed, Heard, Identity, Loopback, Said, SensesTools, Session
 from rfnry_thread import InMemoryStorage, Message, Server, ThreadTools, resolve
 
 from providers import AnthropicProvider, GoogleLive, GoogleSpeech
@@ -27,6 +27,8 @@ async def mirror(session: Session, post, said: asyncio.Queue[Said]) -> None:
                 print(f"said  {heard!r} (caused by {cause.name if cause else 'nobody'})")
                 await post(CONCIERGE, heard)
                 said.put_nowait(event)
+            case Closed(reason=reason, message=message):
+                print(f"closed {reason}: {message}")
 
 
 async def guest_says(link: Loopback, text: str) -> None:

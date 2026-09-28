@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from rfnry_engine import Engine
 from rfnry_senses import (
     AudioFrame,
+    Closed,
     Heard,
     Identity,
     Informed,
@@ -70,6 +71,8 @@ async def narrate(session: Session, answered: asyncio.Event) -> None:
                 print(f"said     {heard or text!r} (caused by {cause.name if cause else 'nobody'})")
                 if consulted:
                     answered.set()
+            case Closed(reason=reason, message=message):
+                print(f"closed   {reason}: {message}")
 
 
 voice = GoogleSpeech(voice="Puck")

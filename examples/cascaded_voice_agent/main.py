@@ -75,8 +75,8 @@ async def converse(link: Transport, replies: int | None = None) -> None:
                     replies = None if replies is None else replies - 1
                     if replies == 0:
                         return
-                case Closed(reason=reason):
-                    print(f"closed {reason}")
+                case Closed(reason=reason, message=message):
+                    print(f"closed {reason}: {message}")
 
 
 async def guest_says(link: Loopback, text: str) -> None:
