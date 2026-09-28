@@ -55,7 +55,6 @@ async def companion(link: Transport) -> Session:
 
 
 async def narrate(session: Session, answered: asyncio.Event) -> None:
-    consulted = False
     async for event in session.events():
         match event:
             case Heard(final=True, text=text):
@@ -64,12 +63,11 @@ async def narrate(session: Session, answered: asyncio.Event) -> None:
                 print(f"looked   {frames} frame(s), by {cause.name}")
             case ToolCalled(name=name, input=args, output=output):
                 print(f"{name}  {args.get('input')!r} -> {output!r}")
-                consulted = True
             case Informed(text=text, triggered_by=cause):
                 print(f"informed {text!r}, by {cause.name}")
             case Said(text=text, heard=heard, triggered_by=cause):
                 print(f"said     {heard or text!r} (caused by {cause.name if cause else 'nobody'})")
-                if consulted:
+                if heard:
                     answered.set()
             case Closed(reason=reason, message=message):
                 print(f"closed   {reason}: {message}")
