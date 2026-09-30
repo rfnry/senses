@@ -3,9 +3,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from rfnry_senses import Identity, serve
+from rfnry_senses import Identity
 
-import harness
+import server
 
 PAGE = Path(__file__).resolve().parent.parent / "static" / "index.html"
 ORIGIN = "http://localhost:8000"
@@ -45,13 +45,11 @@ async def senses(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
     await ws.accept()
-    link = await serve(Socket(ws), identity=AVERY, scope="firm-acme")
-    if link is not None:
-        await harness.share(link)
+    await server.share(Socket(ws), identity=AVERY, scope="firm-acme")
 
 
 @router.post("/ask")
 async def ask(body: Ask) -> dict:
-    if not harness.screens:
+    if not server.screens:
         raise HTTPException(409, "no screen is shared")
-    return await harness.run(body.question)
+    return await server.ask(body.question)

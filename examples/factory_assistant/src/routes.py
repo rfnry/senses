@@ -2,9 +2,9 @@ from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from rfnry_senses import Identity, serve
+from rfnry_senses import Identity
 
-import harness
+import server
 
 PAGE = Path(__file__).resolve().parent.parent / "static" / "index.html"
 ORIGIN = "http://localhost:8000"
@@ -40,6 +40,4 @@ async def senses(ws: WebSocket) -> None:
         await ws.close(code=1008)
         return
     await ws.accept()
-    link = await serve(Socket(ws), identity=ALEX, scope="plant-reno")
-    if link is not None:
-        await harness.converse(link)
+    await server.converse(Socket(ws), identity=ALEX, scope="plant-reno")

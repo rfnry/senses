@@ -2,7 +2,7 @@
 
 ## Description
 
-A contract reviewer for the firm's lawyers: the lawyer shares a window and asks about it over REST. The one feature is the screen — a video-only session, with no audio models, holds the shared frames, and the reviewer agent looks at them when `/ask` runs it. Look at `Session(link, video=True)`, `SensesTools(screen, triggered_by=).only("look")` and `engine.run(..., tools=eyes)` in `src/harness.py`.
+A contract reviewer for the firm's lawyers: the lawyer shares a window and asks about it over REST. The one feature is the screen — a video-only session, with no audio models, holds the shared frames, and the reviewer agent looks at them when `/ask` runs it. Look at `Session(link, video=True)` and `SensesTools(screen, triggered_by=)` in `src/server.py`, and `engine.run(..., tools=senses.only("look"))` in `src/harness.py`.
 
 ## Running
 
