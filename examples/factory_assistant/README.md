@@ -1,3 +1,9 @@
+# factory_assistant
+
+## Description
+
+Acme Plastics' maintenance assistant, spoken to by a technician on the floor with the camera on: a cascaded session around the engine's maintenance agent. The one feature is seeing — the agent looks through the camera only when it has a reason to, with the `look` tool. Look at `Session(..., video=True)`, `SensesTools(session, triggered_by=).only("look")` and `engine.run(..., tools=eyes)` in `src/harness.py`.
+
 ## Running
 
 ```bash

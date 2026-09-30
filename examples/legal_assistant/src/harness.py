@@ -22,8 +22,8 @@ async def share(link: Transport) -> None:
             screens.remove(screen)
 
 
-async def ask(question: str) -> dict:
+async def run(question: str) -> dict:
     screen = screens[-1]
     eyes = SensesTools(screen, triggered_by=REVIEWER).only("look")
-    run = await engine.run("reviewer", scope=screen.scope, input=question, tools=eyes)
-    return {"reply": run.reply, "run_id": run.run_id}
+    engine_run = await engine.run("reviewer", scope=screen.scope, input=question, tools=eyes)
+    return {"reply": engine_run.reply, "run_id": engine_run.run_id}

@@ -1,3 +1,9 @@
+# personal_assistant
+
+## Description
+
+Jordan's personal assistant, spoken to with the camera on. The one feature is two minds: a live model that hears, sees and speaks natively holds the conversation, and asks an engine agent behind it through a `consult` tool, which can `look` at the camera and `inform` the voice. Look at `Session(link, live=, video=True, instructions=)`, `engine.tool(...)` with `SensesTools(session, triggered_by=).only("look", "inform")`, and `session.start(tools=consult)` in `src/harness.py`.
+
 ## Running
 
 ```bash

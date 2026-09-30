@@ -24,7 +24,7 @@ async def converse(link: Transport) -> None:
         async for event in session.events():
             if not isinstance(event, TurnEnded):
                 continue
-            words = reply(event.text, session.scope, history)
+            words = run_stream(event.text, session.scope, history)
             try:
                 said = await session.say(words, triggered_by=event.speaker)
             except TransportError:
@@ -34,7 +34,7 @@ async def converse(link: Transport) -> None:
                 history.append(Message(role="assistant", content=said.heard))
 
 
-async def reply(question: str, scope: str, history: list[Message]) -> AsyncIterator[str]:
+async def run_stream(question: str, scope: str, history: list[Message]) -> AsyncIterator[str]:
     deltas: asyncio.Queue[str | None] = asyncio.Queue()
 
     async def on_event(event: Event) -> None:

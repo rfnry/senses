@@ -1,7 +1,15 @@
 from pathlib import Path
 
 from rfnry_engine import Engine, Message
-from rfnry_senses import Identity, SensesTools, Session, Transport, TransportError, TurnEnded
+from rfnry_senses import (
+    Identity,
+    SensesTools,
+    Session,
+    Tools,
+    Transport,
+    TransportError,
+    TurnEnded,
+)
 
 from providers import AnthropicProvider, GoogleSpeech, OpenAIProvider
 
@@ -21,18 +29,18 @@ async def converse(link: Transport) -> None:
         async for event in session.events():
             if not isinstance(event, TurnEnded):
                 continue
-            run = await engine.run(
-                "maintenance",
-                scope=session.scope,
-                input=event.text,
-                history=history,
-                context=PLANT,
-                tools=eyes,
-            )
+            reply = await run(event.text, session.scope, history, eyes)
             try:
-                said = await session.say(run.reply, triggered_by=event.speaker)
+                said = await session.say(reply, triggered_by=event.speaker)
             except TransportError:
                 return
             history.append(Message(role="user", content=event.text))
             if said.heard:
                 history.append(Message(role="assistant", content=said.heard))
+
+
+async def run(question: str, scope: str, history: list[Message], eyes: Tools) -> str:
+    engine_run = await engine.run(
+        "maintenance", scope=scope, input=question, history=history, context=PLANT, tools=eyes
+    )
+    return engine_run.reply
