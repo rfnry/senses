@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Acme Clinic intake</title>
+  </head>
+  <body>
+    <button id="start">Start intake</button>
+    <button id="end" hidden>End</button>
+    <ul id="captions"></ul>
+    <script type="module">
+      import { connect } from '/client/index.js'
+
+      const start = document.getElementById('start')
+      const end = document.getElementById('end')
+      const captions = document.getElementById('captions')
+      const show = (who, text) => captions.append(Object.assign(document.createElement('li'), { textContent: `${who}: ${text}` }))
+
+      start.onclick = async () => {
+        const headers = { 'X-Tenant': 'clinic-northside' }
+        const senses = await connect({ url: '/senses/offer', transport: 'webrtc', headers })
+        end.onclick = () => senses.close()
+        senses.subscribe((event) => {
+          if (event.kind === 'heard' && event.final) show(event.speaker.name, event.text)
+          if (event.kind === 'said' && event.heard) show('intake', event.heard)
+          if (event.kind === 'status') [start.hidden, end.hidden] = [event.status === 'open', event.status !== 'open']
+        })
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Jordan's assistant</title>
+  </head>
+  <body>
+    <button id="start">Talk, with the camera on</button>
+    <button id="stop" hidden>Stop</button>
+    <ul id="captions"></ul>
+    <script type="module">
+      import { connect } from '/client/index.js'
+
+      const start = document.getElementById('start')
+      const stop = document.getElementById('stop')
+      const captions = document.getElementById('captions')
+      const show = (who, text) => captions.append(Object.assign(document.createElement('li'), { textContent: `${who}: ${text}` }))
+
+      start.onclick = async () => {
+        const senses = await connect({ url: `ws://${location.host}/senses`, transport: 'websocket', camera: { width: 1280 } })
+        stop.onclick = () => senses.close()
+        senses.subscribe((event) => {
+          if (event.kind === 'heard' && event.final) show(event.speaker.name, event.text)
+          if (event.kind === 'looked') show('assistant', 'looked at the camera')
+          if (event.kind === 'said' && event.heard) show('assistant', event.heard)
+          if (event.kind === 'status') [start.hidden, stop.hidden] = [event.status === 'open', event.status !== 'open']
+        })
+      }
+    </script>
+  </body>
+</html>

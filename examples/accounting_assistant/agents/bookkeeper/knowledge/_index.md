@@ -1,0 +1,1 @@
+- knowledge/ledger.csv — the client's ledger for September: one row per transaction

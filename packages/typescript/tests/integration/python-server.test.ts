@@ -7,7 +7,7 @@ import type { AudioOut, SensesEvent, ServerControl } from '../../src/wire'
 import { Context } from '../fakes'
 
 const PYTHON = join(import.meta.dirname, '../../../python')
-const EXAMPLE = join(PYTHON, '../../examples/cascaded_voice_agent')
+const EXAMPLE = join(PYTHON, '../../examples/customer_assistant')
 const KEYS = join(PYTHON, '../../../.env.examples')
 const LIVE = process.env.RFNRY_LIVE_ADAPTERS
 const hasUv = (() => {
