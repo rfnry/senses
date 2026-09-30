@@ -1,37 +1,13 @@
 import asyncio
 
-from rfnry_engine import Engine
-from rfnry_senses import (
-    AudioFrame,
-    Closed,
-    Heard,
-    Identity,
-    Informed,
-    Loopback,
-    Said,
-    Session,
-    ToolCalled,
-)
+from rfnry_senses import Closed, Heard, Identity, Informed, Loopback, Said, Session, ToolCalled
 
-from providers import AnthropicProvider, GoogleLive, GoogleSpeech
+from client import guest_says
+from harness import INSTRUCTIONS, consult
+from providers import GoogleLive
 
 ANA = Identity(role="user", id="ana", name="Ana")
 HOST = Identity(role="assistant", id="host", name="Host")
-INSTRUCTIONS = (
-    "You are the voice concierge of the Acme bistro. Keep every answer to one short sentence. "
-    "You know nothing about tonight yourself: for any question about tables, hours or the "
-    "terrace, call the consult tool first and answer from what it says, in your own words, as "
-    "your own knowledge. Never mention the tool or anyone behind you."
-)
-
-engine = Engine("agents", generation=AnthropicProvider())
-consult = engine.tool(
-    "core",
-    scope="acme",
-    name="consult",
-    description="Look up tonight's tables, hours and the terrace.",
-)
-voice = GoogleSpeech(voice="Puck")
 
 
 async def narrate(session: Session, said: asyncio.Queue[Said]) -> None:
@@ -48,15 +24,6 @@ async def narrate(session: Session, said: asyncio.Queue[Said]) -> None:
                 said.put_nowait(event)
             case Closed(reason=reason, message=message):
                 print(f"closed   {reason}: {message}")
-
-
-async def guest_says(link: Loopback, text: str) -> None:
-    async for frame in voice.speak(text):
-        await link.speak(frame)
-        await asyncio.sleep(frame.duration_ms / 1000)
-    for _ in range(20):
-        await link.speak(AudioFrame(data=bytes(4800), sample_rate=24000))
-        await asyncio.sleep(0.1)
 
 
 async def main() -> None:

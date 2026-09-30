@@ -1,7 +1,29 @@
+import asyncio
 import math
 import struct
 
-WIDTH, HEIGHT = 320, 240
+from rfnry_senses import AudioFrame, Loopback
+
+from providers import GoogleSpeech
+
+voice = GoogleSpeech(voice="Puck")
+
+
+async def ana_says(link: Loopback, text: str) -> None:
+    async for frame in voice.speak(text):
+        await link.speak(frame)
+        await asyncio.sleep(frame.duration_ms / 1000)
+    for _ in range(20):
+        await link.speak(AudioFrame(data=bytes(4800), sample_rate=24000))
+        await asyncio.sleep(0.1)
+
+
+async def film(link: Loopback, frame: bytes) -> None:
+    while True:
+        await link.show(frame)
+        await asyncio.sleep(1)
+
+
 ZIGZAG = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5,
     12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28,
@@ -23,18 +45,18 @@ COSINES = [
     for u in range(8)
 ]
 
-WALL, WOOD = (225, 218, 205), (150, 105, 60)
-RED, BLUE, NAVY, YELLOW, GREEN = (
-    (200, 30, 35),
-    (35, 70, 170),
-    (20, 40, 110),
-    (245, 215, 50),
-    (90, 170, 50),
-)
-
 
 def scene() -> list[list[tuple[int, int, int]]]:
-    pixels = [[WALL if y < 96 else WOOD for _ in range(WIDTH)] for y in range(HEIGHT)]
+    width, height = 320, 240
+    wall, wood = (225, 218, 205), (150, 105, 60)
+    red, blue, navy, yellow, green = (
+        (200, 30, 35),
+        (35, 70, 170),
+        (20, 40, 110),
+        (245, 215, 50),
+        (90, 170, 50),
+    )
+    pixels = [[wall if y < 96 else wood for _ in range(width)] for y in range(height)]
 
     def rect(x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int]) -> None:
         for y in range(y0, y1):
@@ -46,12 +68,12 @@ def scene() -> list[list[tuple[int, int, int]]]:
                 if hole * hole <= (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
                     pixels[y][x] = color
 
-    disc(100, 150, 22, RED, hole=12)
-    rect(40, 110, 100, 190, RED)
-    rect(140, 130, 250, 210, BLUE)
-    rect(140, 130, 152, 210, NAVY)
-    rect(262, 108, 302, 148, YELLOW)
-    disc(284, 192, 22, GREEN)
+    disc(100, 150, 22, red, hole=12)
+    rect(40, 110, 100, 190, red)
+    rect(140, 130, 250, 210, blue)
+    rect(140, 130, 152, 210, navy)
+    rect(262, 108, 302, 148, yellow)
+    disc(284, 192, 22, green)
     return pixels
 
 
@@ -139,3 +161,81 @@ def encode(pixels: list[list[tuple[int, int, int]]]) -> bytes:
         + bits.flush()
         + b"\xff\xd9"
     )
+
+
+GLYPHS = {
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "I": ["01110", "00100", "00100", "00100", "00100", "00100", "01110"],
+    "L": ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+    "N": ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+    "O": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "P": ["11110", "10001", "10001", "11110", "10000", "10000", "10000"],
+    "S": ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+    "W": ["10001", "10001", "10001", "10101", "10101", "10101", "01010"],
+    " ": ["00000"] * 7,
+}
+
+
+def screen() -> bytes:
+    width, height = 480, 320
+    desktop, title, bar, tools, canvas = (
+        (70, 90, 110),
+        (45, 45, 50),
+        (232, 232, 235),
+        (60, 60, 66),
+        (250, 250, 250),
+    )
+    ink, white, grey, blue = (30, 30, 35), (255, 255, 255), (200, 200, 205), (30, 110, 230)
+    red, amber, green, orange, teal = (
+        (235, 90, 80),
+        (240, 190, 50),
+        (90, 190, 80),
+        (245, 140, 40),
+        (40, 160, 150),
+    )
+    pixels = [[desktop] * width for _ in range(height)]
+
+    def rect(x0: int, y0: int, x1: int, y1: int, color: tuple[int, int, int]) -> None:
+        for y in range(y0, y1):
+            pixels[y][x0:x1] = [color] * (x1 - x0)
+
+    def disc(cx: int, cy: int, r: int, color: tuple[int, int, int]) -> None:
+        for y in range(cy - r, cy + r + 1):
+            for x in range(cx - r, cx + r + 1):
+                if (x - cx) ** 2 + (y - cy) ** 2 <= r * r:
+                    pixels[y][x] = color
+
+    def write(x: int, y: int, text: str, color: tuple[int, int, int]) -> None:
+        for n, letter in enumerate(text):
+            for row, line in enumerate(GLYPHS[letter]):
+                for col, bit in enumerate(line):
+                    if bit == "1":
+                        rect(
+                            x + n * 12 + col * 2,
+                            y + row * 2,
+                            x + n * 12 + col * 2 + 2,
+                            y + row * 2 + 2,
+                            color,
+                        )
+
+    rect(8, 8, width - 8, height - 8, bar)
+    rect(8, 8, width - 8, 32, title)
+    for n, color in enumerate((red, amber, green)):
+        disc(22 + n * 16, 20, 5, color)
+    write(16, 44, "FILE  EDIT  VIEW", ink)
+    rect(318, 38, 384, 64, grey)
+    write(328, 44, "OPEN", ink)
+    rect(394, 38, 464, 64, blue)
+    write(405, 44, "SAVE", white)
+    rect(8, 72, 48, height - 8, tools)
+    for n in range(6):
+        rect(18, 84 + n * 32, 38, 104 + n * 32, grey)
+    rect(56, 72, width - 16, height - 16, canvas)
+    disc(170, 190, 60, orange)
+    rect(260, 130, 400, 270, teal)
+    return encode(pixels)

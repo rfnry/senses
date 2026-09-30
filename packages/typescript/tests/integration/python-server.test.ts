@@ -56,9 +56,9 @@ async function start(live: boolean): Promise<Server> {
 }
 
 function synthesize(text: string): { rate: number; pcm: Uint8Array } {
-  const script = `import asyncio, base64, live_adapters
+  const script = `import asyncio, base64, providers
 async def main():
-    frames = [f async for f in live_adapters.speech().speak(${JSON.stringify(text)})]
+    frames = [f async for f in providers.speech().speak(${JSON.stringify(text)})]
     print(frames[0].sample_rate, base64.b64encode(b"".join(f.data for f in frames)).decode())
 asyncio.run(main())`
   const out = execFileSync('uv', uv(true, 'python', '-c', script), {

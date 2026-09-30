@@ -535,3 +535,15 @@ class GoogleLiveConnection:
             self.responding = False
             events.append(LiveDone())
         return events
+
+
+def live() -> GoogleLive:
+    return GoogleLive()
+
+
+def transcription() -> OpenAIProvider:
+    return OpenAIProvider()
+
+
+def speech() -> GoogleSpeech:
+    return GoogleSpeech()
