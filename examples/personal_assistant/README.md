@@ -5,7 +5,7 @@ export ANTHROPIC_API_KEY=...
 export GOOGLE_API_KEY=...
 npm --prefix ../../packages/typescript install
 npm --prefix ../../packages/typescript run build
-uv run main.py
+uv run src/main.py
 ```
 
 ## Example

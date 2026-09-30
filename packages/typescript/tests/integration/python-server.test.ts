@@ -8,6 +8,7 @@ import { Context } from '../fakes'
 
 const PYTHON = join(import.meta.dirname, '../../../python')
 const EXAMPLE = join(PYTHON, '../../examples/customer_assistant')
+const PROVIDERS = join(EXAMPLE, 'src')
 const KEYS = join(PYTHON, '../../../.env.examples')
 const LIVE = process.env.RFNRY_LIVE_ADAPTERS
 const hasUv = (() => {
@@ -41,7 +42,7 @@ function waitFor(output: string[], pattern: RegExp, timeout = 30_000): Promise<R
 }
 
 async function start(live: boolean): Promise<Server> {
-  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONPATH: EXAMPLE }
+  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONPATH: PROVIDERS }
   if (!live) delete env.RFNRY_LIVE_ADAPTERS
   const child = spawn('uv', uv(live, 'python', 'tests/integration/serve_for_client.py', '0'), {
     cwd: PYTHON,
@@ -63,7 +64,7 @@ async def main():
 asyncio.run(main())`
   const out = execFileSync('uv', uv(true, 'python', '-c', script), {
     cwd: PYTHON,
-    env: { ...process.env, PYTHONPATH: EXAMPLE },
+    env: { ...process.env, PYTHONPATH: PROVIDERS },
     maxBuffer: 64 * 1024 * 1024,
   })
   const [rate, data] = String(out).trim().split('\n').at(-1)?.split(' ') ?? []
