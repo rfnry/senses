@@ -711,7 +711,7 @@ async def close(self) -> None: ...
 
 Sets `closed` and ends `inbound()`.
 
-## WebRTC, with the `webrtc` extra
+## WebRTC
 
 ### `accept_offer`
 
