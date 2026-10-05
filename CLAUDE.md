@@ -2,7 +2,9 @@
 
 ## Description
 
-rfnry-senses gives a model eyes, ears and a voice in real time. A **session** connects a person's microphone and camera to a model and the model's voice back to the person — live, with a model that hears and speaks natively, or cascaded, with transcription and speech models around any text model. The assistant is a first-class presence: it can speak first, look when it has a reason to, and be interrupted like anyone in a conversation; acting first and answering are the same API. A session is input and output only: it hears, sees, speaks and reports what happened, and never decides what to say — that loop lives outside it, reaching the rest of the family through the shared `Tools` shape.
+rfnry-senses provides vision and speech interfaces for human-machine interaction.
+
+It is the microphone, camera and voice between a person and a model — a model that hears and speaks natively, or transcription and speech models around any text model — and only that: it never decides what to say. The assistant is a participant, not a responder: it can speak first, look when it has a reason to, and be interrupted.
 
 It is a library, not a framework. The consumer brings the models, authentication, the signalling endpoint and any record they want to keep. The library stores nothing, never sees a credential, and never writes to disk. Tenancy is by construction: every session names its scope and every event carries it.
 

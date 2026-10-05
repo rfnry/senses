@@ -1,6 +1,11 @@
 # rfnry-senses
 
-rfnry-senses gives a model eyes, ears and a voice in real time.
+rfnry-senses provides vision and speech interfaces for human-machine interaction.
+
+It is the microphone, camera and voice between a person and a model — a model that hears and speaks
+natively, or transcription and speech models around any text model — and only that: it never decides
+what to say. The assistant is a participant, not a responder: it can speak first, look when it has a
+reason to, and be interrupted.
 
 A **session** connects a person's microphone and camera to a model, and the model's voice back to
 the person. It runs one of two ways. **Live**: a model that hears and speaks natively runs inside
