@@ -2,17 +2,15 @@
 
 ## Description
 
-rfnry-senses provides vision and speech interfaces for human-machine interaction.
-
-It is the microphone, camera and voice between a person and a model — a model that hears and speaks natively, or transcription and speech models around any text model — and only that: it never decides what to say. The assistant is a participant, not a responder: it can speak first, look when it has a reason to, and be interrupted.
+Vision and speech interfaces for human-machine interaction.
 
 It is a library, not a framework. The consumer brings the models, authentication, the signalling endpoint and any record they want to keep. The library stores nothing, never sees a credential, and never writes to disk. Tenancy is by construction: every session names its scope and every event carries it.
 
 ## Documentation
 
-`docs/senses.md` is the library's contract with its consumers: description, philosophy, every public verb, minimal examples. It documents the API as designed and is updated in the same change as any change to the public surface. It is also the complexity gauge: if a change makes the documentation harder to write or an example longer, the design is wrong — rework the change, not the docs. `docs/api.md` is the reference: every public name with its exact signature, what it returns and what it raises; a test keeps it in step with the code, and it changes in the same change as the public surface.
+Documentation in `docs/senses.md` and `docs/api.md`.
 
-Designs and implementation plans live only in `docs/plans/`, as `YYYY-MM-DD-<topic>-design.md` and `YYYY-MM-DD-<topic>-plan.md` — not in `docs/superpowers/`, not at the repo root. The folder is gitignored: plans are local working documents, not part of the library.
+Designs and implementation plans live only in `docs/plans/`, as `YYYY-MM-DD-<topic>-design.md` and `YYYY-MM-DD-<topic>-plan.md`. The folder is gitignored: plans are local working documents, not part of the library.
 
 ## Checklists
 
