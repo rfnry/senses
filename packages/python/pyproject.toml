@@ -10,6 +10,11 @@ dependencies = [
     "pydantic>=2.13.4",
 ]
 
+[project.urls]
+Repository = "https://github.com/rfnry/senses"
+Documentation = "https://github.com/rfnry/senses/blob/main/docs/senses.md"
+Issues = "https://github.com/rfnry/senses/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=9.1.1",

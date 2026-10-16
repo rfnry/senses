@@ -3,6 +3,13 @@
   "version": "0.1.0",
   "description": "Vision and speech interfaces for human-machine interaction",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rfnry/senses.git",
+    "directory": "packages/typescript"
+  },
+  "homepage": "https://github.com/rfnry/senses/blob/main/docs/senses.md",
+  "bugs": "https://github.com/rfnry/senses/issues",
   "type": "module",
   "exports": {
     ".": {
