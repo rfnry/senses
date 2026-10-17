@@ -28,7 +28,7 @@ class HearsHello:
         self.fed = 0
         self.inbox: asyncio.Queue[Transcript | UtteranceEnd | None] = asyncio.Queue()
 
-    def stream(self) -> "HearsHello":
+    def stream(self) -> HearsHello:
         return self
 
     async def feed(self, frame: AudioFrame) -> None:

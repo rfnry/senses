@@ -1,3 +1,4 @@
+import annotationlib
 import ast
 import dataclasses
 import inspect
@@ -15,6 +16,7 @@ from .test_docs import TYPESCRIPT, typescript_exports
 ROOT = Path(__file__).parents[4]
 API = ROOT / "docs" / "api.md"
 SRC = Path(rfnry_senses.__file__).parent
+SOURCE = annotationlib.Format.STRING
 PYTHON_PART, TYPESCRIPT_PART = API.read_text(encoding="utf-8").split("\n## TypeScript client\n")
 
 Shape = tuple[bool, bool, list[tuple[str, str, str | None, object]], str | None]
@@ -86,7 +88,7 @@ def value(node: ast.expr) -> object:
 def from_code(member: object) -> Shape:
     function = member.fget if isinstance(member, property) else member
     assert callable(function)
-    signature = inspect.signature(function)
+    signature = inspect.signature(function, annotation_format=SOURCE)
     return (
         isinstance(member, property),
         inspect.iscoroutinefunction(function) or inspect.isasyncgenfunction(function),
@@ -141,7 +143,7 @@ def declared(block: str, name: str) -> ast.stmt:
 def annotations(cls: type) -> dict[str, Any]:
     found: dict[str, Any] = {}
     for c in reversed(cls.__mro__):
-        found |= inspect.get_annotations(c)
+        found |= inspect.get_annotations(c, format=SOURCE)
     return found
 
 

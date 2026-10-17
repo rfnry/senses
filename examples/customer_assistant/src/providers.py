@@ -187,7 +187,7 @@ class OpenAIProvider:
         self.eagerness = eagerness
         self.key = os.environ["OPENAI_API_KEY"]
 
-    def stream(self) -> "OpenAIStream":
+    def stream(self) -> OpenAIStream:
         return OpenAIStream(self)
 
 
@@ -318,7 +318,7 @@ class GoogleLive:
 
     async def open(
         self, *, tools: list[ToolSpec], instructions: str | None
-    ) -> "GoogleLiveConnection":
+    ) -> GoogleLiveConnection:
         declarations = [
             types.FunctionDeclaration(
                 name=spec.name,

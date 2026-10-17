@@ -159,6 +159,8 @@ agent — decides what to say. `Socket` adapts FastAPI's socket in a few lines
 const senses = await connect({ url: 'wss://example.com/senses', transport: 'websocket' })
 ```
 
+The Python package needs Python 3.14 or later.
+
 ## Core features
 
 ### Live sessions

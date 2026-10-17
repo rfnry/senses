@@ -171,7 +171,7 @@ class OpenAIProvider:
         self.eagerness = eagerness
         self.key = os.environ["OPENAI_API_KEY"]
 
-    def stream(self) -> "OpenAIStream":
+    def stream(self) -> OpenAIStream:
         return OpenAIStream(self)
 
 

@@ -1,3 +1,4 @@
+import annotationlib
 import inspect
 import re
 
@@ -5,6 +6,8 @@ import pytest
 
 import rfnry_senses
 from rfnry_senses import Session, models
+
+SOURCE = annotationlib.Format.STRING
 
 EXPECTED = {
     "Session",
@@ -87,12 +90,14 @@ def test_the_session_has_exactly_its_verbs() -> None:
 def test_the_identity_the_verbs_take_is_exported() -> None:
     assert rfnry_senses.IdentityLike is models.IdentityLike
     for verb in ("say", "prompt", "inform", "interrupt", "mute", "unmute", "look"):
-        cause = inspect.signature(getattr(Session, verb)).parameters["triggered_by"]
+        cause = inspect.signature(getattr(Session, verb), annotation_format=SOURCE).parameters[
+            "triggered_by"
+        ]
         assert cause.annotation == "IdentityLike"
 
 
 def test_serve_returns_a_type_the_package_exports() -> None:
-    returned = inspect.signature(rfnry_senses.serve).return_annotation
+    returned = inspect.signature(rfnry_senses.serve, annotation_format=SOURCE).return_annotation
     assert set(re.findall(r"\w+", returned)) - {"None"} <= set(rfnry_senses.__all__)
 
 

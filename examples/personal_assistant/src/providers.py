@@ -179,7 +179,7 @@ class GoogleLive:
 
     async def open(
         self, *, tools: list[ToolSpec], instructions: str | None
-    ) -> "GoogleLiveConnection":
+    ) -> GoogleLiveConnection:
         declarations = [
             types.FunctionDeclaration(
                 name=spec.name,
