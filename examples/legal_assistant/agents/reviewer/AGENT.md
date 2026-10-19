@@ -1,5 +1,4 @@
 ---
-name: reviewer
 kind: generation
 description: Answers a law firm's lawyers about the contract on their shared screen, against the firm's playbook
 ---
