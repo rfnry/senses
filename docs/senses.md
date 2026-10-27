@@ -99,15 +99,23 @@ LiveFailed(message="connection lost")                     # the connection is ov
 ```
 
 `send_text(text, respond=True)` asks the model to answer now, in its own words; `respond=False`
-adds context without a reply, and `submit_result` takes the same switch for a tool's answer. `say(text)` speaks exactly those words. `interrupt(played_ms, heard=,
-response=)` stops what the model is saying and cuts its context to what the person heard: the
-response the cut landed in keeps `heard`, the first `played_ms` of its audio, and nothing it said
-after that response was heard. `response` is the `id` that response's `LiveStarted` carried, or
-`None`; an adapter whose vendor cannot cut its context by time tells the model `heard` in words. A connection
-implements every method; a vendor that cannot do one raises from its adapter, and the verb that
-needed it raises to its caller. There is no capability matrix. An adapter that can tell whether a
-response answers its own request says so with `requested`, and names the response with the vendor's
-`id`; one that cannot leaves both `None`.
+adds context without a reply, and `submit_result` takes the same switch for a tool's answer.
+`say(text)` speaks exactly those words. The text `send_text` and `say` carry is your code addressing
+the model — an instruction, a fact, a line to speak — whoever caused it: `triggered_by` names the
+cause, never a speaker, and the person reaches the model only as audio. An adapter sends it on the
+vendor's operator channel where there is one.
+
+`interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to
+what the person heard: the response the cut landed in keeps `heard`, the first `played_ms` of its
+audio, and nothing the model said after it was heard. `response` is the `id` that response's
+`LiveStarted` carried, or `None`; an adapter whose vendor cannot cut its context by time tells the
+model `heard` in words. An adapter that can tell whether a response answers its own request says so
+with `requested`, and names the response with the vendor's `id`; one that cannot leaves both `None`.
+
+The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
+said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
+to absorb. A connection implements every method; a vendor that cannot do one raises from its
+adapter, and the verb that needed it raises to its caller. There is no capability matrix.
 
 A transcription stream reports `Transcript(text, final)` — the running words of the current
 segment, then the segment committed — and `UtteranceEnd()` when the person stops talking.
@@ -557,7 +565,10 @@ and answers each utterance once, as the browser does — on its `silent`, or on 
 with a `Played`: all of it by default, what `played=` says, or nothing with `answer=False`. A telephone line, a meeting bot's bridge or
 a robot's microphone is a `Transport` of your own: an `identity`, a `scope`, `inbound()` yielding
 `AudioFrame`s, JPEG `Image`s and `Played` reports, `send_audio`, `send_control`, `clear_audio` and
-`close`.
+`close`. It answers each utterance once with a `Played`, as the client does; a far end that reports
+progress as it plays is counted by the transport, which answers at once. `clear_audio` drops only
+what the transport has not sent yet: a far end that buffers audio is told to flush when `stop`
+arrives.
 
 ### The TypeScript client
 

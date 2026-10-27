@@ -27,7 +27,7 @@ class LiveConnection(Protocol):
     async def close(self) -> None: ...
 ```
 
-One open live model. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`; `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
+One open live model. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`; `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
 
 ### `LiveEvent`
 
@@ -64,7 +64,7 @@ class LiveHeard(BaseModel):
     final: bool = False
 ```
 
-The person's words as the model hears them, partial or final. The session reports them as `Heard`; blank text is dropped.
+The person's words as the model hears them, partial or final. The session reports them as `Heard`; blank text is dropped. A final one comes before the `LiveToolCall` it led to.
 
 ### `LiveSaid`
 
@@ -130,7 +130,7 @@ class LiveFailed(BaseModel):
     message: str
 ```
 
-The connection is over. The session closes with reason `failed`, and a `say` or `prompt` waiting on it raises `ModelError`; an `events()` that simply ends does the same.
+The connection is over — only then: a vendor error that ends nothing is the adapter's to absorb. The session closes with reason `failed`, and a `say` or `prompt` waiting on it raises `ModelError`; an `events()` that simply ends does the same.
 
 ### `TranscriptionModel`
 
@@ -658,7 +658,7 @@ class Transport(Protocol):
     async def close(self) -> None: ...
 ```
 
-What a session runs on: the person, the scope, and a two-way link to them. `inbound()` yields the person's audio, JPEG camera frames and `Played` reports and ends when they leave; `clear_audio` drops audio not yet sent. `serve`, `accept_offer` and `Loopback` make one; a telephone line or a robot's microphone is one of your own.
+What a session runs on: the person, the scope, and a two-way link to them. `inbound()` yields the person's audio, JPEG camera frames and `Played` reports and ends when they leave; `clear_audio` drops audio not yet sent; stopping what the far end already has is the `stop` control frame, so a transport whose far end buffers audio flushes it when `stop` arrives. `serve`, `accept_offer` and `Loopback` make one; a telephone line or a robot's microphone is one of your own.
 
 ### `Played`
 
@@ -668,7 +668,7 @@ class Played(BaseModel):
     ms: int
 ```
 
-The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance.
+The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance. A transport that learns how much played as it goes keeps the count and answers with it at once.
 
 ### `Loopback`
 
