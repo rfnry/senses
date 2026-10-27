@@ -91,7 +91,7 @@ bracketed by `LiveStarted` and `LiveDone`; an adapter whose vendor has no such m
 LiveAudio(frame=frame)                                   # the model's voice
 LiveHeard(text="a table for", final=False)                # the person, as the model hears them
 LiveSaid(text="Booked for eight. ")                       # the model's own words, as it speaks them
-LiveStarted(), LiveDone()                                 # one response
+LiveStarted(id="r1", requested=True), LiveDone()          # one response: its id, and whether you asked for it
 LiveToolCall(call_id="c1", name="consult", args={"input": "Is the terrace open?"})
 LiveInterrupted()                                         # the model heard the person cut in
 LiveFailed(message="connection lost")                     # the connection is over
@@ -101,7 +101,9 @@ LiveFailed(message="connection lost")                     # the connection is ov
 adds context without a reply. `say(text)` speaks exactly those words. `interrupt(played_ms)` stops
 the current response and cuts the model's context to what the person heard. A connection
 implements every method; a vendor that cannot do one raises from its adapter, and the verb that
-needed it raises to its caller. There is no capability matrix.
+needed it raises to its caller. There is no capability matrix. An adapter that can tell whether a
+response answers its own request says so with `requested`, and names the response with the vendor's
+`id`; one that cannot leaves both `None`.
 
 A transcription stream reports `Transcript(text, final)` — the running words of the current
 segment, then the segment committed — and `UtteranceEnd()` when the person stops talking.
@@ -368,7 +370,8 @@ Every action leaves an event naming its cause. `Said.triggered_by` is the identi
 `say` or `prompt` that started the utterance. A live model's responses take their causes in order:
 each `say` and `prompt` joins a queue, each response the model starts takes the oldest, and a
 response started with the queue empty — the model answering what it heard, or speaking on its own —
-has `triggered_by=None`. The client receives every event except `Informed` and `ToolCalled`, which
+has `triggered_by=None`. So does one the adapter reports with `LiveStarted(requested=False)`, which
+the vendor started on its own while a request waited; the request keeps its place for the next. The client receives every event except `Informed` and `ToolCalled`, which
 are between you and the model.
 
 Every identity the library takes — `serve`, `accept_offer`, `Loopback`, a transport's `identity`,

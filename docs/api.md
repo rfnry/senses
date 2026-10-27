@@ -78,10 +78,11 @@ The model's own words as it speaks them, marked against its audio so a cut knows
 
 ```python
 class LiveStarted(BaseModel):
-    pass
+    id: str | None = None
+    requested: bool | None = None
 ```
 
-One response begins. It takes the oldest queued `say` or `prompt` as its cause, or none. The session fails with `ModelError` when a response starts before the last one is done.
+One response begins. `requested=False` says the vendor started it on its own, and it takes no cause; otherwise it takes the oldest `say` or `prompt` waiting for a response, or none. `None` is for an adapter that cannot tell. `id` is the vendor's id for the response, handed back to `interrupt`. The session fails with `ModelError` when a response starts before the last one is done.
 
 ### `LiveDone`
 

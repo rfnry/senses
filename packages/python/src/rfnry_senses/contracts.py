@@ -45,7 +45,8 @@ class LiveSaid(BaseModel):
 
 
 class LiveStarted(BaseModel):
-    pass
+    id: str | None = None
+    requested: bool | None = None
 
 
 class LiveDone(BaseModel):

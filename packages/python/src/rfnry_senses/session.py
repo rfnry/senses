@@ -100,6 +100,7 @@ class Utterance:
     finished: bool = False
     ledger: Ledger = field(default_factory=Ledger)
     source: str | AsyncIterator[str] = ""
+    response: str | None = None
 
 
 class Subscription:
@@ -470,7 +471,7 @@ class Session:
                         )
                     )
             elif isinstance(event, LiveStarted):
-                await self._response_started()
+                await self._response_started(event)
             elif isinstance(event, LiveDone):
                 await self._response_done()
             elif isinstance(event, LiveToolCall):
@@ -482,11 +483,13 @@ class Session:
                 raise ModelError(f"session: the live model failed: {event.message}")
         raise ModelError("session: the live connection ended")
 
-    async def _response_started(self) -> None:
+    async def _response_started(self, event: LiveStarted) -> None:
         if self._responding:
             raise ModelError("session: a response started before the last one was done")
         self._responding = True
-        u = self._causes.popleft() if self._causes else Utterance(None)
+        asked = self._causes and event.requested is not False
+        u = self._causes.popleft() if asked else Utterance(None)
+        u.response = event.id
         self._start(u)
         if self._muted:
             self._utterance = None

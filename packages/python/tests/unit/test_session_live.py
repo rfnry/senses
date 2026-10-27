@@ -163,6 +163,47 @@ async def test_concurrent_say_and_prompt_keep_their_causes_in_order() -> None:
     assert saids[2].text == "By the way." and saids[2].triggered_by is None
 
 
+async def test_a_response_the_vendor_started_takes_no_cause() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        events = s.events()
+        asked = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        await until(lambda: len(live.connection.calls) == 1)
+        live.connection.emit(
+            LiveStarted(requested=False),
+            LiveSaid(text="Sure. "),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        own = await next_of(events, Said)
+        waiting = not asked.done()
+        live.connection.emit(
+            LiveStarted(requested=True),
+            LiveSaid(text="Your table is ready."),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        said = await asked
+    assert waiting and own.text == "Sure. " and own.triggered_by is None
+    assert said.triggered_by == HOST and said.heard == "Your table is ready."
+
+
+async def test_an_unknown_response_keeps_the_order() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        events = s.events()
+        asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+        await until(lambda: len(live.connection.calls) == 1)
+        live.connection.emit(
+            LiveStarted(requested=None), LiveAudio(frame=pcm(100, 24000)), LiveDone()
+        )
+        said = await asked
+        live.connection.emit(LiveStarted(requested=True), LiveSaid(text="And?"), LiveDone())
+        saids = [await next_of(events, Said) for _ in range(2)]
+    assert said.triggered_by == HOST and saids[1].text == "And?"
+    assert saids[1].triggered_by is None
+
+
 async def test_the_models_tool_calls_are_dispatched_and_answered() -> None:
     gate = asyncio.Event()
 
