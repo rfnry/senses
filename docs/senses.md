@@ -207,6 +207,12 @@ chunks and sends them once the stream ends, since a live model's verbatim speech
 text. A cascaded session has no model to prompt or inform; both are a `ConfigurationError` there, and so
 is `start(tools=)` — without a live model, tools belong to your own loop.
 
+A live model gives one response at a time, so `say` and `prompt` take turns: each goes to the model
+once no response is open and none is still owed to the last one sent — after the model's own reply,
+and after the response to the request before. The person cutting in, or `mute`, ends the ones not yet
+sent; `interrupt` leaves them, and they go once the cut response ends. A vendor that never answers a
+request holds the ones behind it until the person cuts in, `mute` or `close`. `inform` never waits.
+
 ### Cascaded sessions
 
 ```python
@@ -401,8 +407,8 @@ tool. The engine agent reaches the room through `SensesTools`, built before the 
 needs the session only when a tool is called, and the session needs `consult` only when it starts,
 so the circle closes in three lines. Inside `consult` the agent gets `look`, which shows it the
 camera directly, and `inform`, which keeps the live model current; its reply is what the voice says.
-It gets no `prompt` or `say` there: the voice is waiting on that call, so a `prompt` or `say` from
-inside it reads as the person cutting in. Those two are for the agent acting on its own, outside a
+It gets no `prompt` or `say` there: the voice is waiting on that call, and a `prompt` or `say` from
+inside it waits its turn behind the response that made the call. Those two are for the agent acting on its own, outside a
 consult: the full `SensesTools`, passed to its own `engine.run`, where `say` speaks its words
 verbatim and `prompt` has the live voice say them in its own words. The transcript both minds read
 is the thread, mirrored from `events()` ([Storage](#storage)). A persona, a floor policy or a

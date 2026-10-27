@@ -151,10 +151,10 @@ async def test_concurrent_say_and_prompt_keep_their_causes_in_order() -> None:
         events = s.events()
         first = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
         second = asyncio.create_task(s.prompt("Greet Ana.", triggered_by=ANA))
+        await until(lambda: len(live.connection.calls) == 1)
+        live.connection.emit(*response("Hello."))
         await until(lambda: len(live.connection.calls) == 2)
-        live.connection.emit(
-            *response("Hello."), *response("Hi ", "Ana."), *response("By the way.")
-        )
+        live.connection.emit(*response("Hi ", "Ana."), *response("By the way."))
         said_first, said_second = await first, await second
         saids = [await next_of(events, Said) for _ in range(3)]
     assert live.connection.calls == [("say", "Hello."), ("text", "Greet Ana.", True)]
@@ -202,6 +202,109 @@ async def test_an_unknown_response_keeps_the_order() -> None:
         saids = [await next_of(events, Said) for _ in range(2)]
     assert said.triggered_by == HOST and saids[1].text == "And?"
     assert saids[1].triggered_by is None
+
+
+async def test_a_say_waits_for_the_response_before_it() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        asked = [
+            asyncio.create_task(s.say(text, triggered_by=HOST))
+            for text in ("One.", "Two.", "Three.")
+        ]
+        await until(lambda: len(live.connection.calls) == 1)
+        await asyncio.sleep(0.01)
+        sent_before = list(live.connection.calls)
+        live.connection.emit(*response("One."))
+        await until(lambda: len(live.connection.calls) == 2)
+        live.connection.emit(*response("Two."))
+        await until(lambda: len(live.connection.calls) == 3)
+        live.connection.emit(*response("Three."))
+        saids = await asyncio.gather(*asked)
+    assert sent_before == [("say", "One.")]
+    assert live.connection.calls == [("say", "One."), ("say", "Two."), ("say", "Three.")]
+    assert [said.text for said in saids] == ["One.", "Two.", "Three."]
+
+
+async def test_a_say_during_the_models_own_reply_waits_for_it() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        events = s.events()
+        live.connection.emit(
+            LiveStarted(), LiveSaid(text="Welcome. "), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 1)
+        asked = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        sent_during = list(live.connection.calls)
+        live.connection.emit(LiveDone())
+        await until(lambda: len(live.connection.calls) == 1)
+        live.connection.emit(*response("Your table is ready."))
+        own = await next_of(events, Said)
+        said = await asked
+    assert sent_during == [] and own.text == "Welcome. " and own.triggered_by is None
+    assert said.triggered_by == HOST
+
+
+async def test_mute_ends_the_says_not_yet_sent() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        live.connection.emit(LiveStarted(), LiveAudio(frame=pcm(100, 24000)))
+        await until(lambda: len(link.audio) == 1)
+        asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        await s.mute(triggered_by=HOST)
+        said = await asked
+        live.connection.emit(LiveDone())
+        await asyncio.sleep(0.01)
+    assert said.heard == "" and said.interrupted and live.connection.calls == []
+
+
+async def test_interrupt_by_code_keeps_the_says_not_yet_sent() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        live.connection.emit(
+            LiveStarted(), LiveSaid(text="Welcome. "), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 1)
+        asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        await s.interrupt(triggered_by=HOST)
+        kept = not asked.done() and live.connection.calls == []
+        live.connection.emit(LiveDone())
+        await until(lambda: len(live.connection.calls) == 1)
+        live.connection.emit(*response("Hello."))
+        said = await asked
+    assert kept and said.heard == "Hello." and not said.interrupted
+
+
+async def test_a_say_given_up_on_is_never_sent() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        live.connection.emit(LiveStarted(), LiveAudio(frame=pcm(100, 24000)))
+        await until(lambda: len(link.audio) == 1)
+        asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+        later = asyncio.create_task(s.say("Still there?", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        asked.cancel()
+        live.connection.emit(LiveDone())
+        await until(lambda: len(live.connection.calls) == 1)
+        live.connection.emit(*response("Still there?"))
+        await later
+    assert live.connection.calls == [("say", "Still there?")]
+
+
+async def test_close_ends_the_says_not_yet_sent() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start()
+    live.connection.emit(LiveStarted(), LiveAudio(frame=pcm(100, 24000)))
+    await until(lambda: len(link.audio) == 1)
+    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    await s.close()
+    with pytest.raises(TransportError):
+        await asked
+    assert live.connection.calls == []
 
 
 async def test_the_models_tool_calls_are_dispatched_and_answered() -> None:

@@ -216,7 +216,7 @@ Raises `ConfigurationError` when the session has already started, `tools` is giv
 async def say(self, text: str | AsyncIterator[str], *, triggered_by: IdentityLike) -> Said: ...
 ```
 
-Speaks exactly `text` and returns, when the utterance ends, the `Said` with what the person heard. Given an `AsyncIterator[str]`, a cascaded session speaks it sentence by sentence as it arrives and a live one joins it first; a stream with no text returns an empty `Said`. Calls queue, and while muted it returns at once with nothing heard.
+Speaks exactly `text` and returns, when the utterance ends, the `Said` with what the person heard. Given an `AsyncIterator[str]`, a cascaded session speaks it sentence by sentence as it arrives and a live one joins it first; a stream with no text returns an empty `Said`. Calls queue; on a live model each is sent once no response is open and none is owed to the last one sent. While muted it returns at once with nothing heard.
 Raises `InputError` when `text` is empty or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
 Raises `TransportError` when the session is not started or is closed, or closes before the words are spoken.
