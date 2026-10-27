@@ -72,6 +72,9 @@ class ScriptedConnection:
         for event in events:
             self._inbox.put_nowait(event)
 
+    def emit_end(self) -> None:
+        self._inbox.put_nowait(None)
+
     async def send_audio(self, frame: AudioFrame) -> None:
         self.audio.append(frame)
 

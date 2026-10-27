@@ -111,6 +111,7 @@ audio, and nothing the model said after it was heard. `response` is the `id` tha
 `LiveStarted` carried, or `None`; an adapter whose vendor cannot cut its context by time tells the
 model `heard` in words. An adapter that can tell whether a response answers its own request says so
 with `requested`, and names the response with the vendor's `id`; one that cannot leaves both `None`.
+A response to a tool result or to the person answers no `say` or `prompt`: it is `requested=False`.
 
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
@@ -230,6 +231,8 @@ once no response is open and none is still owed to the last one sent — after t
 and after the response to the request before. The person cutting in, or `mute`, ends the ones not yet
 sent; `interrupt` leaves them, and they go once the cut response ends. A vendor that never answers a
 request holds the ones behind it until the person cuts in, `mute` or `close`. `inform` never waits.
+A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
+vendor that holds that response open until the result, the tool times out first: spawn it there.
 
 ### Cascaded sessions
 

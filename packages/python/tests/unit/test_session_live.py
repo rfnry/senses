@@ -36,6 +36,7 @@ from rfnry_senses.transport import Loopback
 from .fakes import (
     ANA,
     HOST,
+    ScriptedConnection,
     ScriptedLive,
     ScriptedTranscription,
     Tone,
@@ -357,8 +358,9 @@ async def test_quiet_returns_when_the_session_closes() -> None:
     await asyncio.sleep(0.01)
     await s.close()
     await asyncio.wait_for(quiet, 1)
-    with pytest.raises(TransportError, match="^session: the session is closed$"):
-        await s.quiet()
+    await asyncio.wait_for(s.quiet(), 1)
+    with pytest.raises(TransportError, match="^session: start the session before using it$"):
+        await session(Loopback(ANA, "acme"), ScriptedLive()).quiet()
 
 
 async def test_the_models_tool_calls_are_dispatched_and_answered() -> None:
@@ -652,6 +654,108 @@ async def test_a_withdrawal_for_an_unknown_call_is_ignored() -> None:
         live.connection.emit(LiveToolCancelled(call_ids=["c1"]), *response("Open."))
         said = await next_of(events, Said)
     assert live.connection.results == [("c1", "open", False, True)] and said.text == "Open."
+
+
+async def test_a_tool_that_closes_the_session_closes_it() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+
+    async def end_call(args: dict[str, Any]) -> str:
+        await asyncio.sleep(0.01)
+        await s.close()
+        return "ended"
+
+    await s.start(tools=Tools([Tool("end_call", "End", body=end_call)]), inform=["end_call"])
+    events = s.events()
+    live.connection.emit(LiveToolCall(call_id="c1", name="end_call"))
+    seen = await asyncio.wait_for(collect_all(events), 1)
+    assert isinstance(seen[-1], Closed) and seen[-1].reason == "closed"
+    assert live.connection.closed and link.closed
+
+
+async def collect_all(events: Any) -> list[Any]:
+    return [e async for e in events]
+
+
+@pytest.mark.parametrize("end", ["failed", "ended"])
+async def test_a_say_held_when_the_connection_ends_raises(end: str) -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start()
+    live.connection.emit(LiveStarted(), LiveAudio(frame=pcm(100, 24000)))
+    await until(lambda: len(link.audio) == 1)
+    held = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    if end == "failed":
+        live.connection.emit(LiveDone(), LiveFailed(message="gone"))
+    else:
+        live.connection.emit(LiveDone())
+        live.connection.emit_end()
+    with pytest.raises(ModelError):
+        await asyncio.wait_for(held, 1)
+
+
+class StuckSay(ScriptedConnection):
+    async def say(self, text: str) -> None:
+        await super().say(text)
+        await asyncio.Event().wait()
+
+
+async def test_close_fails_a_say_held_behind_one_a_tool_is_sending() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = StuckSay()
+    s = session(link, live)
+
+    async def lookup(args: dict[str, Any]) -> str:
+        await s.say("One moment.", triggered_by=HOST)
+        return "done"
+
+    await s.start(tools=Tools([Tool("lookup", "Look", body=lookup)]))
+    live.connection.emit(LiveToolCall(call_id="c1", name="lookup"))
+    await until(lambda: len(live.connection.calls) == 1)
+    held = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    await s.close()
+    with pytest.raises(TransportError, match="^session: the session closed before the reply"):
+        await asyncio.wait_for(held, 1)
+    assert live.connection.calls == [("say", "One moment.")]
+
+
+async def test_mute_ends_a_sent_say_the_vendor_never_answered() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        sent = asyncio.create_task(s.say("First.", triggered_by=HOST))
+        await until(lambda: len(live.connection.calls) == 1)
+        held = asyncio.create_task(s.say("Second.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        await s.mute(triggered_by=HOST)
+        ended = await asyncio.wait_for(asyncio.gather(sent, held), 1)
+        await s.unmute(triggered_by=HOST)
+        after = asyncio.create_task(s.say("Third.", triggered_by=HOST))
+        await until(lambda: len(live.connection.calls) == 2)
+        live.connection.emit(*response("Third."))
+        said = await after
+    assert all(e.interrupted and e.heard == "" for e in ended)
+    assert live.connection.calls == [("say", "First."), ("say", "Third.")]
+    assert said.heard == "Third." and not said.interrupted
+
+
+async def test_a_withdrawal_as_the_body_returns_still_reports_what_it_returned() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+
+    async def book(args: dict[str, Any]) -> str:
+        await asyncio.sleep(0.01)
+        live.connection.emit(LiveToolCancelled(call_ids=["c1"]))
+        return "booked table 4"
+
+    await s.start(tools=Tools([Tool("book", "Book", body=book)]))
+    async with s:
+        events = s.events()
+        live.connection.emit(LiveToolCall(call_id="c1", name="book"))
+        called = await next_of(events, ToolCalled)
+    assert live.connection.results == []
+    assert called.cancelled and called.output == "booked table 4" and not called.is_error
 
 
 async def test_inform_must_name_a_tool() -> None:

@@ -83,7 +83,7 @@ class LiveStarted(BaseModel):
     requested: bool | None = None
 ```
 
-One response begins. `requested=False` says the vendor started it on its own, and it takes no cause; otherwise it takes the oldest `say` or `prompt` waiting for a response, or none. `None` is for an adapter that cannot tell. `id` is the vendor's id for the response, handed back to `interrupt`. The session fails with `ModelError` when a response starts before the last one is done.
+One response begins. `requested=False` says it answers no `say` or `prompt` — the vendor started it on its own, or it answers a tool result or the person — and it takes no cause; otherwise it takes the oldest `say` or `prompt` waiting for a response, or none. `None` is for an adapter that cannot tell. `id` is the vendor's id for the response, handed back to `interrupt`. The session fails with `ModelError` when a response starts before the last one is done.
 
 ### `LiveDone`
 
@@ -323,8 +323,8 @@ Returns a new async iterator of every `Event` the session reports from now on. E
 async def quiet(self) -> None: ...
 ```
 
-Returns once the voice has nothing left to say: no response is open, no `say` or `prompt` is waiting, and every utterance has played or been cut. It also returns when the session closes. A tool still running is not waited for; its result may start another response.
-Raises `TransportError` when the session is not started or is closed.
+Returns once the voice has nothing left to say: no response is open, no `say` or `prompt` is waiting, and every utterance has played or been cut. It also returns when the session closes, or has closed. A tool still running is not waited for; its result may start another response.
+Raises `TransportError` when the session is not started.
 
 ### `Session.close`
 
@@ -488,7 +488,7 @@ class ToolCalled(BaseModel):
     cancelled: bool
 ```
 
-A live model's tool call ran; `output` is what went back to the model. `cancelled` is true when the model withdrew the call — nothing went back, and `output` is empty — or `Session.cancel` stopped it. It is not sent to the client.
+A live model's tool call ran; `output` is what went back to the model. `cancelled` is true when the model withdrew the call — nothing went back; `output` is what the tool returned, empty when it was stopped first — or `Session.cancel` stopped it. It is not sent to the client.
 
 ### `Cancelled`
 

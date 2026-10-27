@@ -183,6 +183,7 @@ class Session:
         self._causes: deque[Utterance] = deque()
         self._held: deque[tuple[Utterance, asyncio.Future[bool]]] = deque()
         self._granted: Utterance | None = None
+        self._cutting = 0
         self._settled = asyncio.Event()
         self._running: dict[str, tuple[LiveToolCall, asyncio.Task[object], asyncio.Task[None]]] = {}
         self._withdrawn: set[str] = set()
@@ -208,6 +209,10 @@ class Session:
             or self._waiting
             or self._playing is not None
         )
+
+    def _owed(self) -> list[Utterance | None]:
+        held = [u for u, _ in self._held]
+        return [self._utterance, *self._out, *self._waiting, *self._causes, self._granted, *held]
 
     def _settle(self) -> None:
         settled, self._settled = self._settled, asyncio.Event()
@@ -332,7 +337,10 @@ class Session:
         return cancelled
 
     async def quiet(self) -> None:
-        self._check_open()
+        if self._closed:
+            return
+        if not self._opened:
+            raise TransportError("session: start the session before using it")
         while self._saying and not self._closed:
             await self._settled.wait()
 
@@ -354,7 +362,7 @@ class Session:
         self._muted = True
         await self._emit(Muted(scope=self.scope, muted=True, triggered_by=cause))
         await self._drop_waiting()
-        await self._drop_held()
+        await self._drop_requests()
         await self._cut(cause)
 
     async def unmute(self, *, triggered_by: IdentityLike) -> None:
@@ -367,7 +375,7 @@ class Session:
 
     async def _cut(self, cause: Identity) -> Interrupted | None:
         u = self._utterance
-        taken = [v for v in self._out if v is not u and not v.finished]
+        taken = [v for v in self._out if v is not u and not v.finished and not v.cut]
         if u is not None:
             taken.append(u)
         if not taken:
@@ -375,21 +383,28 @@ class Session:
         self._utterance = None
         for v in taken:
             v.cut = True
-        if self._playing is not None:
-            self._playing.cancel()
-        self._transport.clear_audio()
-        self._playhead = 0.0
-        spoken = [v for v in taken if v.spoke]
-        if spoken:
-            await self._transport.send_control({"type": "stop", "utterance": spoken[-1].number})
-        reports = await asyncio.gather(*(self._await_played(v, PLAYED_GRACE, None) for v in spoken))
-        played = dict(zip(spoken, reports, strict=True))
-        heard = {v: v.ledger.heard(played[v]) if v.spoke else "" for v in taken}
-        landed = next((v for v in reversed(taken) if heard[v]), taken[0])
-        if self._connection is not None:
-            await self._interrupt_model(
-                round(played.get(landed, 0.0)), heard[landed], landed.response
+        self._cutting += 1
+        try:
+            if self._playing is not None:
+                self._playing.cancel()
+            self._transport.clear_audio()
+            self._playhead = 0.0
+            spoken = [v for v in taken if v.spoke]
+            if spoken:
+                await self._transport.send_control({"type": "stop", "utterance": spoken[-1].number})
+            reports = await asyncio.gather(
+                *(self._await_played(v, PLAYED_GRACE, None) for v in spoken)
             )
+            played = dict(zip(spoken, reports, strict=True))
+            heard = {v: v.ledger.heard(played[v]) if v.spoke else "" for v in taken}
+            landed = next((v for v in reversed(taken) if heard[v]), taken[0])
+            if self._connection is not None:
+                await self._interrupt_model(
+                    round(played.get(landed, 0.0)), heard[landed], landed.response
+                )
+        finally:
+            self._cutting -= 1
+            self._next()
         cut = Interrupted(scope=self.scope, heard=heard[landed], triggered_by=cause)
         await self._emit(cut)
         for v in taken:
@@ -407,23 +422,21 @@ class Session:
         while self._waiting:
             await self._finish(self._waiting.popleft(), "", interrupted=True)
 
-    async def _drop_causes(self) -> None:
-        dropped, self._causes = self._causes, deque()
-        for u in dropped:
-            await self._finish(u, "", interrupted=True)
-
-    async def _drop_held(self) -> None:
+    async def _drop_requests(self) -> None:
+        causes, self._causes = self._causes, deque()
         granted, self._granted = self._granted, None
         held, self._held = self._held, deque()
         for _, turn in held:
             if not turn.done():
                 turn.set_result(False)
-        for u in (granted, *(u for u, _ in held)):
+        for u in (*causes, granted, *(u for u, _ in held)):
             if u is not None:
                 await self._finish(u, "", interrupted=True)
 
     def _next(self) -> None:
-        if self._granted is not None or self._causes or self._responding:
+        if self._closed or self._cutting or self._granted is not None:
+            return
+        if self._causes or self._responding:
             return
         while self._held:
             u, turn = self._held.popleft()
@@ -563,8 +576,7 @@ class Session:
                         self._running[call_id][1].cancel()
             elif isinstance(event, LiveInterrupted):
                 await self._cut(self.person)
-                await self._drop_causes()
-                await self._drop_held()
+                await self._drop_requests()
             elif isinstance(event, LiveFailed):
                 raise ModelError(f"session: the live model failed: {event.message}")
         raise ModelError("session: the live connection ended")
@@ -665,6 +677,7 @@ class Session:
                         self._causes.append(u)
                         await send()
         except BaseException:
+            u.done.cancel()
             with contextlib.suppress(ValueError):
                 self._held.remove((u, turn))
             with contextlib.suppress(ValueError):
@@ -699,9 +712,13 @@ class Session:
             output, is_error = f"{type(exc).__name__}: {exc}", True
         finally:
             self._running.pop(call.call_id, None)
+        if self._closed:
+            return
         if call.call_id in self._withdrawn:
             self._withdrawn.discard(call.call_id)
-            output, is_error, cancelled = "", False, True
+            if cancelled:
+                output, is_error = "", False
+            cancelled = True
         else:
             await self._connection.submit_result(call.call_id, output, is_error, respond=respond)
         await self._emit(
@@ -820,17 +837,20 @@ class Session:
         if self._closed:
             return
         self._closed = True
+        waiting = self._owed()
         current = asyncio.current_task()
+        spared = {answering for _, work, answering in self._running.values() if work is current}
         works = [work for _, work, _ in self._running.values()]
         tasks = [
-            t for t in (*self._tasks, self._playing, *works) if t is not None and t is not current
+            t
+            for t in (*self._tasks, self._playing, *works)
+            if t is not None and t is not current and t not in spared
         ]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         failure = error or TransportError("session: the session closed before the reply was spoken")
-        held = [u for u, _ in self._held]
-        for u in (self._utterance, *self._out, *self._waiting, *self._causes, self._granted, *held):
+        for u in (*waiting, *self._owed()):
             if u is not None and u.done is not None and not u.done.done():
                 u.done.set_exception(failure)
         for _, turn in self._held:

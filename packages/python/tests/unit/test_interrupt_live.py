@@ -419,3 +419,50 @@ async def test_the_cut_names_the_response_it_landed_in() -> None:
         live.connection.emit(LiveInterrupted())
         await next_of(events, Interrupted)
     assert live.connection.interrupts == [(100, "Let me ", "r1")]
+
+
+class Ordered(ScriptedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.log: list[str] = []
+
+    async def say(self, text: str) -> None:
+        await super().say(text)
+        self.log.append("say")
+
+    async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None:
+        await super().interrupt(played_ms, heard=heard, response=response)
+        self.log.append("interrupt")
+
+
+async def test_a_code_interrupt_reaches_the_model_before_the_say_behind_it() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", answer=False)
+    live.connection = connection = Ordered()
+    async with Session(link, live=live) as s:
+        connection.emit(LiveStarted(), LiveSaid(text="Welcome. "), LiveAudio(frame=pcm(100, 24000)))
+        await until(lambda: len(link.audio) == 1)
+        asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        cut = asyncio.create_task(s.interrupt(triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        connection.emit(LiveDone())
+        await cut
+        await until(lambda: connection.calls != [])
+        connection.emit(*response("Hello."))
+        await asked
+    assert connection.log == ["interrupt", "say"]
+
+
+async def test_overlapping_cuts_interrupt_the_model_once() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", answer=False)
+    async with Session(link, live=live) as s:
+        seen, collector = await collecting(s)
+        live.connection.emit(*response("Let me ", "check that. "))
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(LiveInterrupted())
+        await asyncio.sleep(0.05)
+        again = await s.interrupt(triggered_by=HOST)
+        await until(lambda: any(isinstance(e, Interrupted) for e in seen))
+    await collector
+    assert again is None and len(live.connection.interrupts) == 1
+    assert sum(isinstance(e, Interrupted) for e in seen) == 1

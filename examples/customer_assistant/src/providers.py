@@ -402,8 +402,8 @@ class GoogleLiveConnection:
         await self.send_text(f"Say this line: {text}", respond=True)
 
     async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None:
-        note = f"they heard only: {heard}" if heard.strip() else "they heard none of it"
-        await self.send_text(f"The person cut in on your last reply; {note}", respond=False)
+        note = f"the person heard only: {heard}" if heard.strip() else "the person heard none of it"
+        await self.send_text(f"Your reply was cut off; {note}", respond=False)
 
     async def submit_result(
         self, call_id: str, result: Content, is_error: bool, *, respond: bool
