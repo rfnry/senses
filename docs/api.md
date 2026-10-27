@@ -296,6 +296,15 @@ def events(self) -> Subscription: ...
 
 Returns a new async iterator of every `Event` the session reports from now on. Every stream sees every event and ends after `Closed`; one made after the session closed ends at once, and one nobody holds is let go.
 
+### `Session.quiet`
+
+```python
+async def quiet(self) -> None: ...
+```
+
+Returns once the voice has nothing left to say: no response is open, no `say` or `prompt` is waiting, and every utterance has played or been cut. It also returns when the session closes. A tool still running is not waited for; its result may start another response.
+Raises `TransportError` when the session is not started or is closed.
+
 ### `Session.close`
 
 ```python

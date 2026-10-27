@@ -83,6 +83,7 @@ def test_the_session_has_exactly_its_verbs() -> None:
         "unmute",
         "look",
         "events",
+        "quiet",
         "close",
     }
 

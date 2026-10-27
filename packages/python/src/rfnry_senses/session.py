@@ -181,6 +181,7 @@ class Session:
         self._causes: deque[Utterance] = deque()
         self._held: deque[tuple[Utterance, asyncio.Future[bool]]] = deque()
         self._granted: Utterance | None = None
+        self._settled = asyncio.Event()
         self._responding = False
         self._played: dict[int, asyncio.Future[float]] = {}
         self._lock = asyncio.Lock()
@@ -190,6 +191,23 @@ class Session:
     @property
     def _voice(self) -> bool:
         return self._live is not None or self._speech is not None
+
+    @property
+    def _saying(self) -> bool:
+        return bool(
+            self._responding
+            or self._causes
+            or self._held
+            or self._granted is not None
+            or self._utterance is not None
+            or self._out
+            or self._waiting
+            or self._playing is not None
+        )
+
+    def _settle(self) -> None:
+        settled, self._settled = self._settled, asyncio.Event()
+        settled.set()
 
     async def start(self, tools: ToolsLike | None = None, *, inform: Collection[str] = ()) -> None:
         if self._closed:
@@ -287,6 +305,11 @@ class Session:
         async with self._lock:
             await connection.send_text(text, respond=False)
         await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
+
+    async def quiet(self) -> None:
+        self._check_open()
+        while self._saying and not self._closed:
+            await self._settled.wait()
 
     async def close(self) -> None:
         await self._close("closed", None, None)
@@ -535,6 +558,7 @@ class Session:
         if self._utterance is not None:
             self._spawn(self._conclude(self._utterance))
         self._next()
+        self._settle()
 
     def _start(self, u: Utterance) -> None:
         u.number = next(self._numbers)
@@ -594,6 +618,7 @@ class Session:
             u.done.set_result(said)
         if u.done is not None or u.spoke or u.text:
             await self._emit(said)
+        self._settle()
 
     async def _ask(self, u: Utterance, send: Callable[[], Awaitable[None]]) -> Said:
         assert u.done is not None
@@ -616,6 +641,7 @@ class Session:
             if self._granted is u:
                 self._granted = None
             self._next()
+            self._settle()
             raise
         return await u.done
 
@@ -677,6 +703,7 @@ class Session:
             playing = self._playing = asyncio.create_task(self._play(u))
             await asyncio.wait({playing})
             self._playing = None
+            self._settle()
             if not playing.cancelled() and (error := playing.exception()) is not None:
                 raise error
 
@@ -729,6 +756,7 @@ class Session:
         await self._unvoice(u)
         if u.done is not None and not u.done.done():
             u.done.set_exception(error)
+        self._settle()
 
     async def _unvoice(self, u: Utterance) -> None:
         if u in self._out:
@@ -758,6 +786,7 @@ class Session:
         for _, turn in self._held:
             if not turn.done():
                 turn.set_result(False)
+        self._settle()
         for closing in (self._connection, self._stream):
             if closing is not None:
                 with contextlib.suppress(Exception):

@@ -307,6 +307,50 @@ async def test_close_ends_the_says_not_yet_sent() -> None:
     assert live.connection.calls == []
 
 
+async def test_quiet_waits_for_a_response_that_has_not_spoken_yet() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        await s.quiet()
+        live.connection.emit(LiveStarted())
+        await asyncio.sleep(0.01)
+        quiet = asyncio.create_task(s.quiet())
+        await asyncio.sleep(0.01)
+        waiting = not quiet.done()
+        live.connection.emit(
+            LiveSaid(text="Goodbye."), LiveAudio(frame=pcm(100, 24000)), LiveDone()
+        )
+        await asyncio.wait_for(quiet, 1)
+    assert waiting and {"type": "silent", "utterance": 1} in link.controls
+
+
+async def test_quiet_waits_for_a_say_not_yet_answered() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        asked = asyncio.create_task(s.say("Goodbye.", triggered_by=HOST))
+        await until(lambda: len(live.connection.calls) == 1)
+        quiet = asyncio.create_task(s.quiet())
+        await asyncio.sleep(0.01)
+        waiting = not quiet.done()
+        live.connection.emit(*response("Goodbye."))
+        await asyncio.wait_for(quiet, 1)
+        said = asked.result()
+    assert waiting and said.heard == "Goodbye."
+
+
+async def test_quiet_returns_when_the_session_closes() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start()
+    live.connection.emit(LiveStarted())
+    await asyncio.sleep(0.01)
+    quiet = asyncio.create_task(s.quiet())
+    await asyncio.sleep(0.01)
+    await s.close()
+    await asyncio.wait_for(quiet, 1)
+    with pytest.raises(TransportError, match="^session: the session is closed$"):
+        await s.quiet()
+
+
 async def test_the_models_tool_calls_are_dispatched_and_answered() -> None:
     gate = asyncio.Event()
 

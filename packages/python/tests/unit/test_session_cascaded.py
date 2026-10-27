@@ -40,6 +40,17 @@ async def test_a_trailing_partial_belongs_to_the_turn() -> None:
         assert (await next_of(events, TurnEnded)).text == "book a"
 
 
+async def test_quiet_waits_for_the_cascaded_queue() -> None:
+    s, _, _, _ = cascaded()
+    async with s:
+        first = asyncio.create_task(s.say("One two. Three.", triggered_by=HOST))
+        second = asyncio.create_task(s.say("Four.", triggered_by=HOST))
+        await asyncio.sleep(0)
+        await asyncio.wait_for(s.quiet(), 1)
+        done = first.done() and second.done()
+    assert done
+
+
 async def test_say_speaks_sentence_by_sentence_and_in_order() -> None:
     s, link, _, tts = cascaded()
     async with s:

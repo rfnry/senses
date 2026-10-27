@@ -314,6 +314,17 @@ while muted returns at once with nothing heard, and a response a live model star
 cut before a word of it plays. The session still hears and sees. A product's floor policy or mandate
 gate is built on these two verbs.
 
+`quiet` waits until the voice has nothing left to say — no response open, no `say` or `prompt`
+waiting, every utterance played or cut — so a call can end after its last words were heard:
+
+```python
+await session.quiet()
+await session.close()
+```
+
+It does not wait for a tool still running, and from inside a tool body it can wait on the response
+that is waiting for that tool: spawn it there instead.
+
 ### Seeing
 
 ```python
