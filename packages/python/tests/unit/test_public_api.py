@@ -1,6 +1,8 @@
 import annotationlib
 import inspect
 import re
+import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -110,3 +112,8 @@ def test_the_webrtc_extra_exports_its_names() -> None:
     import rfnry_senses.webrtc
 
     assert rfnry_senses.webrtc.__all__ == ["WebRTCTransport", "accept_offer"]
+
+
+def test_the_version_is_the_one_the_package_is_built_with() -> None:
+    project = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())
+    assert rfnry_senses.__version__ == project["project"]["version"]

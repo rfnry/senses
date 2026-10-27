@@ -58,6 +58,8 @@ from rfnry_senses.tools import Tool, Tools
 from rfnry_senses.transport import Loopback, Played, Transport
 from rfnry_senses.websocket import Connection, serve
 
+__version__ = "0.1.1"
+
 __all__ = [
     "Session",
     "SensesTools",
