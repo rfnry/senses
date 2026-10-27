@@ -7,9 +7,6 @@ import type { AudioOut, SensesEvent, ServerControl } from '../../src/wire'
 import { Context } from '../fakes'
 
 const PYTHON = join(import.meta.dirname, '../../../python')
-const EXAMPLE = join(PYTHON, '../../examples/customer_assistant')
-const PROVIDERS = join(EXAMPLE, 'src')
-const KEYS = join(PYTHON, '../../../.env.examples')
 const LIVE = process.env.RFNRY_LIVE_ADAPTERS
 const hasUv = (() => {
   try {
@@ -22,10 +19,6 @@ const hasUv = (() => {
 
 type Server = { process: ChildProcess; port: number; output: string[] }
 let running: Server | null = null
-
-function uv(live: boolean, ...args: string[]): string[] {
-  return live ? ['run', '--project', EXAMPLE, '--env-file', KEYS, ...args] : ['run', ...args]
-}
 
 function waitFor(output: string[], pattern: RegExp, timeout = 30_000): Promise<RegExpMatchArray> {
   return new Promise((resolve, reject) => {
@@ -42,9 +35,9 @@ function waitFor(output: string[], pattern: RegExp, timeout = 30_000): Promise<R
 }
 
 async function start(live: boolean): Promise<Server> {
-  const env: NodeJS.ProcessEnv = { ...process.env, PYTHONPATH: PROVIDERS }
+  const env: NodeJS.ProcessEnv = { ...process.env }
   if (!live) delete env.RFNRY_LIVE_ADAPTERS
-  const child = spawn('uv', uv(live, 'python', 'tests/integration/serve_for_client.py', '0'), {
+  const child = spawn('uv', ['run', 'python', 'tests/integration/serve_for_client.py', '0'], {
     cwd: PYTHON,
     env,
   })
@@ -57,14 +50,14 @@ async function start(live: boolean): Promise<Server> {
 }
 
 function synthesize(text: string): { rate: number; pcm: Uint8Array } {
-  const script = `import asyncio, base64, providers
+  const script = `import asyncio, base64, importlib, os
+adapters = importlib.import_module(os.environ["RFNRY_LIVE_ADAPTERS"])
 async def main():
-    frames = [f async for f in providers.speech().speak(${JSON.stringify(text)})]
+    frames = [f async for f in adapters.speech().speak(${JSON.stringify(text)})]
     print(frames[0].sample_rate, base64.b64encode(b"".join(f.data for f in frames)).decode())
 asyncio.run(main())`
-  const out = execFileSync('uv', uv(true, 'python', '-c', script), {
+  const out = execFileSync('uv', ['run', 'python', '-c', script], {
     cwd: PYTHON,
-    env: { ...process.env, PYTHONPATH: PROVIDERS },
     maxBuffer: 64 * 1024 * 1024,
   })
   const [rate, data] = String(out).trim().split('\n').at(-1)?.split(' ') ?? []
