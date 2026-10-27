@@ -328,19 +328,21 @@ class Session:
         reports = await asyncio.gather(*(self._await_played(v, PLAYED_GRACE, None) for v in spoken))
         played = dict(zip(spoken, reports, strict=True))
         heard = {v: v.ledger.heard(played[v]) if v.spoke else "" for v in taken}
-        if self._connection is not None and u is not None:
-            await self._interrupt_model(round(played.get(u, 0.0)))
-        landed = next((heard[v] for v in reversed(taken) if heard[v]), "")
-        cut = Interrupted(scope=self.scope, heard=landed, triggered_by=cause)
+        landed = next((v for v in reversed(taken) if heard[v]), taken[0])
+        if self._connection is not None:
+            await self._interrupt_model(
+                round(played.get(landed, 0.0)), heard[landed], landed.response
+            )
+        cut = Interrupted(scope=self.scope, heard=heard[landed], triggered_by=cause)
         await self._emit(cut)
         for v in taken:
             await self._finish(v, heard[v], interrupted=True)
         return cut
 
-    async def _interrupt_model(self, played_ms: int) -> None:
+    async def _interrupt_model(self, played_ms: int, heard: str, response: str | None) -> None:
         assert self._connection is not None
         try:
-            await self._connection.interrupt(played_ms)
+            await self._connection.interrupt(played_ms, heard=heard, response=response)
         except Exception as exc:
             logger.warning("session: the live model could not cut its context: %s", exc)
 
@@ -493,7 +495,7 @@ class Session:
         self._start(u)
         if self._muted:
             self._utterance = None
-            await self._interrupt_model(0)
+            await self._interrupt_model(0, "", u.response)
             await self._finish(u, "", interrupted=True)
 
     async def _response_done(self) -> None:

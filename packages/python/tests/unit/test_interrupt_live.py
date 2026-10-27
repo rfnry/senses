@@ -38,7 +38,7 @@ async def test_the_person_cutting_in_truncates_to_what_they_heard() -> None:
         said = await next_of(events, Said)
     assert cut.heard == "Your table " and cut.triggered_by == ANA
     assert said.interrupted and said.heard == "Your table " and said.triggered_by is None
-    assert live.connection.interrupts == [100]
+    assert live.connection.interrupts == [(100, "Your table ", None)]
     assert {"type": "stop", "utterance": 1} in link.controls
 
 
@@ -79,7 +79,7 @@ async def test_a_silent_client_is_estimated_from_the_clock(
         clock.advance(0.15)
         live.connection.emit(LiveInterrupted())
         cut = await next_of(events, Interrupted)
-    assert cut.heard == "One. " and live.connection.interrupts == [150]
+    assert cut.heard == "One. " and live.connection.interrupts == [(150, "One. ", None)]
 
 
 async def test_a_silent_client_at_the_natural_end_heard_everything(
@@ -121,7 +121,9 @@ async def test_a_tool_call_made_by_an_interrupted_response_is_answered_once() ->
         live.connection.emit(LiveDone())
         await asyncio.sleep(0.01)
     assert live.connection.results == [("c1", '{"open": true}', False)]
-    assert cut.heard == "Let me check. " and live.connection.interrupts == [100]
+    assert cut.heard == "Let me check. " and live.connection.interrupts == [
+        (100, "Let me check. ", None)
+    ]
 
 
 async def test_no_result_is_submitted_after_close() -> None:
@@ -164,7 +166,7 @@ async def test_muting_cuts_the_voice_and_gates_what_follows() -> None:
         cut = await next_of(events, Interrupted)
         cut_said = await next_of(events, Said)
         live.connection.emit(LiveDone(), *response("Unheard."))
-        await until(lambda: live.connection.interrupts == [100, 0])
+        await until(lambda: live.connection.interrupts == [(100, "Hello. ", None), (0, "", None)])
         gated = await s.say("Hello?", triggered_by=HOST)
         await s.unmute(triggered_by=HOST)
         unmuted = await next_of(events, Muted)
@@ -332,7 +334,7 @@ async def test_a_cut_in_the_older_tail_keeps_what_was_heard_and_nothing_of_the_n
     ]
     saids = [e for e in seen if isinstance(e, Said)]
     assert all(said.interrupted for said in saids) and saids[1].text == "It is open. "
-    assert live.connection.interrupts == [0]
+    assert live.connection.interrupts == [(100, "Let me ", None)]
     assert [c for c in link.controls if c["type"] == "stop"] == [{"type": "stop", "utterance": 2}]
 
 
@@ -382,4 +384,40 @@ async def test_a_silent_client_is_estimated_from_where_each_utterance_began_to_p
         "Silent",
         "Said:",
     ]
-    assert live.connection.interrupts == [0]
+    assert live.connection.interrupts == [(150, "Let me ", None)]
+
+
+async def test_a_cut_after_a_silent_response_still_reaches_the_model() -> None:
+    live, link = ScriptedLive(), Client(stops={1: 100})
+    async with Session(link, live=live) as s:
+        seen, collector = await collecting(s)
+        live.connection.emit(*response("Let me ", "check that. "))
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(LiveStarted(), LiveSaid(text="Checking."), LiveDone())
+        await until(lambda: any(isinstance(e, Said) and e.text == "Checking." for e in seen))
+        live.connection.emit(LiveInterrupted())
+        cut = await next_of(s.events(), Interrupted)
+    await collector
+    assert cut.heard == "Let me " and live.connection.interrupts == [(100, "Let me ", None)]
+
+
+async def test_the_cut_names_the_response_it_landed_in() -> None:
+    live, link = ScriptedLive(), Client(stops={1: 100, 2: 0})
+    async with Session(link, live=live) as s:
+        events = s.events()
+        live.connection.emit(
+            LiveStarted(id="r1"),
+            LiveSaid(text="Let me "),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveSaid(text="check that. "),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        await until(lambda: {"type": "silent", "utterance": 1} in link.controls)
+        live.connection.emit(
+            LiveStarted(id="r2"), LiveSaid(text="It is open. "), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 3)
+        live.connection.emit(LiveInterrupted())
+        await next_of(events, Interrupted)
+    assert live.connection.interrupts == [(100, "Let me ", "r1")]

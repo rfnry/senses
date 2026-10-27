@@ -62,7 +62,7 @@ class LiveConnection(Protocol):
     async def send_image(self, image: Image) -> None: ...
     async def send_text(self, text: str, *, respond: bool) -> None: ...
     async def say(self, text: str) -> None: ...
-    async def interrupt(self, played_ms: int) -> None: ...
+    async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None: ...
     async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None: ...
     def events(self) -> AsyncIterator[LiveEvent]: ...
     async def close(self) -> None: ...
@@ -98,8 +98,11 @@ LiveFailed(message="connection lost")                     # the connection is ov
 ```
 
 `send_text(text, respond=True)` asks the model to answer now, in its own words; `respond=False`
-adds context without a reply. `say(text)` speaks exactly those words. `interrupt(played_ms)` stops
-the current response and cuts the model's context to what the person heard. A connection
+adds context without a reply. `say(text)` speaks exactly those words. `interrupt(played_ms, heard=,
+response=)` stops what the model is saying and cuts its context to what the person heard: the
+response the cut landed in keeps `heard`, the first `played_ms` of its audio, and nothing it said
+after that response was heard. `response` is the `id` that response's `LiveStarted` carried, or
+`None`; an adapter whose vendor cannot cut its context by time tells the model `heard` in words. A connection
 implements every method; a vendor that cannot do one raises from its adapter, and the verb that
 needed it raises to its caller. There is no capability matrix. An adapter that can tell whether a
 response answers its own request says so with `requested`, and names the response with the vendor's
@@ -266,7 +269,7 @@ model reports `LiveInterrupted` — senses stops the voice: queued audio is drop
 to stop and fades the voice out over 60 ms rather than cutting it mid-sample, and it answers with
 how many milliseconds it played. Senses cuts the utterance's words to
 that point — whole sentences in a cascaded session, the model's own transcript in a live one — emits
-`Interrupted`, and, in a live session, calls `interrupt(played_ms)` so the model's context holds only
+`Interrupted`, and, in a live session, calls `interrupt` once so the model's context holds only
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
 in the client. Queued `say` and `prompt` calls end too: the person is talking, and they return
@@ -278,7 +281,7 @@ has played or been cut, and never between the two. Each utterance still ends on 
 client reports how much of it played, so the first one's `Said` can come after the second has begun.
 A cut stops everything still playing: the utterance it lands in is cut where it was, the ones queued
 behind it were not heard at all, and `Interrupted.heard` is what the person heard of the utterance
-it landed in. `Said` events come oldest first, and `Silent` comes right before the `Said` of the
+it landed in — the response `interrupt` names to the model. `Said` events come oldest first, and `Silent` comes right before the `Said` of the
 utterance that left the voice quiet.
 
 If the client never reports, senses estimates from its own clock — the audio sent, capped by the

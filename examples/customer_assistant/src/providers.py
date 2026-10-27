@@ -400,7 +400,7 @@ class GoogleLiveConnection:
     async def say(self, text: str) -> None:
         await self.send_text(f"Say exactly this, nothing else: {text}", respond=True)
 
-    async def interrupt(self, played_ms: int) -> None:
+    async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None:
         raise NotImplementedError(
             "GoogleLive: the vendor cuts its own context when it hears the person"
         )

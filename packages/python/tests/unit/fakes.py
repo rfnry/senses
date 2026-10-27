@@ -63,7 +63,7 @@ class ScriptedConnection:
         self.audio: list[AudioFrame] = []
         self.images: list[Image] = []
         self.results: list[tuple[str, Content, bool]] = []
-        self.interrupts: list[int] = []
+        self.interrupts: list[tuple[int, str, str | None]] = []
         self.refuse_interrupt = False
         self.closed = False
         self._inbox: asyncio.Queue[LiveEvent | None] = asyncio.Queue()
@@ -86,10 +86,10 @@ class ScriptedConnection:
         await asyncio.sleep(0)
         self.calls.append(("say", text))
 
-    async def interrupt(self, played_ms: int) -> None:
+    async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None:
         if self.refuse_interrupt:
             raise RuntimeError("cannot cut a response")
-        self.interrupts.append(played_ms)
+        self.interrupts.append((played_ms, heard, response))
 
     async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None:
         self.results.append((call_id, result, is_error))
