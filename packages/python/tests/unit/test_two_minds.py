@@ -55,7 +55,7 @@ async def test_the_consulted_mind_looks_through_tools_built_before_start() -> No
     assert isinstance(mind.seen[0], Image) and isinstance(mind.seen[1], Text)
     assert not called.is_error and isinstance(called.output, str)
     assert called.output.startswith("What is there? A desk, frame at ")
-    assert live.connection.results == [("c1", called.output, False)]
+    assert live.connection.results == [("c1", called.output, False, True)]
 
 
 async def test_senses_tools_built_before_start_offer_the_room_and_wait_for_it() -> None:

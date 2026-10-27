@@ -22,12 +22,12 @@ class LiveConnection(Protocol):
     async def send_text(self, text: str, *, respond: bool) -> None: ...
     async def say(self, text: str) -> None: ...
     async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None: ...
-    async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None: ...
+    async def submit_result(self, call_id: str, result: Content, is_error: bool, *, respond: bool) -> None: ...
     def events(self) -> AsyncIterator[LiveEvent]: ...
     async def close(self) -> None: ...
 ```
 
-One open live model. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`; `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
+One open live model. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`; `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
 
 ### `LiveEvent`
 
@@ -203,12 +203,12 @@ Raises `InputError` when the transport's scope is empty or its identity does not
 ### `Session.start`
 
 ```python
-async def start(self, tools: ToolsLike | None = None) -> None: ...
+async def start(self, tools: ToolsLike | None = None, *, inform: Collection[str] = ()) -> None: ...
 ```
 
-Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on.
+Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on. The tools named in `inform` answer their calls the way `inform` speaks: the result goes back to the model with `respond=False`, and it is not asked to reply.
 Raises `TransportError` when the session is closed.
-Raises `ConfigurationError` when the session has already started, or `tools` is given without a live model.
+Raises `ConfigurationError` when the session has already started, `tools` is given without a live model, or `inform` names something that is not one of the tools.
 
 ### `Session.say`
 

@@ -405,7 +405,9 @@ class GoogleLiveConnection:
             "GoogleLive: the vendor cuts its own context when it hears the person"
         )
 
-    async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None:
+    async def submit_result(
+        self, call_id: str, result: Content, is_error: bool, *, respond: bool
+    ) -> None:
         if call_id not in self.names:
             return
         text = (

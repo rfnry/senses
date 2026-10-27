@@ -236,7 +236,8 @@ async def test_the_models_tool_calls_are_dispatched_and_answered() -> None:
             LiveToolCall(call_id="c4", name="slow"),
         )
         called = [await next_of(events, ToolCalled) for _ in range(4)]
-    results = {call_id: (result, is_error) for call_id, result, is_error in live.connection.results}
+    results = {c: (result, is_error) for c, result, is_error, _ in live.connection.results}
+    assert all(respond for *_, respond in live.connection.results)
     assert results["c1"] == ('{"open": true}', False)
     assert results["c2"][0] == [
         Image(media_type="image/png", data=b"png"),
@@ -369,6 +370,39 @@ async def test_a_live_say_joins_a_stream_and_sends_it_once() -> None:
         said = await saying
     assert live.connection.calls == [("say", "For two, at eight.")]
     assert said.text == said.heard == "For two, at eight." and said.triggered_by == HOST
+
+
+async def test_a_tool_named_in_inform_answers_without_a_reply() -> None:
+    async def end_call(args: dict[str, Any]) -> str:
+        return "ended"
+
+    async def terrace(args: dict[str, Any]) -> str:
+        return "open"
+
+    tools = Tools([Tool("end_call", "End", body=end_call), Tool("terrace", "Open?", body=terrace)])
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start(tools=tools, inform=["end_call"])
+    async with s:
+        events = s.events()
+        live.connection.emit(
+            LiveToolCall(call_id="c1", name="end_call"), LiveToolCall(call_id="c2", name="terrace")
+        )
+        await next_of(events, ToolCalled)
+        await next_of(events, ToolCalled)
+    assert sorted(live.connection.results) == [
+        ("c1", "ended", False, False),
+        ("c2", "open", False, True),
+    ]
+
+
+async def test_inform_must_name_a_tool() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    with pytest.raises(
+        ConfigurationError, match="^session: inform names 'ghost', which is not one of the tools$"
+    ):
+        await s.start(tools=Tools(), inform=["ghost"])
 
 
 async def test_start_refuses_tools_without_a_live_model_and_starts_once() -> None:

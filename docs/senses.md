@@ -63,7 +63,7 @@ class LiveConnection(Protocol):
     async def send_text(self, text: str, *, respond: bool) -> None: ...
     async def say(self, text: str) -> None: ...
     async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None: ...
-    async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None: ...
+    async def submit_result(self, call_id: str, result: Content, is_error: bool, *, respond: bool) -> None: ...
     def events(self) -> AsyncIterator[LiveEvent]: ...
     async def close(self) -> None: ...
 
@@ -98,7 +98,7 @@ LiveFailed(message="connection lost")                     # the connection is ov
 ```
 
 `send_text(text, respond=True)` asks the model to answer now, in its own words; `respond=False`
-adds context without a reply. `say(text)` speaks exactly those words. `interrupt(played_ms, heard=,
+adds context without a reply, and `submit_result` takes the same switch for a tool's answer. `say(text)` speaks exactly those words. `interrupt(played_ms, heard=,
 response=)` stops what the model is saying and cuts its context to what the person heard: the
 response the cut landed in keeps `heard`, the first `played_ms` of its audio, and nothing it said
 after that response was heard. `response` is the `id` that response's `LiveStarted` carried, or
@@ -188,7 +188,10 @@ tool, senses dispatches the call through `tools` — any family `Tools`: an engi
 parts goes back as it is, a dict as JSON; an exception goes back as an error the model reads,
 `InputError: tools: unknown tool 'ghost'`. Each call is bounded by `tool_timeout` (30 s by default,
 `None` for none) and reported as a `ToolCalled` event. Every call the model makes is answered
-exactly once, even when the person interrupts the response that made it.
+exactly once, even when the person interrupts the response that made it. A tool whose result should
+start no reply — ending the call, handing it over — is named in `start(tools=tools, inform=["end_call"])`:
+its result goes back the way `inform` speaks, as something the model knows, and the model is not
+asked to say more.
 
 Two more verbs reach a live model. `prompt` asks it to speak now, in its own words, and returns what
 it said; `inform` gives it something to know without a reply — the fact that arrived after it was

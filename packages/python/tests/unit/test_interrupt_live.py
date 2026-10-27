@@ -120,7 +120,7 @@ async def test_a_tool_call_made_by_an_interrupted_response_is_answered_once() ->
         await next_of(events, ToolCalled)
         live.connection.emit(LiveDone())
         await asyncio.sleep(0.01)
-    assert live.connection.results == [("c1", '{"open": true}', False)]
+    assert live.connection.results == [("c1", '{"open": true}', False, True)]
     assert cut.heard == "Let me check. " and live.connection.interrupts == [
         (100, "Let me check. ", None)
     ]

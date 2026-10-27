@@ -4,7 +4,7 @@ import json
 import logging
 import weakref
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Coroutine
 from dataclasses import dataclass, field
 from itertools import count
 from time import monotonic
@@ -158,6 +158,7 @@ class Session:
         self._transport = transport
         self._live = live
         self._tools: ToolsLike | None = None
+        self._informs: frozenset[str] = frozenset()
         self._instructions = instructions
         self._transcription = transcription
         self._speech = speech
@@ -188,7 +189,7 @@ class Session:
     def _voice(self) -> bool:
         return self._live is not None or self._speech is not None
 
-    async def start(self, tools: ToolsLike | None = None) -> None:
+    async def start(self, tools: ToolsLike | None = None, *, inform: Collection[str] = ()) -> None:
         if self._closed:
             raise TransportError("session: the session is closed")
         if self._opened:
@@ -197,13 +198,18 @@ class Session:
             raise ConfigurationError(
                 "session: tools are for a live model; without one they belong to your own loop"
             )
+        specs = (
+            [ToolSpec.model_validate(d) for d in tools.definitions()] if tools is not None else []
+        )
+        names = {spec.name for spec in specs}
+        for name in inform:
+            if name not in names:
+                raise ConfigurationError(
+                    f"session: inform names {name!r}, which is not one of the tools"
+                )
         self._tools = tools
+        self._informs = frozenset(inform)
         if self._live is not None:
-            specs = (
-                [ToolSpec.model_validate(d) for d in tools.definitions()]
-                if tools is not None
-                else []
-            )
             self._connection = await self._live.open(tools=specs, instructions=self._instructions)
             self._spawn(self._live_events())
             if self._window is not None:
@@ -590,7 +596,9 @@ class Session:
             output, is_error = f"timed out after {self._tool_timeout:g}s", True
         except Exception as exc:
             output, is_error = f"{type(exc).__name__}: {exc}", True
-        await self._connection.submit_result(call.call_id, output, is_error)
+        await self._connection.submit_result(
+            call.call_id, output, is_error, respond=call.name not in self._informs
+        )
         await self._emit(
             ToolCalled(
                 scope=self.scope, name=call.name, input=call.args, output=output, is_error=is_error

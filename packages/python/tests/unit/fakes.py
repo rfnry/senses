@@ -62,7 +62,7 @@ class ScriptedConnection:
         self.calls: list[tuple[Any, ...]] = []
         self.audio: list[AudioFrame] = []
         self.images: list[Image] = []
-        self.results: list[tuple[str, Content, bool]] = []
+        self.results: list[tuple[str, Content, bool, bool]] = []
         self.interrupts: list[tuple[int, str, str | None]] = []
         self.refuse_interrupt = False
         self.closed = False
@@ -91,8 +91,10 @@ class ScriptedConnection:
             raise RuntimeError("cannot cut a response")
         self.interrupts.append((played_ms, heard, response))
 
-    async def submit_result(self, call_id: str, result: Content, is_error: bool) -> None:
-        self.results.append((call_id, result, is_error))
+    async def submit_result(
+        self, call_id: str, result: Content, is_error: bool, *, respond: bool
+    ) -> None:
+        self.results.append((call_id, result, is_error, respond))
 
     async def events(self) -> AsyncIterator[LiveEvent]:
         while (event := await self._inbox.get()) is not None:
