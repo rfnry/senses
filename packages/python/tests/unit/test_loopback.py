@@ -26,3 +26,30 @@ async def test_the_loopback_plays_what_it_is_told_or_stays_silent() -> None:
     await silent.hang_up()
     assert [item async for item in told.inbound()] == [Played(utterance=4, ms=70)]
     assert [item async for item in silent.inbound()] == []
+
+
+async def test_a_stop_answers_every_unanswered_utterance_through_it() -> None:
+    link = Loopback(ANA, "acme")
+    await link.send_audio(pcm(100), 1)
+    await link.send_audio(pcm(300), 2)
+    await link.send_audio(pcm(100), 3)
+    await link.send_control({"type": "stop", "utterance": 2})
+    await link.hang_up()
+    assert [item async for item in link.inbound()] == [
+        Played(utterance=1, ms=100),
+        Played(utterance=2, ms=300),
+    ]
+
+
+async def test_an_utterance_is_answered_once() -> None:
+    link = Loopback(ANA, "acme")
+    await link.send_audio(pcm(100), 1)
+    await link.send_audio(pcm(200), 2)
+    await link.send_control({"type": "silent", "utterance": 1})
+    await link.send_control({"type": "stop", "utterance": 2})
+    await link.send_control({"type": "stop", "utterance": 2})
+    await link.hang_up()
+    assert [item async for item in link.inbound()] == [
+        Played(utterance=1, ms=100),
+        Played(utterance=2, ms=200),
+    ]

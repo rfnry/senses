@@ -622,7 +622,7 @@ class Played(BaseModel):
     ms: int
 ```
 
-The client's report of how many milliseconds of an utterance it played, sent after a `stop` or `silent` control frame and yielded by `Transport.inbound()`.
+The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance.
 
 ### `Loopback`
 
@@ -644,7 +644,7 @@ class Loopback:
     ) -> None: ...
 ```
 
-An in-process transport, for tests and anything that is not a browser. It records the audio and control frames the person would receive in `audio` and `controls`, and answers every `stop` and `silent` with a `Played`: all the audio sent by default, `played(utterance, sent_ms)` when given, nothing with `answer=False`.
+An in-process transport, for tests and anything that is not a browser. It records the audio and control frames the person would receive in `audio` and `controls`, and answers each utterance once with a `Played`, on its `silent` or on a `stop` naming it or a later one: all the audio sent by default, `played(utterance, sent_ms)` when given, nothing with `answer=False`.
 Raises `InputError` when `identity` does not fit.
 
 ### `Loopback.speak`
@@ -693,7 +693,7 @@ Appends `frame` to `audio` and counts it toward `utterance`.
 async def send_control(self, control: dict[str, Any]) -> None: ...
 ```
 
-Appends `control` to `controls`, and answers a `stop` or `silent` with a `Played` unless made with `answer=False`.
+Appends `control` to `controls`. A `silent` is answered with a `Played` for its utterance, and a `stop` with one for every utterance through it not yet answered, oldest first, unless made with `answer=False`.
 
 ### `Loopback.clear_audio`
 

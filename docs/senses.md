@@ -472,8 +472,10 @@ class Socket:
 
 Media has its own socket, apart from any thread socket. Audio and camera frames are binary, each
 behind a small header; control frames are JSON: `hello` (the protocol version) and `played` from
-the client; `ready`, `speaking`, `silent`, `stop`, `event` and `error` from the server. The frames
-are pinned by golden fixtures both clients' tests read.
+the client; `ready`, `speaking`, `silent`, `stop`, `event` and `error` from the server. `silent`
+says an utterance has all been sent; `stop` names the newest utterance spoken and stops every one
+through it. The client answers each utterance once, with one `played`, when it has played all of it
+or been stopped. The frames are pinned by golden fixtures both clients' tests read.
 
 WebRTC is the transport for browser voice: Opus bandwidth, loss concealment, and the echo
 cancellation that lets the person interrupt over speakers. One peer connection carries the audio,
@@ -514,8 +516,8 @@ async with Session(link, transcription=Script("A table for two."), speech=Tone()
 
 `speak` and `show(jpeg)` are the person's microphone and camera, and `hang_up()` is them leaving.
 It records the audio (`link.audio`) and control frames (`link.controls`) the person would receive,
-and answers every `stop` and `silent` with a `Played` — all of it by default, what `played=` says, or
-nothing with `answer=False`. A telephone line, a meeting bot's bridge or
+and answers each utterance once, as the browser does — on its `silent`, or on a `stop` through it —
+with a `Played`: all of it by default, what `played=` says, or nothing with `answer=False`. A telephone line, a meeting bot's bridge or
 a robot's microphone is a `Transport` of your own: an `identity`, a `scope`, `inbound()` yielding
 `AudioFrame`s, JPEG `Image`s and `Played` reports, `send_audio`, `send_control`, `clear_audio` and
 `close`.

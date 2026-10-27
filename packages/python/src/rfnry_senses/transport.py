@@ -44,6 +44,7 @@ class Loopback:
         self._played = played
         self._answer = answer
         self._sent: dict[int, float] = {}
+        self._answered: set[int] = set()
         self._inbox: asyncio.Queue[AudioFrame | Image | Played | None] = asyncio.Queue()
 
     async def speak(self, frame: AudioFrame) -> None:
@@ -65,8 +66,12 @@ class Loopback:
 
     async def send_control(self, control: dict[str, Any]) -> None:
         self.controls.append(control)
-        if self._answer and control["type"] in ("stop", "silent"):
-            utterance = control["utterance"]
+        if not self._answer or control["type"] not in ("stop", "silent"):
+            return
+        last = control["utterance"]
+        through = {n for n in self._sent if n <= last} if control["type"] == "stop" else set()
+        for utterance in sorted((through | {last}) - self._answered):
+            self._answered.add(utterance)
             sent = self._sent.get(utterance, 0.0)
             ms = self._played(utterance, sent) if self._played is not None else int(sent)
             self._inbox.put_nowait(Played(utterance=utterance, ms=ms))
