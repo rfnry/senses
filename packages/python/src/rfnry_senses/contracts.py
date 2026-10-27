@@ -59,6 +59,10 @@ class LiveToolCall(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
+class LiveToolCancelled(BaseModel):
+    call_ids: list[str]
+
+
 class LiveInterrupted(BaseModel):
     pass
 
@@ -74,6 +78,7 @@ LiveEvent = (
     | LiveStarted
     | LiveDone
     | LiveToolCall
+    | LiveToolCancelled
     | LiveInterrupted
     | LiveFailed
 )

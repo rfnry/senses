@@ -39,6 +39,7 @@ LiveEvent = (
     | LiveStarted
     | LiveDone
     | LiveToolCall
+    | LiveToolCancelled
     | LiveInterrupted
     | LiveFailed
 )
@@ -102,7 +103,16 @@ class LiveToolCall(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
 ```
 
-The model calls a tool. The session dispatches it through the tools given to `start`, bounded by `tool_timeout`, answers it with `submit_result` exactly once, and reports `ToolCalled`.
+The model calls a tool. The session dispatches it through the tools given to `start`, bounded by `tool_timeout`, answers it with `submit_result` exactly once unless the model withdraws it, and reports `ToolCalled`.
+
+### `LiveToolCancelled`
+
+```python
+class LiveToolCancelled(BaseModel):
+    call_ids: list[str]
+```
+
+The model withdrew these calls. The session cancels each one still running and submits nothing for it; each reports `ToolCalled` with `cancelled=True`. An id it is not running is ignored.
 
 ### `LiveInterrupted`
 
@@ -256,6 +266,17 @@ Raises `InputError` when `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
 Raises `TransportError` when the session is not started or is closed.
 
+### `Session.cancel`
+
+```python
+async def cancel(self, *, triggered_by: IdentityLike) -> Cancelled | None: ...
+```
+
+Stops every tool call still running, except the one that calls it, and answers each with `"cancelled"` as an error and `respond=False`, so the model knows and is not asked to reply. Returns the `Cancelled` it reports once each call is answered, or `None` when nothing was running.
+Raises `InputError` when `triggered_by` does not fit.
+Raises `ConfigurationError` when the session has no live model.
+Raises `TransportError` when the session is not started or is closed.
+
 ### `Session.mute`
 
 ```python
@@ -329,12 +350,13 @@ Event = Annotated[
     | Muted
     | Informed
     | ToolCalled
+    | Cancelled
     | Closed,
     Field(discriminator="kind"),
 ]
 ```
 
-Everything `Session.events()` yields, told apart by `kind`. Every event is frozen and carries the session's `scope` and the time `at`; the client receives all but `Informed` and `ToolCalled`.
+Everything `Session.events()` yields, told apart by `kind`. Every event is frozen and carries the session's `scope` and the time `at`; the client receives all but `Informed`, `ToolCalled` and `Cancelled`.
 
 ### `Heard`
 
@@ -463,9 +485,23 @@ class ToolCalled(BaseModel):
     input: dict[str, Any]
     output: Content
     is_error: bool
+    cancelled: bool
 ```
 
-A live model's tool call ran; `output` is what went back to the model. It is not sent to the client.
+A live model's tool call ran; `output` is what went back to the model. `cancelled` is true when the model withdrew the call — nothing went back, and `output` is empty — or `Session.cancel` stopped it. It is not sent to the client.
+
+### `Cancelled`
+
+```python
+class Cancelled(BaseModel):
+    scope: str
+    at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    kind: Literal["cancelled"] = "cancelled"
+    tools: list[str]
+    triggered_by: Identity
+```
+
+`Session.cancel` stopped the tool calls that were running, named in `tools`; each still reports its own `ToolCalled`. It is not sent to the client.
 
 ### `Closed`
 

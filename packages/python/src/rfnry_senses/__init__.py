@@ -11,6 +11,7 @@ from rfnry_senses.contracts import (
     LiveSaid,
     LiveStarted,
     LiveToolCall,
+    LiveToolCancelled,
     SpeechModel,
     Transcript,
     Transcription,
@@ -26,6 +27,7 @@ from rfnry_senses.errors import (
     TransportError,
 )
 from rfnry_senses.events import (
+    Cancelled,
     Closed,
     Event,
     Heard,
@@ -70,6 +72,7 @@ __all__ = [
     "Muted",
     "Informed",
     "ToolCalled",
+    "Cancelled",
     "Closed",
     "LiveModel",
     "LiveConnection",
@@ -80,6 +83,7 @@ __all__ = [
     "LiveStarted",
     "LiveDone",
     "LiveToolCall",
+    "LiveToolCancelled",
     "LiveInterrupted",
     "LiveFailed",
     "TranscriptionModel",

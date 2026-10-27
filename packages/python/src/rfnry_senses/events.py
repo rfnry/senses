@@ -72,6 +72,13 @@ class ToolCalled(_Event):
     input: dict[str, Any]
     output: Content
     is_error: bool
+    cancelled: bool
+
+
+class Cancelled(_Event):
+    kind: Literal["cancelled"] = "cancelled"
+    tools: list[str]
+    triggered_by: Identity
 
 
 class Closed(_Event):
@@ -91,6 +98,7 @@ Event = Annotated[
     | Muted
     | Informed
     | ToolCalled
+    | Cancelled
     | Closed,
     Field(discriminator="kind"),
 ]

@@ -93,6 +93,7 @@ LiveHeard(text="a table for", final=False)                # the person, as the m
 LiveSaid(text="Booked for eight. ")                       # the model's own words, as it speaks them
 LiveStarted(id="r1", requested=True), LiveDone()          # one response: its id, and whether you asked for it
 LiveToolCall(call_id="c1", name="consult", args={"input": "Is the terrace open?"})
+LiveToolCancelled(call_ids=["c1"])                        # the model withdrew the call
 LiveInterrupted()                                         # the model heard the person cut in
 LiveFailed(message="connection lost")                     # the connection is over
 ```
@@ -188,10 +189,19 @@ tool, senses dispatches the call through `tools` — any family `Tools`: an engi
 parts goes back as it is, a dict as JSON; an exception goes back as an error the model reads,
 `InputError: tools: unknown tool 'ghost'`. Each call is bounded by `tool_timeout` (30 s by default,
 `None` for none) and reported as a `ToolCalled` event. Every call the model makes is answered
-exactly once, even when the person interrupts the response that made it. A tool whose result should
+exactly once, even when the person interrupts the response that made it — unless the model
+withdraws it with `LiveToolCancelled`: then the call is stopped and nothing goes back. A tool whose result should
 start no reply — ending the call, handing it over — is named in `start(tools=tools, inform=["end_call"])`:
 its result goes back the way `inform` speaks, as something the model knows, and the model is not
 asked to say more.
+
+Your code stops the tool calls still running with `cancel`, as `interrupt` stops the voice — the
+person moved on, the call is ending. Each one is answered `"cancelled"`, without asking for a reply,
+and `Cancelled` names who stopped them; when to cancel is yours:
+
+```python
+cancelled = await session.cancel(triggered_by=host)   # Cancelled(tools=[...]), or None when none ran
+```
 
 Two more verbs reach a live model. `prompt` asks it to speak now, in its own words, and returns what
 it said; `inform` gives it something to know without a reply — the fact that arrived after it was
@@ -375,7 +385,8 @@ session's `scope` and the time `at`:
 | `Looked` | `frames, triggered_by` | someone looked through the camera |
 | `Muted` | `muted, triggered_by` | the output gate closed or opened |
 | `Informed` | `text, triggered_by` | a live model was told something |
-| `ToolCalled` | `name, input, output, is_error` | a live model's tool call ran |
+| `ToolCalled` | `name, input, output, is_error, cancelled` | a live model's tool call ran, or was stopped |
+| `Cancelled` | `tools, triggered_by` | `cancel` stopped the tool calls running |
 | `Closed` | `reason, message` | the session ended: `closed`, `hung_up` or `failed` |
 
 ```python
@@ -394,8 +405,8 @@ Every action leaves an event naming its cause. `Said.triggered_by` is the identi
 each `say` and `prompt` joins a queue, each response the model starts takes the oldest, and a
 response started with the queue empty — the model answering what it heard, or speaking on its own —
 has `triggered_by=None`. So does one the adapter reports with `LiveStarted(requested=False)`, which
-the vendor started on its own while a request waited; the request keeps its place for the next. The client receives every event except `Informed` and `ToolCalled`, which
-are between you and the model.
+the vendor started on its own while a request waited; the request keeps its place for the next. The client receives every event except `Informed`, `ToolCalled` and
+`Cancelled`, which are between you and the model.
 
 Every identity the library takes — `serve`, `accept_offer`, `Loopback`, a transport's `identity`,
 each verb's `triggered_by=`, `SensesTools(triggered_by=)` — is an `IdentityLike`, read by its
@@ -697,8 +708,8 @@ tenant — a thread, a memory corpus, an engine agent — are built for the sess
 Everything the package exports, by role.
 
 - **Run a session:** `Session` — `start(tools=)` or `async with` — and `SensesTools`.
-- **What a session reports:** `Event`; `Heard`, `TurnEnded`, `Said`, `Interrupted`, `Speaking`, `Silent`, `Looked`, `Muted`, `Informed`, `ToolCalled`, `Closed`.
-- **Speak to models:** `LiveModel`, `LiveConnection`, `LiveEvent`, `LiveAudio`, `LiveHeard`, `LiveSaid`, `LiveStarted`, `LiveDone`, `LiveToolCall`, `LiveInterrupted`, `LiveFailed`; `TranscriptionModel`, `Transcription`, `Transcript`, `UtteranceEnd`; `SpeechModel`; `AudioFrame`; parts `Text`, `Image`, `Audio`, `Document`, `Part`, `Content`; `ToolSpec`.
+- **What a session reports:** `Event`; `Heard`, `TurnEnded`, `Said`, `Interrupted`, `Speaking`, `Silent`, `Looked`, `Muted`, `Informed`, `ToolCalled`, `Cancelled`, `Closed`.
+- **Speak to models:** `LiveModel`, `LiveConnection`, `LiveEvent`, `LiveAudio`, `LiveHeard`, `LiveSaid`, `LiveStarted`, `LiveDone`, `LiveToolCall`, `LiveToolCancelled`, `LiveInterrupted`, `LiveFailed`; `TranscriptionModel`, `Transcription`, `Transcript`, `UtteranceEnd`; `SpeechModel`; `AudioFrame`; parts `Text`, `Image`, `Audio`, `Document`, `Part`, `Content`; `ToolSpec`.
 - **Give models tools:** `Tool`, `Tools`.
 - **Connect people:** `serve`, `Connection`, `Transport`, `Played`, `Loopback`, `Identity`, `IdentityLike`; with the `webrtc` extra, `accept_offer` and `WebRTCTransport` from `rfnry_senses.webrtc`.
 - **Fail loudly:** `SensesException`, `ConfigurationError`, `InputError`, `NotFoundError`, `ModelError`, `TransportError`.

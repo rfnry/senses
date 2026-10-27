@@ -24,6 +24,7 @@ from rfnry_senses.contracts import (
     LiveSaid,
     LiveStarted,
     LiveToolCall,
+    LiveToolCancelled,
     SpeechModel,
     Transcript,
     Transcription,
@@ -39,6 +40,7 @@ from rfnry_senses.errors import (
     TransportError,
 )
 from rfnry_senses.events import (
+    Cancelled,
     Closed,
     Event,
     Heard,
@@ -182,6 +184,8 @@ class Session:
         self._held: deque[tuple[Utterance, asyncio.Future[bool]]] = deque()
         self._granted: Utterance | None = None
         self._settled = asyncio.Event()
+        self._running: dict[str, tuple[LiveToolCall, asyncio.Task[object], asyncio.Task[None]]] = {}
+        self._withdrawn: set[str] = set()
         self._responding = False
         self._played: dict[int, asyncio.Future[float]] = {}
         self._lock = asyncio.Lock()
@@ -305,6 +309,27 @@ class Session:
         async with self._lock:
             await connection.send_text(text, respond=False)
         await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
+
+    async def cancel(self, *, triggered_by: IdentityLike) -> Cancelled | None:
+        cause = as_identity(triggered_by)
+        self._check_open()
+        self._need_live("cancel")
+        current = asyncio.current_task()
+        stopping = [
+            (call, work, answering)
+            for call, work, answering in self._running.values()
+            if work is not current and not work.done()
+        ]
+        if not stopping:
+            return None
+        for _, work, _ in stopping:
+            work.cancel()
+        cancelled = Cancelled(
+            scope=self.scope, tools=[call.name for call, _, _ in stopping], triggered_by=cause
+        )
+        await self._emit(cancelled)
+        await asyncio.wait([answering for _, _, answering in stopping])
+        return cancelled
 
     async def quiet(self) -> None:
         self._check_open()
@@ -444,7 +469,7 @@ class Session:
     async def _emit(self, event: Event) -> None:
         for queue in list(self._subscribers):
             queue.put_nowait(event)
-        if not isinstance(event, Informed | ToolCalled):
+        if not isinstance(event, Informed | ToolCalled | Cancelled):
             with contextlib.suppress(Exception):
                 await self._transport.send_control(
                     {"type": "event", "event": event.model_dump(mode="json")}
@@ -529,7 +554,13 @@ class Session:
             elif isinstance(event, LiveDone):
                 await self._response_done()
             elif isinstance(event, LiveToolCall):
-                self._spawn(self._call(event))
+                work = asyncio.ensure_future(self._dispatch(event))
+                self._running[event.call_id] = (event, work, self._spawn(self._call(event, work)))
+            elif isinstance(event, LiveToolCancelled):
+                for call_id in event.call_ids:
+                    if call_id in self._running:
+                        self._withdrawn.add(call_id)
+                        self._running[call_id][1].cancel()
             elif isinstance(event, LiveInterrupted):
                 await self._cut(self.person)
                 await self._drop_causes()
@@ -645,26 +676,42 @@ class Session:
             raise
         return await u.done
 
-    async def _call(self, call: LiveToolCall) -> None:
+    async def _dispatch(self, call: LiveToolCall) -> object:
+        if self._tools is None:
+            raise InputError(f"tools: unknown tool {call.name!r}")
+        return await self._tools.dispatch(call.name, call.args)
+
+    async def _call(self, call: LiveToolCall, work: asyncio.Task[object]) -> None:
         assert self._connection is not None
         output: Content
+        respond, cancelled = call.name not in self._informs, False
         try:
-            if self._tools is None:
-                raise InputError(f"tools: unknown tool {call.name!r}")
-            result = await asyncio.wait_for(
-                self._tools.dispatch(call.name, call.args), self._tool_timeout
-            )
+            result = await asyncio.wait_for(work, self._tool_timeout)
             output, is_error = as_content(result), False
         except TimeoutError:
             output, is_error = f"timed out after {self._tool_timeout:g}s", True
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            output, is_error, respond, cancelled = "cancelled", True, False, True
         except Exception as exc:
             output, is_error = f"{type(exc).__name__}: {exc}", True
-        await self._connection.submit_result(
-            call.call_id, output, is_error, respond=call.name not in self._informs
-        )
+        finally:
+            self._running.pop(call.call_id, None)
+        if call.call_id in self._withdrawn:
+            self._withdrawn.discard(call.call_id)
+            output, is_error, cancelled = "", False, True
+        else:
+            await self._connection.submit_result(call.call_id, output, is_error, respond=respond)
         await self._emit(
             ToolCalled(
-                scope=self.scope, name=call.name, input=call.args, output=output, is_error=is_error
+                scope=self.scope,
+                name=call.name,
+                input=call.args,
+                output=output,
+                is_error=is_error,
+                cancelled=cancelled,
             )
         )
 
@@ -774,7 +821,10 @@ class Session:
             return
         self._closed = True
         current = asyncio.current_task()
-        tasks = [t for t in (*self._tasks, self._playing) if t is not None and t is not current]
+        works = [work for _, work, _ in self._running.values()]
+        tasks = [
+            t for t in (*self._tasks, self._playing, *works) if t is not None and t is not current
+        ]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

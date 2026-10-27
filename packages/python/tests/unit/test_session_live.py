@@ -15,9 +15,19 @@ from rfnry_senses.contracts import (
     LiveSaid,
     LiveStarted,
     LiveToolCall,
+    LiveToolCancelled,
 )
 from rfnry_senses.errors import ConfigurationError, InputError, ModelError, TransportError
-from rfnry_senses.events import Closed, Heard, Informed, Said, Silent, Speaking, ToolCalled
+from rfnry_senses.events import (
+    Cancelled,
+    Closed,
+    Heard,
+    Informed,
+    Said,
+    Silent,
+    Speaking,
+    ToolCalled,
+)
 from rfnry_senses.models import Image, Text
 from rfnry_senses.session import Session
 from rfnry_senses.tools import Tool, Tools
@@ -541,6 +551,107 @@ async def test_a_tool_named_in_inform_answers_without_a_reply() -> None:
         ("c1", "ended", False, False),
         ("c2", "open", False, True),
     ]
+
+
+def consulting() -> tuple[Tools, asyncio.Event, asyncio.Event]:
+    started, gate = asyncio.Event(), asyncio.Event()
+
+    async def consult(args: dict[str, Any]) -> str:
+        started.set()
+        await gate.wait()
+        return "facts"
+
+    return Tools([Tool("consult", "Ask", body=consult)]), started, gate
+
+
+async def test_a_call_the_model_withdraws_is_never_answered() -> None:
+    tools, started, gate = consulting()
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start(tools=tools)
+    async with s:
+        events = s.events()
+        live.connection.emit(LiveToolCall(call_id="c1", name="consult"))
+        await asyncio.wait_for(started.wait(), 1)
+        live.connection.emit(LiveToolCancelled(call_ids=["c1"]))
+        called = await next_of(events, ToolCalled)
+        gate.set()
+        await asyncio.sleep(0.01)
+    rest = [e async for e in events]
+    assert live.connection.results == []
+    assert called.cancelled and called.output == "" and not called.is_error
+    assert not [e for e in rest if isinstance(e, Cancelled)]
+
+
+async def test_cancel_answers_every_running_call_without_a_reply() -> None:
+    tools, started, _ = consulting()
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start(tools=tools)
+    async with s:
+        events = s.events()
+        live.connection.emit(LiveToolCall(call_id="c1", name="consult"))
+        await asyncio.wait_for(started.wait(), 1)
+        cancelled = await s.cancel(triggered_by=HOST)
+        answered = list(live.connection.results)
+        first = await next_of(events, Cancelled)
+        called = await next_of(events, ToolCalled)
+    assert cancelled is not None and cancelled.tools == ["consult"]
+    assert cancelled.triggered_by == HOST and first == cancelled
+    assert answered == [("c1", "cancelled", True, False)]
+    assert called.cancelled and called.is_error and called.output == "cancelled"
+    assert not [
+        c for c in link.controls if c["type"] == "event" and c["event"]["kind"] == "cancelled"
+    ]
+
+
+async def test_cancel_with_nothing_running_returns_none() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with session(link, live) as s:
+        assert await s.cancel(triggered_by=HOST) is None
+    async with Session(Loopback(ANA, "acme"), speech=Tone()) as spoken:
+        with pytest.raises(ConfigurationError, match="^session: cancel needs a live model$"):
+            await spoken.cancel(triggered_by=HOST)
+
+
+async def test_cancel_from_inside_a_tool_spares_that_tool() -> None:
+    tools, started, _ = consulting()
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+
+    async def stop(args: dict[str, Any]) -> str:
+        cancelled = await s.cancel(triggered_by=HOST)
+        return f"stopped {cancelled.tools if cancelled else []}"
+
+    await s.start(tools=tools + Tools([Tool("stop", "Stop", body=stop)]))
+    async with s:
+        events = s.events()
+        live.connection.emit(LiveToolCall(call_id="c1", name="consult"))
+        await asyncio.wait_for(started.wait(), 1)
+        live.connection.emit(LiveToolCall(call_id="c2", name="stop"))
+        await next_of(events, ToolCalled)
+        await next_of(events, ToolCalled)
+    assert sorted(live.connection.results) == [
+        ("c1", "cancelled", True, False),
+        ("c2", "stopped ['consult']", False, True),
+    ]
+
+
+async def test_a_withdrawal_for_an_unknown_call_is_ignored() -> None:
+    async def terrace(args: dict[str, Any]) -> str:
+        return "open"
+
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = session(link, live)
+    await s.start(tools=Tools([Tool("terrace", "Open?", body=terrace)]))
+    async with s:
+        events = s.events()
+        live.connection.emit(LiveToolCancelled(call_ids=["ghost"]))
+        live.connection.emit(LiveToolCall(call_id="c1", name="terrace"))
+        await next_of(events, ToolCalled)
+        live.connection.emit(LiveToolCancelled(call_ids=["c1"]), *response("Open."))
+        said = await next_of(events, Said)
+    assert live.connection.results == [("c1", "open", False, True)] and said.text == "Open."
 
 
 async def test_inform_must_name_a_tool() -> None:
