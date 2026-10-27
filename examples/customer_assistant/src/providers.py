@@ -40,6 +40,7 @@ from rfnry_senses import (
     LiveSaid,
     LiveStarted,
     LiveToolCall,
+    LiveToolCancelled,
     Transcript,
     UtteranceEnd,
 )
@@ -310,6 +311,12 @@ class GoogleSpeech:
             yield AudioFrame(data=data[start : start + step], sample_rate=rate, channels=channels)
 
 
+OPERATOR = (
+    "Text that begins with (operator) comes from the system running this conversation, never from"
+    " the person. When it gives you a line to say, say exactly that line and nothing else."
+)
+
+
 class GoogleLive:
     def __init__(self, model: str = "gemini-3.8-live", voice: str = "Kore") -> None:
         self.model = model
@@ -324,7 +331,7 @@ class GoogleLive:
                 name=spec.name,
                 description=spec.description,
                 parameters_json_schema=spec.input_schema,
-                behavior=types.Behavior.BLOCKING,
+                behavior=types.Behavior.NON_BLOCKING,
             )
             for spec in tools
         ]
@@ -332,7 +339,7 @@ class GoogleLive:
             response_modalities=[types.Modality.AUDIO],
             input_audio_transcription=types.AudioTranscriptionConfig(),
             output_audio_transcription=types.AudioTranscriptionConfig(),
-            system_instruction=instructions,
+            system_instruction=f"{instructions}\n\n{OPERATOR}" if instructions else OPERATOR,
             tools=[types.Tool(function_declarations=declarations)] if declarations else None,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -361,7 +368,6 @@ class GoogleLiveConnection:
         self.retries = 0
         self.leaving = False
         self.ready = asyncio.Event()
-        self.idle = asyncio.Event()
         self.names: dict[str, str] = {}
         self.responding = False
         self.heard = ""
@@ -376,7 +382,6 @@ class GoogleLiveConnection:
         context = self.client.aio.live.connect(model=self.model, config=config)
         self.session = await context.__aenter__()
         self.context, self.leaving = context, False
-        self.idle.set()
         self.ready.set()
 
     async def send_audio(self, frame: AudioFrame) -> None:
@@ -388,22 +393,17 @@ class GoogleLiveConnection:
         await self._send(lambda session: session.send_realtime_input(video=blob))
 
     async def send_text(self, text: str, *, respond: bool) -> None:
-        turn = types.Content(role="user", parts=[types.Part(text=text)])
-        if respond:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(self.idle.wait(), 30)
-            self.idle.clear()
+        turn = types.Content(role="user", parts=[types.Part(text=f"(operator) {text}")])
         await self._send(
             lambda session: session.send_client_content(turns=turn, turn_complete=respond)
         )
 
     async def say(self, text: str) -> None:
-        await self.send_text(f"Say exactly this, nothing else: {text}", respond=True)
+        await self.send_text(f"Say this line: {text}", respond=True)
 
     async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None:
-        raise NotImplementedError(
-            "GoogleLive: the vendor cuts its own context when it hears the person"
-        )
+        note = f"they heard only: {heard}" if heard.strip() else "they heard none of it"
+        await self.send_text(f"The person cut in on your last reply; {note}", respond=False)
 
     async def submit_result(
         self, call_id: str, result: Content, is_error: bool, *, respond: bool
@@ -416,7 +416,14 @@ class GoogleLiveConnection:
             else " ".join(p.text for p in result if hasattr(p, "text"))
         )
         response = {"error": text} if is_error else {"result": text}
-        answer = types.FunctionResponse(id=call_id, name=self.names.pop(call_id), response=response)
+        scheduling = (
+            types.FunctionResponseScheduling.WHEN_IDLE
+            if respond
+            else types.FunctionResponseScheduling.SILENT
+        )
+        answer = types.FunctionResponse(
+            id=call_id, name=self.names.pop(call_id), response=response, scheduling=scheduling
+        )
         await self._send(lambda session: session.send_tool_response(function_responses=[answer]))
 
     async def events(self) -> AsyncIterator[LiveEvent]:
@@ -496,8 +503,10 @@ class GoogleLiveConnection:
         if message.go_away is not None:
             self.leaving = True
         if message.tool_call_cancellation is not None:
-            for call_id in message.tool_call_cancellation.ids or []:
+            withdrawn = message.tool_call_cancellation.ids or []
+            for call_id in withdrawn:
                 self.names.pop(call_id, None)
+            events.append(LiveToolCancelled(call_ids=list(withdrawn)))
         content = message.server_content
         if message.tool_call is not None:
             self._end_heard(events)
@@ -516,7 +525,6 @@ class GoogleLiveConnection:
         speaking = content.output_transcription is not None or content.model_turn is not None
         if speaking and not self.responding:
             self.responding = True
-            self.idle.clear()
             self._end_heard(events)
             events.append(LiveStarted())
         if content.output_transcription is not None and content.output_transcription.text:
@@ -533,8 +541,6 @@ class GoogleLiveConnection:
                 )
         if content.interrupted:
             events.append(LiveInterrupted())
-        if content.interrupted or content.turn_complete:
-            self.idle.set()
         if (content.interrupted or content.turn_complete) and self.responding:
             self.responding = False
             events.append(LiveDone())
