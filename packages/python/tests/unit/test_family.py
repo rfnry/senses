@@ -1,10 +1,26 @@
+import subprocess
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).parents[4]
-FAMILY = ROOT.parent
 OWN = ROOT / "packages/python/src/rfnry_senses"
+
+
+def family() -> Path:
+    try:
+        found = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    except OSError:
+        found = ""
+    return (Path(found).parent if found else ROOT).parent
+
+
+FAMILY = family()
 
 BLOCKS = {
     "parts": (
@@ -73,7 +89,9 @@ PAIRS = [(block, name) for block, spec in BLOCKS.items() for name in spec[3]]
 def test_the_shared_block_is_byte_identical_with_the_sibling(block: str, name: str) -> None:
     own_file, start, end, _ = BLOCKS[block]
     if not (FAMILY / name).is_dir():
-        pytest.skip(f"no {name} checkout at {FAMILY / name}")
+        pytest.fail(
+            f"tests: no rfnry-{name} checkout at {FAMILY / name}; clone it beside senses' checkout"
+        )
     theirs = sibling(name, own_file, start)
     ours = cut((OWN / own_file).read_text(encoding="utf-8"), start, end)
     assert ours is not None and ours == (cut(theirs, start, end) if theirs is not None else None)
