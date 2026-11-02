@@ -1,6 +1,6 @@
 import { type ChildProcess, execFileSync, execSync, spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { type AudioContextLike, Playback } from '../../src/playback'
 import { WebSocketLink } from '../../src/websocket'
 import type { AudioOut, SensesEvent, ServerControl } from '../../src/wire'
@@ -118,7 +118,12 @@ afterEach(() => {
   running = null
 })
 
-describe.skipIf(!hasUv)('the TypeScript client against the Python server', () => {
+beforeAll(() => {
+  if (!hasUv)
+    throw new Error('tests: the integration tier needs uv on the PATH to run the Python server')
+})
+
+describe('the TypeScript client against the Python server', () => {
   it('is heard, answered, and hung up on', async () => {
     const server = await start(false)
     const result = await talk(server, async (link) => {
@@ -130,31 +135,28 @@ describe.skipIf(!hasUv)('the TypeScript client against the Python server', () =>
   })
 })
 
-describe.skipIf(!hasUv || !LIVE)(
-  'the TypeScript client against real transcription and speech',
-  () => {
-    it('is heard by the transcription model and answered by the speech model', async () => {
-      const { rate, pcm } = synthesize('A table for two at eight.')
-      const server = await start(true)
-      const step = (rate / 10) * 2
-      let answered = false
-      const result = await talk(server, async (link) => {
-        const speech = [...Array(Math.ceil(pcm.length / step)).keys()].map((i) =>
-          pcm.slice(i * step, (i + 1) * step)
-        )
-        for (const chunk of speech) {
-          link.sendAudio(chunk, rate)
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        }
-        while (!answered) {
-          link.sendAudio(new Uint8Array(step), rate)
-          await new Promise((resolve) => setTimeout(resolve, 100))
-        }
-      })
-      answered = true
-      expectTheRoundTrip(result, 'table')
-      result.link?.close()
-      await waitFor(server.output, /closed hung_up/)
+describe.skipIf(!LIVE)('the TypeScript client against real transcription and speech', () => {
+  it('is heard by the transcription model and answered by the speech model', async () => {
+    const { rate, pcm } = synthesize('A table for two at eight.')
+    const server = await start(true)
+    const step = (rate / 10) * 2
+    let answered = false
+    const result = await talk(server, async (link) => {
+      const speech = [...Array(Math.ceil(pcm.length / step)).keys()].map((i) =>
+        pcm.slice(i * step, (i + 1) * step)
+      )
+      for (const chunk of speech) {
+        link.sendAudio(chunk, rate)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      while (!answered) {
+        link.sendAudio(new Uint8Array(step), rate)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
     })
-  }
-)
+    answered = true
+    expectTheRoundTrip(result, 'table')
+    result.link?.close()
+    await waitFor(server.output, /closed hung_up/)
+  })
+})
