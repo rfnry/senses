@@ -18,7 +18,8 @@ from rfnry_senses.errors import InputError
 from rfnry_senses.events import Closed
 from rfnry_senses.models import Image
 from rfnry_senses.session import Session
-from rfnry_senses.webrtc import _Voice, accept_offer
+from rfnry_senses.transport import Played
+from rfnry_senses.webrtc import _Marker, _Voice, accept_offer
 
 from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, lookalike, next_of, until
 
@@ -273,8 +274,6 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
 
 
 def kinds_queued(voice: _Voice) -> list[str]:
-    from rfnry_senses.webrtc import _Marker
-
     out = []
     while not voice._queue.empty():
         item = voice._queue.get_nowait()
@@ -290,12 +289,22 @@ async def test_overlapping_live_utterances_each_keep_their_own_markers() -> None
     link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
     try:
         await link.send_control({"type": "speaking", "utterance": 1})
-        await link.send_audio(tone(50, 100, 24000), 1)
+        await link.send_audio(tone(50, 2222, 24000), 1)
         await link.send_control({"type": "speaking", "utterance": 2})
-        await link.send_audio(tone(60, 100, 24000), 2)
+        await link.send_audio(tone(30, 2222, 24000), 2)
         await link.send_control({"type": "silent", "utterance": 1})
+        await link.send_audio(tone(30, 2222, 24000), 2)
         await link.send_control({"type": "silent", "utterance": 2})
-        assert kinds_queued(link._voice) == [
+        queued = []
+        while not link._voice._queue.empty():
+            queued.append(link._voice._queue.get_nowait())
+        labels = [
+            f"{json.loads(i.text or '')['type']} {json.loads(i.text or '')['utterance']}"
+            if isinstance(i, _Marker)
+            else "frame"
+            for i in queued
+        ]
+        assert labels == [
             "speaking 1",
             *["frame"] * 3,
             "silent 1",
@@ -303,6 +312,14 @@ async def test_overlapping_live_utterances_each_keep_their_own_markers() -> None
             *["frame"] * 3,
             "silent 2",
         ]
+        start = labels.index("speaking 2")
+        inside = [i for i in queued[start:] if isinstance(i, AudioFrame)]
+        samples = [
+            struct.unpack("<h", f.data[k : k + 2])[0]
+            for f in inside
+            for k in range(0, len(f.data), 2)
+        ]
+        assert samples.count(0) == 0
     finally:
         await link.close()
 
@@ -315,6 +332,22 @@ async def test_a_cut_keeps_the_fade_and_drops_the_markers_after_it() -> None:
         await link.send_control({"type": "speaking", "utterance": 2})
         await link.send_audio(tone(100, 100, 24000), 2)
         link.clear_audio()
+        assert kinds_queued(link._voice) == ["speaking 1", "frame", "frame", "frame"]
+        assert link._unsent == []
+    finally:
+        await link.close()
+
+
+async def test_a_cut_answers_the_utterances_whose_voice_never_left_at_zero() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    try:
+        for number in (1, 2, 3):
+            await link.send_control({"type": "speaking", "utterance": number})
+            await link.send_audio(tone(200, 100, 24000), number)
+        link.clear_audio()
+        assert link._unsent == []
+        reports = [link._inbox.get_nowait() for _ in range(link._inbox.qsize())]
+        assert reports == [Played(utterance=2, ms=0), Played(utterance=3, ms=0)]
         assert kinds_queued(link._voice) == ["speaking 1", "frame", "frame", "frame"]
     finally:
         await link.close()

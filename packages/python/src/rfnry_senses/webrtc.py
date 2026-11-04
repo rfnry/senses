@@ -2,6 +2,7 @@ import array
 import asyncio
 import contextlib
 import fractions
+import json
 import logging
 import sys
 import time
@@ -124,7 +125,8 @@ class _Voice(MediaStreamTrack):
             chunk, self._rest = self._rest[:size], self._rest[size:]
             self._queue.put_nowait(AudioFrame(data=chunk, sample_rate=self.RATE))
 
-    def clear(self) -> None:
+    def clear(self) -> list[int]:
+        dropped: list[int] = []
         kept: list[AudioFrame | _Marker] = []
         frames = 0
         while not self._queue.empty():
@@ -132,11 +134,15 @@ class _Voice(MediaStreamTrack):
             if isinstance(item, _Marker):
                 if frames < self.FADE_FRAMES:
                     kept.append(item)
+                elif item.with_next and item.text:
+                    dropped.append(json.loads(item.text)["utterance"])
             elif frames < self.FADE_FRAMES:
                 kept.append(item)
                 frames += 1
-        while kept and isinstance(kept[-1], _Marker):
+        while kept and isinstance(last := kept[-1], _Marker):
             kept.pop()
+            if last.with_next and last.text:
+                dropped.append(json.loads(last.text)["utterance"])
         self._rest = b""
         self._resampler, self._source = None, None
         self._start = None
@@ -148,6 +154,7 @@ class _Voice(MediaStreamTrack):
             else:
                 self._queue.put_nowait(fade(item, 1 - n / frames, 1 - (n + 1) / frames))
                 n += 1
+        return sorted(dropped)
 
     def _fire(self, texts: list[str]) -> None:
         if self._emit is not None:
@@ -203,6 +210,7 @@ class WebRTCTransport:
         self._utterance: int | None = None
         self._ends: dict[int, _Marker] = {}
         self._refused = False
+        self._cut: set[int] = set()
         self._pc.addTrack(self._voice)
         self._inbox: asyncio.Queue[AudioFrame | Image | Played | None] = asyncio.Queue()
         self._channel: RTCDataChannel | None = None
@@ -239,9 +247,12 @@ class WebRTCTransport:
                     self._flush()
                     return
                 try:
-                    self._inbox.put_nowait(parse_played(message))
+                    played = parse_played(message)
                 except InputError as exc:
                     logger.warning("transport: dropped a frame: %s", exc)
+                    return
+                if played.utterance not in self._cut:
+                    self._inbox.put_nowait(played)
 
         @self._pc.on("connectionstatechange")
         def on_state() -> None:
@@ -280,7 +291,9 @@ class WebRTCTransport:
     def clear_audio(self) -> None:
         self._utterance = None
         self._ends.clear()
-        self._voice.clear()
+        for number in self._voice.clear():
+            self._cut.add(number)
+            self._inbox.put_nowait(Played(utterance=number, ms=0))
 
     def _switch(self, utterance: int | None) -> None:
         self._voice.finish()
