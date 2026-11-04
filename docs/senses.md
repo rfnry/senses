@@ -103,7 +103,9 @@ adds context without a reply, and `submit_result` takes the same switch for a to
 `say(text)` speaks exactly those words. The text `send_text` and `say` carry is your code addressing
 the model — an instruction, a fact, a line to speak — whoever caused it: `triggered_by` names the
 cause, never a speaker, and the person reaches the model only as audio. An adapter sends it on the
-vendor's operator channel where there is one.
+vendor's operator channel where there is one. Senses sends one at a time and never cancels a send
+whose caller gave up: it runs to its end, so one that never returns holds every later `say`,
+`prompt` and `inform` until `close`, and an adapter bounds its own send.
 
 `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to
 what the person heard: the response the cut landed in keeps `heard`, the first `played_ms` of its
@@ -245,7 +247,7 @@ on before its send is done ends there, and a send under way still runs to its en
 goes; one given up on after that is still answered. A request ended after its send began may still
 be answered by the vendor; how senses tells that answer from the next request's is in
 [Models](#models). A vendor that never answers a request holds the ones behind it until the person
-cuts in, `mute` or `close`. `inform` never waits.
+cuts in, `mute` or `close`. `inform` waits for no response, only for a send under way.
 A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
 vendor that holds that response open until the result, the tool times out first: spawn it there.
 

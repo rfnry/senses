@@ -1,7 +1,7 @@
 import asyncio
 import gc
 import weakref
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
@@ -815,6 +815,8 @@ class SendingSay(ScriptedConnection):
         self.sent = asyncio.Event()
         self.sending = 0
         self.overlapped = False
+        self.refusal: Exception | None = None
+        self.returning: Callable[[], object] | None = None
 
     async def say(self, text: str) -> str | None:
         self.sending += 1
@@ -822,6 +824,12 @@ class SendingSay(ScriptedConnection):
         try:
             tag = await super().say(text)
             await self.sent.wait()
+            refusal, self.refusal = self.refusal, None
+            if refusal is not None:
+                raise refusal
+            returning, self.returning = self.returning, None
+            if returning is not None:
+                asyncio.get_running_loop().call_soon(returning)
             return tag
         finally:
             self.sending -= 1
@@ -883,6 +891,85 @@ async def test_a_late_answer_to_a_say_given_up_while_it_was_sending_is_cut() -> 
     assert connection.interrupts == [(0, "", "late")]
     assert said.triggered_by == ANA and said.heard == "Shall I order the usual?"
     assert saids == [said] and len(link.audio) == 1
+
+
+async def test_a_say_given_up_as_its_send_returns_has_its_late_answer_cut() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = SendingSay()
+    connection.tagging = True
+    async with session(link, live) as s:
+        events = s.events()
+        first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        connection.returning = first.cancel
+        connection.sent.set()
+        await until(first.done)
+        connection.emit(
+            LiveStarted(id="late", requested="request-1"),
+            LiveSaid(text="Your table is ready."),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        await until(lambda: bool(connection.interrupts))
+        await s.quiet()
+    saids = [e async for e in events if isinstance(e, Said)]
+    assert first.cancelled() and saids == [] and link.audio == []
+    assert connection.interrupts == [(0, "", "late")]
+
+
+async def test_a_say_behind_one_given_up_while_sending_waits_for_the_open_response() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = SendingSay()
+    async with session(link, live) as s:
+        first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        first.cancel()
+        second = asyncio.create_task(s.say("Shall I order the usual?", triggered_by=ANA))
+        connection.emit(
+            LiveStarted(requested=False), LiveSaid(text="Sure. "), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 1)
+        connection.sent.set()
+        await until(lambda: connection.sending == 0)
+        await asyncio.sleep(0.01)
+        sent_while_open = list(connection.calls)
+        connection.emit(LiveDone())
+        await until(lambda: len(connection.calls) == 2)
+        connection.emit(*response("Shall I order the usual?"))
+        said = await asyncio.wait_for(second, 1)
+    assert sent_while_open == [("say", "Your table is ready.")]
+    assert said.triggered_by == ANA and said.heard == "Shall I order the usual?"
+
+
+async def test_a_send_that_fails_after_its_caller_gave_up_is_logged_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    loop = asyncio.get_running_loop()
+    handled: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _, context: handled.append(context))
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = SendingSay()
+    try:
+        async with session(link, live) as s:
+            first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+            await until(lambda: len(connection.calls) == 1)
+            first.cancel()
+            connection.refusal = RuntimeError("the vendor refused")
+            connection.sent.set()
+            second = asyncio.create_task(s.say("Shall I order the usual?", triggered_by=ANA))
+            await until(lambda: len(connection.calls) == 2)
+            connection.emit(*response("Shall I order the usual?"))
+            said = await asyncio.wait_for(second, 1)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(None)
+    failures = [r for r in caplog.records if r.name == "rfnry_senses.session"]
+    assert [c["message"] for c in handled] == []
+    assert [(r.levelname, r.getMessage()) for r in failures] == [
+        ("WARNING", "session: a request given up on failed to send: the vendor refused")
+    ]
+    assert said.heard == "Shall I order the usual?"
 
 
 async def test_a_close_while_a_say_is_sending_fails_it() -> None:

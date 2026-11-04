@@ -188,6 +188,7 @@ class Session:
         self._ended_tags: set[str] = set()
         self._held: deque[tuple[Utterance, asyncio.Future[bool]]] = deque()
         self._granted: Utterance | None = None
+        self._delivering = 0
         self._cutting = 0
         self._settled = asyncio.Event()
         self._running: dict[str, tuple[LiveToolCall, asyncio.Task[object], asyncio.Task[None]]] = {}
@@ -477,7 +478,7 @@ class Session:
         await self._finish_ending(dict.fromkeys(dropped, ""))
 
     def _next(self) -> None:
-        if self._closed or self._cutting or self._granted is not None:
+        if self._closed or self._cutting or self._granted is not None or self._delivering:
             return
         if self._causes or self._responding:
             return
@@ -744,8 +745,10 @@ class Session:
             u.done.cancel()
             with contextlib.suppress(ValueError):
                 self._held.remove((u, turn))
-            with contextlib.suppress(ValueError):
+            if u in self._causes:
                 self._causes.remove(u)
+                if u.request is not None:
+                    self._ended_tags.add(u.request)
             if self._granted is u:
                 self._granted = None
             self._next()
@@ -758,23 +761,33 @@ class Session:
         self._tasks.add(sending)
         sending.add_done_callback(self._tasks.discard)
         try:
-            await asyncio.shield(sending)
+            await asyncio.wait((sending,))
         except asyncio.CancelledError:
-            current = asyncio.current_task()
-            if current is not None and current.cancelling():
-                raise
+            sending.add_done_callback(self._given_up)
+            raise
+        if not sending.cancelled():
+            sending.result()
+
+    def _given_up(self, sending: asyncio.Task[None]) -> None:
+        if not sending.cancelled() and (error := sending.exception()) is not None:
+            logger.warning("session: a request given up on failed to send: %s", error)
 
     async def _deliver(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> None:
         assert u.done is not None
-        async with self._lock:
-            if self._granted is u:
-                self._granted = None
-            if u.done.done() or self._closed:
-                return
-            self._causes.append(u)
-            u.request = await send()
-            if u.request is not None and u.done.done():
-                self._ended_tags.add(u.request)
+        self._delivering += 1
+        try:
+            async with self._lock:
+                if self._granted is u:
+                    self._granted = None
+                if u.done.done() or self._closed:
+                    return
+                self._causes.append(u)
+                u.request = await send()
+                if u.request is not None and u.done.done():
+                    self._ended_tags.add(u.request)
+        finally:
+            self._delivering -= 1
+            self._next()
 
     async def _dispatch(self, call: LiveToolCall) -> object:
         if self._tools is None:
