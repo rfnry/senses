@@ -72,6 +72,7 @@ class _Voice(MediaStreamTrack):
         self._samples = 0
         self._resampler: av.AudioResampler | None = None
         self._source: tuple[int, int] | None = None
+        self._held: list[str] = []
 
     @property
     def _chunk(self) -> int:
@@ -126,23 +127,22 @@ class _Voice(MediaStreamTrack):
             self._queue.put_nowait(AudioFrame(data=chunk, sample_rate=self.RATE))
 
     def clear(self) -> list[int]:
-        dropped: list[int] = []
+        unsent = [json.loads(text)["utterance"] for text in self._held]
+        self._held = []
         kept: list[AudioFrame | _Marker] = []
         frames = 0
         while not self._queue.empty():
             item = self._queue.get_nowait()
             if isinstance(item, _Marker):
-                if frames < self.FADE_FRAMES:
+                if item.with_next:
+                    unsent.extend([json.loads(item.text)["utterance"]] if item.text else [])
+                elif frames < self.FADE_FRAMES:
                     kept.append(item)
-                elif item.with_next and item.text:
-                    dropped.append(json.loads(item.text)["utterance"])
             elif frames < self.FADE_FRAMES:
                 kept.append(item)
                 frames += 1
-        while kept and isinstance(last := kept[-1], _Marker):
+        while kept and isinstance(kept[-1], _Marker):
             kept.pop()
-            if last.with_next and last.text:
-                dropped.append(json.loads(last.text)["utterance"])
         self._rest = b""
         self._resampler, self._source = None, None
         self._start = None
@@ -154,7 +154,7 @@ class _Voice(MediaStreamTrack):
             else:
                 self._queue.put_nowait(fade(item, 1 - n / frames, 1 - (n + 1) / frames))
                 n += 1
-        return sorted(dropped)
+        return sorted(set(unsent))
 
     def _fire(self, texts: list[str]) -> None:
         if self._emit is not None:
@@ -162,7 +162,6 @@ class _Voice(MediaStreamTrack):
                 self._emit(text)
 
     async def recv(self) -> av.AudioFrame:
-        before: list[str] = []
         while True:
             item = await self._queue.get()
             if not isinstance(item, _Marker):
@@ -170,10 +169,10 @@ class _Voice(MediaStreamTrack):
                 break
             item.left = True
             if item.with_next:
-                before.extend([item.text] if item.text else [])
+                self._held.extend([item.text] if item.text else [])
             else:
-                self._fire([*before, *([item.text] if item.text else [])])
-                before = []
+                held, self._held = self._held, []
+                self._fire([*held, *([item.text] if item.text else [])])
         out = av.AudioFrame(format="s16", layout="mono", samples=len(frame.data) // 2)
         out.planes[0].update(frame.data)
         out.sample_rate = frame.sample_rate
@@ -186,7 +185,8 @@ class _Voice(MediaStreamTrack):
             self._start, self._samples, due = now - self.PREBUFFER_S, 0, now - self.PREBUFFER_S
         await asyncio.sleep(max(0.0, due - now))
         self._samples += out.samples
-        self._fire(before)
+        held, self._held = self._held, []
+        self._fire(held)
         return out
 
 

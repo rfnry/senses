@@ -822,7 +822,7 @@ Sends the control frame on the data channel, holding it until the client's hello
 def clear_audio(self) -> None: ...
 ```
 
-Drops the queued voice, fading out over its next 60 ms instead of stopping mid-sample.
+Drops the queued voice, fading out over its next 60 ms instead of stopping mid-sample. For each utterance whose `speaking` had not yet reached the client, it puts `Played(utterance, 0)` on `inbound()` at once and ignores the client's later report for that utterance.
 
 ### `WebRTCTransport.close`
 

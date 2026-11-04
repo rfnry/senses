@@ -18,7 +18,6 @@ from rfnry_senses.errors import InputError
 from rfnry_senses.events import Closed
 from rfnry_senses.models import Image
 from rfnry_senses.session import Session
-from rfnry_senses.transport import Played
 from rfnry_senses.webrtc import _Marker, _Voice, accept_offer
 
 from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, lookalike, next_of, until
@@ -332,10 +331,17 @@ async def test_a_cut_keeps_the_fade_and_drops_the_markers_after_it() -> None:
         await link.send_control({"type": "speaking", "utterance": 2})
         await link.send_audio(tone(100, 100, 24000), 2)
         link.clear_audio()
-        assert kinds_queued(link._voice) == ["speaking 1", "frame", "frame", "frame"]
+        assert kinds_queued(link._voice) == ["frame", "frame", "frame"]
         assert link._unsent == []
     finally:
         await link.close()
+
+
+def answers(link: Any, stop: int) -> list[int]:
+    ours = [link._inbox.get_nowait().utterance for _ in range(link._inbox.qsize())]
+    delivered = [json.loads(t)["utterance"] for t in link._unsent if '"speaking"' in t]
+    browser = [n for n in {*delivered, stop} if n not in link._cut]
+    return sorted(ours + browser)
 
 
 async def test_a_cut_answers_the_utterances_whose_voice_never_left_at_zero() -> None:
@@ -346,9 +352,46 @@ async def test_a_cut_answers_the_utterances_whose_voice_never_left_at_zero() -> 
             await link.send_audio(tone(200, 100, 24000), number)
         link.clear_audio()
         assert link._unsent == []
-        reports = [link._inbox.get_nowait() for _ in range(link._inbox.qsize())]
-        assert reports == [Played(utterance=2, ms=0), Played(utterance=3, ms=0)]
-        assert kinds_queued(link._voice) == ["speaking 1", "frame", "frame", "frame"]
+        assert kinds_queued(link._voice) == ["frame", "frame", "frame"]
+        assert answers(link, 3) == [1, 2, 3]
+    finally:
+        await link.close()
+
+
+async def test_a_cut_answers_a_speaking_kept_among_the_fade_frames() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(60, 100, 24000), 1)
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(200, 100, 24000), 2)
+        await link._voice.recv()
+        link.clear_audio()
+        assert [json.loads(t)["utterance"] for t in link._unsent] == [1]
+        assert answers(link, 2) == [1, 2]
+    finally:
+        await link.close()
+
+
+async def test_a_cut_answers_a_speaking_held_while_its_frame_waits() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(20, 100, 24000), 1)
+        await link.send_control({"type": "silent", "utterance": 1})
+        await link._voice.recv()
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(200, 100, 24000), 2)
+        await link.send_control({"type": "speaking", "utterance": 3})
+        await link.send_audio(tone(200, 100, 24000), 3)
+        link._voice._start, link._voice._samples = time.monotonic() + 0.5, 0
+        waiting = asyncio.ensure_future(link._voice.recv())
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+        link.clear_audio()
+        waiting.cancel()
+        assert [json.loads(t)["utterance"] for t in link._unsent if '"speaking"' in t] == [1]
+        assert answers(link, 3) == [1, 2, 3]
     finally:
         await link.close()
 
