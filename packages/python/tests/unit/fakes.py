@@ -66,6 +66,7 @@ class ScriptedConnection:
         self.results: list[tuple[str, Content, bool, bool]] = []
         self.interrupts: list[tuple[int, str, str | None]] = []
         self.refuse_interrupt = False
+        self.tagging = False
         self.closed = False
         self._inbox: asyncio.Queue[LiveEvent | None] = asyncio.Queue()
 
@@ -82,13 +83,18 @@ class ScriptedConnection:
     async def send_image(self, image: Image) -> None:
         self.images.append(image)
 
-    async def send_text(self, text: str, *, respond: bool) -> None:
+    async def send_text(self, text: str, *, respond: bool) -> str | None:
         await asyncio.sleep(0)
         self.calls.append(("text", text, respond))
+        return self._tag() if respond else None
 
-    async def say(self, text: str) -> None:
+    async def say(self, text: str) -> str | None:
         await asyncio.sleep(0)
         self.calls.append(("say", text))
+        return self._tag()
+
+    def _tag(self) -> str | None:
+        return f"request-{len(self.calls)}" if self.tagging else None
 
     async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None:
         if self.refuse_interrupt:

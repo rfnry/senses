@@ -60,8 +60,8 @@ class LiveModel(Protocol):
 class LiveConnection(Protocol):
     async def send_audio(self, frame: AudioFrame) -> None: ...
     async def send_image(self, image: Image) -> None: ...
-    async def send_text(self, text: str, *, respond: bool) -> None: ...
-    async def say(self, text: str) -> None: ...
+    async def send_text(self, text: str, *, respond: bool) -> str | None: ...
+    async def say(self, text: str) -> str | None: ...
     async def interrupt(self, played_ms: int, *, heard: str, response: str | None) -> None: ...
     async def submit_result(self, call_id: str, result: Content, is_error: bool, *, respond: bool) -> None: ...
     def events(self) -> AsyncIterator[LiveEvent]: ...
@@ -112,6 +112,14 @@ audio, and nothing the model said after it was heard. `response` is the `id` tha
 model `heard` in words. An adapter that can tell whether a response answers its own request says so
 with `requested`, and names the response with the vendor's `id`; one that cannot leaves both `None`.
 A response to a tool result or to the person answers no `say` or `prompt`: it is `requested=False`.
+
+An adapter that can name the request a response answers returns a tag from `send_text(respond=True)`
+and `say` — the vendor's id for the request, or one of its own — and puts it on that response:
+`LiveStarted(requested=tag)`. Without tags, responses take their requests in order, and the order
+slips when the vendor answers a request senses already ended: `mute` and the person cutting in end
+a request even after it was sent, and the vendor's late answer to it is credited to the next one.
+A tag removes that limit: the late answer is cut before a word of it plays, and the next request
+keeps its own.
 
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
@@ -231,9 +239,11 @@ is `start(tools=)` — without a live model, tools belong to your own loop.
 
 A live model gives one response at a time, so `say` and `prompt` take turns: each goes to the model
 once no response is open and none is still owed to the last one sent — after the model's own reply,
-and after the response to the request before. The person cutting in, or `mute`, ends the ones not yet
-sent; `interrupt` leaves them, and they go once the cut response ends. A vendor that never answers a
-request holds the ones behind it until the person cuts in, `mute` or `close`. `inform` never waits.
+and after the response to the request before. The person cutting in, or `mute`, ends them, sent or
+not; `interrupt` leaves them, and they go once the cut response ends. A request ended after it was
+sent may still be answered by the vendor; how senses tells that answer from the next request's is
+in [Models](#models). A vendor that never answers a request holds the ones behind it until the
+person cuts in, `mute` or `close`. `inform` never waits.
 A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
 vendor that holds that response open until the result, the tool times out first: spawn it there.
 
@@ -308,8 +318,8 @@ that point — whole sentences in a cascaded session, the model's own transcript
 `Interrupted`, and, in a live session, calls `interrupt` once so the model's context holds only
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
-in the client. Queued `say` and `prompt` calls end too: the person is talking, and they return
-`Said(heard="", interrupted=True)`.
+in the client. Queued `say` and `prompt` calls end too, before `Interrupted` is reported: the person
+is talking, and they return `Said(heard="", interrupted=True)`.
 
 A live model can start its next response while the last one is still playing. The client plays them
 back to back, one stretch of voice: `Speaking` when it starts after quiet, `Silent` when all of it
@@ -433,8 +443,10 @@ Every action leaves an event naming its cause. `Said.triggered_by` is the identi
 each `say` and `prompt` joins a queue, each response the model starts takes the oldest, and a
 response started with the queue empty — the model answering what it heard, or speaking on its own —
 has `triggered_by=None`. So does one the adapter reports with `LiveStarted(requested=False)`, which
-the vendor started on its own while a request waited; the request keeps its place for the next. The client receives every event except `Informed`, `ToolCalled` and
-`Cancelled`, which are between you and the model.
+the vendor started on its own while a request waited; the request keeps its place for the next. A
+response that carries a request's tag takes that request's cause instead, and one whose tag senses
+never handed out is the vendor's own. The client receives every event except `Informed`,
+`ToolCalled` and `Cancelled`, which are between you and the model.
 
 Every identity the library takes — `serve`, `accept_offer`, `Loopback`, a transport's `identity`,
 each verb's `triggered_by=`, `SensesTools(triggered_by=)` — is an `IdentityLike`, read by its

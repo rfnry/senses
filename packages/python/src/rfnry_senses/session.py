@@ -103,6 +103,7 @@ class Utterance:
     ledger: Ledger = field(default_factory=Ledger)
     source: str | AsyncIterator[str] = ""
     response: str | None = None
+    request: str | None = None
 
 
 class Subscription:
@@ -184,6 +185,7 @@ class Session:
         self._waiting: deque[Utterance] = deque()
         self._arrived = asyncio.Event()
         self._causes: deque[Utterance] = deque()
+        self._ended_tags: set[str] = set()
         self._held: deque[tuple[Utterance, asyncio.Future[bool]]] = deque()
         self._granted: Utterance | None = None
         self._cutting = 0
@@ -388,14 +390,16 @@ class Session:
         self._muted = False
         await self._emit(Muted(scope=self.scope, muted=False, triggered_by=cause))
 
-    async def _cut(self, cause: Identity) -> Interrupted | None:
+    async def _cut(self, cause: Identity, *, drop: bool = False) -> Interrupted | None:
         u = self._utterance
         taken = [v for v in self._out if v is not u and not v.finished and not v.cut]
         if u is not None:
             taken.append(u)
         if not taken:
+            if drop:
+                await self._drop_requests()
             return None
-        cutting = self._spawn(self._complete_cut(cause, taken))
+        cutting = self._spawn(self._complete_cut(cause, taken, drop))
         self._utterance = None
         self._ending += taken
         for v in taken:
@@ -413,7 +417,9 @@ class Session:
                 raise
             raise TransportError("session: the session is closed") from None
 
-    async def _complete_cut(self, cause: Identity, taken: list[Utterance]) -> Interrupted:
+    async def _complete_cut(
+        self, cause: Identity, taken: list[Utterance], drop: bool
+    ) -> Interrupted:
         heard = dict.fromkeys(taken, "")
         landed = taken[0]
         try:
@@ -431,6 +437,8 @@ class Session:
                     round(played.get(landed, 0.0)), heard[landed], landed.response
                 )
         finally:
+            if drop and not self._closed:
+                await self._drop_requests()
             self._cutting -= 1
             self._next()
             cut = Interrupted(scope=self.scope, heard=heard[landed], triggered_by=cause)
@@ -463,6 +471,7 @@ class Session:
         for _, turn in held:
             if not turn.done():
                 turn.set_result(False)
+        self._ended_tags.update(u.request for u in causes if u.request is not None)
         dropped = [u for u in (*causes, granted, *(u for u, _ in held)) if u is not None]
         self._ending += dropped
         await self._finish_ending(dict.fromkeys(dropped, ""))
@@ -619,8 +628,7 @@ class Session:
                         self._withdrawn.add(call_id)
                         self._running[call_id][1].cancel()
             elif isinstance(event, LiveInterrupted):
-                await self._cut(self.person)
-                await self._drop_requests()
+                await self._cut(self.person, drop=True)
             elif isinstance(event, LiveFailed):
                 raise ModelError(f"session: the live model failed: {event.message}")
         raise ModelError("session: the live connection ended")
@@ -629,15 +637,31 @@ class Session:
         if self._responding:
             raise ModelError("session: a response started before the last one was done")
         self._responding = True
-        asked = self._causes and event.requested is not False
-        u = self._causes.popleft() if asked else Utterance(None)
+        late = self._answers_ended(event.requested)
+        u = self._cause(event.requested) or Utterance(None)
         u.response = event.id
         self._start(u)
-        if self._muted:
+        if self._muted or late:
             self._utterance = None
             self._ending.append(u)
             await self._interrupt_model(0, "", u.response)
             await self._finish_ending({u: ""})
+
+    def _answers_ended(self, requested: bool | str | None) -> bool:
+        if not isinstance(requested, str) or requested not in self._ended_tags:
+            return False
+        self._ended_tags.remove(requested)
+        return True
+
+    def _cause(self, requested: bool | str | None) -> Utterance | None:
+        if isinstance(requested, str):
+            cause = next((u for u in self._causes if u.request == requested), None)
+            if cause is not None:
+                self._causes.remove(cause)
+            return cause
+        if requested is False or not self._causes:
+            return None
+        return self._causes.popleft()
 
     async def _response_done(self) -> None:
         if not self._responding:
@@ -708,7 +732,7 @@ class Session:
             await self._emit(said)
         self._settle()
 
-    async def _ask(self, u: Utterance, send: Callable[[], Awaitable[None]]) -> Said:
+    async def _ask(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> Said:
         assert u.done is not None
         turn: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._held.append((u, turn))
@@ -720,7 +744,9 @@ class Session:
                         self._granted = None
                     if not u.finished and not self._closed:
                         self._causes.append(u)
-                        await send()
+                        u.request = await send()
+                        if u.finished and u.request is not None:
+                            self._ended_tags.add(u.request)
         except BaseException:
             u.done.cancel()
             with contextlib.suppress(ValueError):
