@@ -5,7 +5,7 @@ import fractions
 import logging
 import sys
 import time
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
 import av
@@ -46,50 +46,111 @@ def fade(frame: AudioFrame, begin: float, end: float) -> AudioFrame:
     )
 
 
+class _Marker:
+    def __init__(self, text: str, with_next: bool) -> None:
+        self.text = text
+        self.with_next = with_next
+
+
 class _Voice(MediaStreamTrack):
     kind = "audio"
+    RATE = 48000
     FRAME_MS = 20
     PREBUFFER_S = 0.12
     GAP_S = 0.1
     FADE_FRAMES = 3
 
-    def __init__(self) -> None:
+    def __init__(self, emit: Callable[[str], None] | None = None) -> None:
         super().__init__()
-        self._queue: asyncio.Queue[AudioFrame] = asyncio.Queue()
+        self._emit = emit
+        self._queue: asyncio.Queue[AudioFrame | _Marker] = asyncio.Queue()
         self._rest = b""
         self._pts = 0
         self._start: float | None = None
         self._samples = 0
+        self._resampler: av.AudioResampler | None = None
+        self._source: tuple[int, int] | None = None
+
+    @property
+    def _chunk(self) -> int:
+        return self.RATE * self.FRAME_MS // 1000 * 2
 
     def push(self, frame: AudioFrame) -> None:
-        self._rest += frame.data
-        size = frame.sample_rate * self.FRAME_MS // 1000 * 2 * frame.channels
-        while len(self._rest) >= size:
-            chunk, self._rest = self._rest[:size], self._rest[size:]
-            self._queue.put_nowait(
-                AudioFrame(data=chunk, sample_rate=frame.sample_rate, channels=frame.channels)
-            )
-
-    def clear(self) -> None:
-        tail: list[AudioFrame] = []
-        while not self._queue.empty():
-            frame = self._queue.get_nowait()
-            if len(tail) < self.FADE_FRAMES:
-                tail.append(frame)
-        self._rest = b""
-        self._start = None
-        self._samples = 0
-        steps = len(tail)
-        for n, frame in enumerate(tail):
-            self._queue.put_nowait(fade(frame, 1 - n / steps, 1 - (n + 1) / steps))
-
-    async def recv(self) -> av.AudioFrame:
-        frame = await self._queue.get()
-        out = av.AudioFrame(
+        source = (frame.sample_rate, frame.channels)
+        if self._source != source:
+            self._drain()
+            self._source = source
+            self._resampler = av.AudioResampler(format="s16", layout="mono", rate=self.RATE)
+        incoming = av.AudioFrame(
             format="s16",
             layout="mono" if frame.channels == 1 else "stereo",
             samples=len(frame.data) // (2 * frame.channels),
         )
+        incoming.planes[0].update(frame.data)
+        incoming.sample_rate = frame.sample_rate
+        if self._resampler is not None:
+            self._take(self._resampler.resample(incoming))
+
+    def finish(self) -> None:
+        self._drain()
+        if self._rest:
+            self._rest += bytes(self._chunk - len(self._rest))
+            self._take([])
+
+    def mark(self, text: str, *, with_next: bool) -> None:
+        self._queue.put_nowait(_Marker(text, with_next))
+
+    def _drain(self) -> None:
+        if self._resampler is not None:
+            self._take(self._resampler.resample(None))
+        self._resampler, self._source = None, None
+
+    def _take(self, frames: list[av.AudioFrame]) -> None:
+        for out in frames:
+            self._rest += bytes(out.planes[0])[: out.samples * 2]
+        size = self._chunk
+        while len(self._rest) >= size:
+            chunk, self._rest = self._rest[:size], self._rest[size:]
+            self._queue.put_nowait(AudioFrame(data=chunk, sample_rate=self.RATE))
+
+    def clear(self) -> None:
+        tail: list[AudioFrame] = []
+        speaking: list[str] = []
+        while not self._queue.empty():
+            item = self._queue.get_nowait()
+            if isinstance(item, _Marker):
+                if item.with_next:
+                    speaking.append(item.text)
+            elif len(tail) < self.FADE_FRAMES:
+                tail.append(item)
+        self._rest = b""
+        self._resampler, self._source = None, None
+        self._start = None
+        self._samples = 0
+        for text in speaking:
+            self._fire([text])
+        steps = len(tail)
+        for n, frame in enumerate(tail):
+            self._queue.put_nowait(fade(frame, 1 - n / steps, 1 - (n + 1) / steps))
+
+    def _fire(self, texts: list[str]) -> None:
+        if self._emit is not None:
+            for text in texts:
+                self._emit(text)
+
+    async def recv(self) -> av.AudioFrame:
+        before: list[str] = []
+        while True:
+            item = await self._queue.get()
+            if not isinstance(item, _Marker):
+                frame = item
+                break
+            if item.with_next:
+                before.append(item.text)
+            else:
+                self._fire([*before, item.text])
+                before = []
+        out = av.AudioFrame(format="s16", layout="mono", samples=len(frame.data) // 2)
         out.planes[0].update(frame.data)
         out.sample_rate = frame.sample_rate
         out.pts = self._pts
@@ -101,6 +162,7 @@ class _Voice(MediaStreamTrack):
             self._start, self._samples, due = now - self.PREBUFFER_S, 0, now - self.PREBUFFER_S
         await asyncio.sleep(max(0.0, due - now))
         self._samples += out.samples
+        self._fire(before)
         return out
 
 
@@ -120,7 +182,9 @@ class WebRTCTransport:
         self._pc = RTCPeerConnection(
             RTCConfiguration(iceServers=[RTCIceServer(**server) for server in ice_servers or []])
         )
-        self._voice = _Voice()
+        self._voice = _Voice(self._deliver)
+        self._utterance: int | None = None
+        self._refused = False
         self._pc.addTrack(self._voice)
         self._inbox: asyncio.Queue[AudioFrame | Image | Played | None] = asyncio.Queue()
         self._channel: RTCDataChannel | None = None
@@ -139,9 +203,6 @@ class WebRTCTransport:
         @self._pc.on("datachannel")
         def on_channel(channel: RTCDataChannel) -> None:
             self._channel = channel
-            for text in self._unsent:
-                channel.send(text)
-            self._unsent.clear()
 
             @channel.on("message")
             def on_message(message: Any) -> None:
@@ -151,10 +212,13 @@ class WebRTCTransport:
                     try:
                         check_hello(message)
                     except InputError as exc:
+                        self._refused = True
+                        self._unsent.clear()
                         channel.send(control({"type": "error", "message": str(exc)}))
                         self._inbox.put_nowait(None)
                         return
                     self._greeted = True
+                    self._flush()
                     return
                 try:
                     self._inbox.put_nowait(parse_played(message))
@@ -171,17 +235,40 @@ class WebRTCTransport:
             yield item
 
     async def send_audio(self, frame: AudioFrame, utterance: int) -> None:
+        if utterance != self._utterance:
+            self._voice.finish()
+            self._utterance = utterance
         self._voice.push(frame)
 
     async def send_control(self, control_frame: dict[str, Any]) -> None:
         text = control(control_frame)
-        if self._channel is not None and self._channel.readyState == "open":
-            self._channel.send(text)
-        else:
-            self._unsent.append(text)
+        match control_frame.get("type"):
+            case "speaking":
+                self._voice.mark(text, with_next=True)
+            case "silent":
+                self._voice.finish()
+                self._utterance = None
+                self._voice.mark(text, with_next=False)
+            case _:
+                self._deliver(text)
 
     def clear_audio(self) -> None:
+        self._utterance = None
         self._voice.clear()
+
+    def _deliver(self, text: str) -> None:
+        if self._refused:
+            return
+        self._unsent.append(text)
+        self._flush()
+
+    def _flush(self) -> None:
+        channel = self._channel
+        if not self._greeted or channel is None or channel.readyState != "open":
+            return
+        for text in self._unsent:
+            channel.send(text)
+        self._unsent.clear()
 
     async def close(self) -> None:
         if self._closed:

@@ -1,6 +1,9 @@
 import asyncio
 import fractions
 import json
+import struct
+import time
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -41,7 +44,12 @@ class Silence(MediaStreamTrack):
 
 
 class Client:
-    def __init__(self, protocol: int = 1) -> None:
+    def __init__(
+        self, protocol: int = 1, played: Callable[[dict[str, Any]], int] | None = None
+    ) -> None:
+        self.played = played
+        self.stamped: list[tuple[float, dict[str, Any]]] = []
+        self.arrivals: list[float] = []
         self.pc = RTCPeerConnection()
         self.messages: list[dict[str, Any]] = []
         self.audio: list[Any] = []
@@ -57,8 +65,11 @@ class Client:
         def on_message(message: str) -> None:
             control = json.loads(message)
             self.messages.append(control)
+            self.stamped.append((time.monotonic(), control))
             if control["type"] in ("stop", "silent"):
                 ms = 0 if control["type"] == "stop" else 10_000
+                if self.played is not None and control["type"] == "silent":
+                    ms = self.played(control)
                 self.channel.send(
                     json.dumps({"type": "played", "utterance": control["utterance"], "ms": ms})
                 )
@@ -71,6 +82,7 @@ class Client:
         while True:
             try:
                 self.audio.append(await track.recv())
+                self.arrivals.append(time.monotonic())
             except Exception:
                 return
 
@@ -146,7 +158,124 @@ async def test_a_cut_fades_the_voice_out_over_the_next_sixty_milliseconds() -> N
     levels = [
         abs(int.from_bytes(bytes(f.planes[0])[i : i + 2], "little", signed=True))
         for f in frames
-        for i in (0, 958)
+        for i in (0, 1918)
     ]
     assert levels == sorted(levels, reverse=True)
     assert levels[0] == 16000 and levels[-1] < 600
+
+
+def tone(ms: int, value: int, rate: int) -> AudioFrame:
+    return AudioFrame(data=struct.pack("<h", value) * (rate * ms // 1000), sample_rate=rate)
+
+
+def values(frame: av.AudioFrame) -> set[int]:
+    data = bytes(frame.planes[0])[: frame.samples * 2]
+    return set(struct.unpack(f"<{frame.samples}h", data))
+
+
+class Speech:
+    def __init__(self, *rates: int, ms: int = 200, words: bool = True) -> None:
+        self.words = words
+        self.rates = list(rates)
+        self.ms = ms
+
+    async def speak(self, text: str):  # type: ignore[no-untyped-def]
+        rate = self.rates.pop(0) if len(self.rates) > 1 else self.rates[0]
+        for _ in text.split() if self.words else [text]:
+            yield tone(self.ms, 100, rate)
+
+
+async def test_an_utterance_not_a_whole_number_of_frames_is_sent_whole() -> None:
+    voice = _Voice()
+    voice.push(tone(30, 1111, 24000))
+    voice.finish()
+    voice.push(tone(40, 2222, 24000))
+    voice.finish()
+    frames = [await voice.recv() for _ in range(4)]
+    assert voice._queue.empty()
+    assert all(values(f) <= {0, 1111} for f in frames[:2])
+    assert all(values(f) <= {0, 2222} for f in frames[2:])
+
+    sent = [0.0]
+    client = Client(played=lambda _: round(sent[0]))
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    original = link._voice.recv
+
+    async def counted() -> av.AudioFrame:
+        out = await original()
+        sent[0] += out.samples / out.sample_rate * 1000
+        return out
+
+    link._voice.recv = counted  # type: ignore[method-assign]
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
+    try:
+        async with Session(link, speech=Speech(24000, ms=905, words=False)) as s:
+            said = await s.say("The table is ready. Please come in.", triggered_by=HOST)
+        assert round(sent[0]) == 1820
+        assert said.heard == "The table is ready. Please come in."
+    finally:
+        await client.pc.close()
+
+
+async def test_a_change_of_rate_keeps_the_voice() -> None:
+    client = Client()
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
+    try:
+        async with Session(link, speech=Speech(24000, 16000, 24000, ms=200)) as s:
+            await until(lambda: {"type": "ready"} in client.messages, timeout=10)
+
+            async def heard_more() -> None:
+                target = len(client.audio) + 30
+                await s.say("one two three four five", triggered_by=HOST)
+                await until(lambda: len(client.audio) > target, timeout=5)
+
+            for _ in range(3):
+                await heard_more()
+    finally:
+        await client.pc.close()
+
+
+async def test_speaking_and_silent_leave_with_their_audio() -> None:
+    client = Client()
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    sent: list[float] = []
+    original = link._voice.recv
+
+    async def counted() -> av.AudioFrame:
+        out = await original()
+        sent.append(time.monotonic())
+        return out
+
+    link._voice.recv = counted  # type: ignore[method-assign]
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
+    try:
+        async with Session(link, speech=Speech(24000, ms=500)) as s:
+            await until(lambda: {"type": "ready"} in client.messages, timeout=10)
+            await s.say("one two three four", triggered_by=HOST)
+            await s.say("one two three four", triggered_by=HOST)
+            await asyncio.sleep(0.3)
+        speaking = [t for t, m in client.stamped if m["type"] == "speaking"]
+        silent = [t for t, m in client.stamped if m["type"] == "silent"]
+        assert len(speaking) == len(silent) == 2
+        firsts = [sent[0], next(t for t in sent if t > silent[0])]
+        lasts = [max(t for t in sent if t <= silent[0] + 0.04), sent[-1]]
+        for at, first in zip(speaking, firsts, strict=True):
+            assert abs(at - first) < 0.04
+        for at, last in zip(silent, lasts, strict=True):
+            assert abs(at - last) < 0.04
+    finally:
+        await client.pc.close()
+
+
+async def test_a_refused_hello_sends_no_ready() -> None:
+    client = Client(protocol=2)
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
+    try:
+        async with Session(link) as s:
+            await next_of(s.events(), Closed, timeout=10)
+        await asyncio.sleep(0.3)
+        assert [m["type"] for m in client.messages] == ["error"]
+    finally:
+        await client.pc.close()

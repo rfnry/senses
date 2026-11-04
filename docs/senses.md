@@ -579,6 +579,8 @@ async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
     return {"sdp": link.answer}
 ```
 
+The server sends every utterance whole, at any rate, as 48 kHz mono with its last 20 ms frame padded with silence. Its control frames wait for the client's hello: a refused hello gets only an `error`, and no `ready`. `speaking` and `silent` leave with the utterance's first and last audio.
+
 `accept_offer` lives in `rfnry_senses.webrtc` and returns a `WebRTCTransport`; `converse` is the
 same function the WebSocket endpoint runs over its `link`. The endpoint keeps each conversation's
 task in `tasks` until it ends, since the event loop holds a task only weakly and one nobody
