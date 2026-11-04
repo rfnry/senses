@@ -47,9 +47,10 @@ def fade(frame: AudioFrame, begin: float, end: float) -> AudioFrame:
 
 
 class _Marker:
-    def __init__(self, text: str, with_next: bool) -> None:
+    def __init__(self, text: str | None, with_next: bool) -> None:
         self.text = text
         self.with_next = with_next
+        self.left = False
 
 
 class _Voice(MediaStreamTrack):
@@ -76,6 +77,8 @@ class _Voice(MediaStreamTrack):
         return self.RATE * self.FRAME_MS // 1000 * 2
 
     def push(self, frame: AudioFrame) -> None:
+        if not frame.data:
+            return
         source = (frame.sample_rate, frame.channels)
         if self._source != source:
             self._drain()
@@ -97,8 +100,16 @@ class _Voice(MediaStreamTrack):
             self._rest += bytes(self._chunk - len(self._rest))
             self._take([])
 
-    def mark(self, text: str, *, with_next: bool) -> None:
-        self._queue.put_nowait(_Marker(text, with_next))
+    def mark(self, text: str | None, *, with_next: bool) -> _Marker:
+        marker = _Marker(text, with_next)
+        self._queue.put_nowait(marker)
+        return marker
+
+    def fill(self, marker: _Marker, text: str) -> None:
+        if marker.left:
+            self._fire([text])
+        else:
+            marker.text = text
 
     def _drain(self) -> None:
         if self._resampler is not None:
@@ -114,24 +125,29 @@ class _Voice(MediaStreamTrack):
             self._queue.put_nowait(AudioFrame(data=chunk, sample_rate=self.RATE))
 
     def clear(self) -> None:
-        tail: list[AudioFrame] = []
-        speaking: list[str] = []
+        kept: list[AudioFrame | _Marker] = []
+        frames = 0
         while not self._queue.empty():
             item = self._queue.get_nowait()
             if isinstance(item, _Marker):
-                if item.with_next:
-                    speaking.append(item.text)
-            elif len(tail) < self.FADE_FRAMES:
-                tail.append(item)
+                if frames < self.FADE_FRAMES:
+                    kept.append(item)
+            elif frames < self.FADE_FRAMES:
+                kept.append(item)
+                frames += 1
+        while kept and isinstance(kept[-1], _Marker):
+            kept.pop()
         self._rest = b""
         self._resampler, self._source = None, None
         self._start = None
         self._samples = 0
-        for text in speaking:
-            self._fire([text])
-        steps = len(tail)
-        for n, frame in enumerate(tail):
-            self._queue.put_nowait(fade(frame, 1 - n / steps, 1 - (n + 1) / steps))
+        n = 0
+        for item in kept:
+            if isinstance(item, _Marker):
+                self._queue.put_nowait(item)
+            else:
+                self._queue.put_nowait(fade(item, 1 - n / frames, 1 - (n + 1) / frames))
+                n += 1
 
     def _fire(self, texts: list[str]) -> None:
         if self._emit is not None:
@@ -145,10 +161,11 @@ class _Voice(MediaStreamTrack):
             if not isinstance(item, _Marker):
                 frame = item
                 break
+            item.left = True
             if item.with_next:
-                before.append(item.text)
+                before.extend([item.text] if item.text else [])
             else:
-                self._fire([*before, item.text])
+                self._fire([*before, *([item.text] if item.text else [])])
                 before = []
         out = av.AudioFrame(format="s16", layout="mono", samples=len(frame.data) // 2)
         out.planes[0].update(frame.data)
@@ -184,6 +201,7 @@ class WebRTCTransport:
         )
         self._voice = _Voice(self._deliver)
         self._utterance: int | None = None
+        self._ends: dict[int, _Marker] = {}
         self._refused = False
         self._pc.addTrack(self._voice)
         self._inbox: asyncio.Queue[AudioFrame | Image | Played | None] = asyncio.Queue()
@@ -236,25 +254,39 @@ class WebRTCTransport:
 
     async def send_audio(self, frame: AudioFrame, utterance: int) -> None:
         if utterance != self._utterance:
-            self._voice.finish()
-            self._utterance = utterance
+            self._switch(utterance)
         self._voice.push(frame)
 
     async def send_control(self, control_frame: dict[str, Any]) -> None:
         text = control(control_frame)
+        number = control_frame.get("utterance")
         match control_frame.get("type"):
             case "speaking":
+                if self._utterance is not None:
+                    self._switch(None)
                 self._voice.mark(text, with_next=True)
             case "silent":
-                self._voice.finish()
-                self._utterance = None
-                self._voice.mark(text, with_next=False)
+                if number in self._ends:
+                    self._voice.fill(self._ends.pop(number), text)
+                elif self._utterance is None or self._utterance == number:
+                    self._voice.finish()
+                    self._utterance = None
+                    self._voice.mark(text, with_next=False)
+                else:
+                    self._deliver(text)
             case _:
                 self._deliver(text)
 
     def clear_audio(self) -> None:
         self._utterance = None
+        self._ends.clear()
         self._voice.clear()
+
+    def _switch(self, utterance: int | None) -> None:
+        self._voice.finish()
+        if self._utterance is not None:
+            self._ends[self._utterance] = self._voice.mark(None, with_next=False)
+        self._utterance = utterance
 
     def _deliver(self, text: str) -> None:
         if self._refused:

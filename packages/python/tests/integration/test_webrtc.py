@@ -239,15 +239,23 @@ async def test_a_change_of_rate_keeps_the_voice() -> None:
 async def test_speaking_and_silent_leave_with_their_audio() -> None:
     client = Client()
     link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
-    sent: list[float] = []
+    left = [0]
+    delivered: list[tuple[str, int, int]] = []
     original = link._voice.recv
+    deliver = link._deliver
 
     async def counted() -> av.AudioFrame:
         out = await original()
-        sent.append(time.monotonic())
+        left[0] += 1
         return out
 
+    def recorded(text: str) -> None:
+        frame = json.loads(text)
+        delivered.append((frame["type"], frame["utterance"], left[0]))
+        deliver(text)
+
     link._voice.recv = counted  # type: ignore[method-assign]
+    link._voice._emit = recorded
     await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
     try:
         async with Session(link, speech=Speech(24000, ms=500)) as s:
@@ -255,17 +263,70 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
             await s.say("one two three four", triggered_by=HOST)
             await s.say("one two three four", triggered_by=HOST)
             await asyncio.sleep(0.3)
-        speaking = [t for t, m in client.stamped if m["type"] == "speaking"]
-        silent = [t for t, m in client.stamped if m["type"] == "silent"]
-        assert len(speaking) == len(silent) == 2
-        firsts = [sent[0], next(t for t in sent if t > silent[0])]
-        lasts = [max(t for t in sent if t <= silent[0] + 0.04), sent[-1]]
-        for at, first in zip(speaking, firsts, strict=True):
-            assert abs(at - first) < 0.04
-        for at, last in zip(silent, lasts, strict=True):
-            assert abs(at - last) < 0.04
+        kinds = [(kind, number) for kind, number, _ in delivered]
+        assert kinds == [("speaking", 1), ("silent", 1), ("speaking", 2), ("silent", 2)]
+        counts = [count for _, _, count in delivered]
+        assert counts[0] == 0 and counts[1] == counts[2] and counts[1] in (100, 101)
+        assert counts[3] == left[0] and counts[3] - counts[1] in (100, 101)
     finally:
         await client.pc.close()
+
+
+def kinds_queued(voice: _Voice) -> list[str]:
+    from rfnry_senses.webrtc import _Marker
+
+    out = []
+    while not voice._queue.empty():
+        item = voice._queue.get_nowait()
+        if isinstance(item, _Marker):
+            frame = json.loads(item.text or "{}")
+            out.append(f"{frame['type']} {frame['utterance']}")
+        else:
+            out.append("frame")
+    return out
+
+
+async def test_overlapping_live_utterances_each_keep_their_own_markers() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(50, 100, 24000), 1)
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(60, 100, 24000), 2)
+        await link.send_control({"type": "silent", "utterance": 1})
+        await link.send_control({"type": "silent", "utterance": 2})
+        assert kinds_queued(link._voice) == [
+            "speaking 1",
+            *["frame"] * 3,
+            "silent 1",
+            "speaking 2",
+            *["frame"] * 3,
+            "silent 2",
+        ]
+    finally:
+        await link.close()
+
+
+async def test_a_cut_keeps_the_fade_and_drops_the_markers_after_it() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(200, 100, 24000), 1)
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(100, 100, 24000), 2)
+        link.clear_audio()
+        assert kinds_queued(link._voice) == ["speaking 1", "frame", "frame", "frame"]
+    finally:
+        await link.close()
+
+
+async def test_an_empty_frame_sends_nothing_and_does_not_raise() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    try:
+        await link.send_audio(AudioFrame(data=b"", sample_rate=24000), 1)
+        assert link._voice._queue.empty()
+    finally:
+        await link.close()
 
 
 async def test_a_refused_hello_sends_no_ready() -> None:
