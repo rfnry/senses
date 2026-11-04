@@ -1157,8 +1157,6 @@ async def test_a_transport_send_failure_is_a_transport_error() -> None:
         events = s.events()
         live.connection.emit(*response("Hi. "))
         closed = await next_of(events, Closed)
-        with pytest.raises(TransportError):
-            await s.say("Hello.", triggered_by=HOST)
     assert closed.reason == "failed" and closed.message is not None
     assert closed.message.startswith("session: the transport failed")
 
@@ -1172,7 +1170,7 @@ async def test_a_waiting_say_raises_transport_error_when_a_send_fails() -> None:
     saying = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
     await asyncio.sleep(0.01)
     live.connection.emit(LiveAudio(frame=pcm(100, 24000)))
-    with pytest.raises(TransportError):
+    with pytest.raises(TransportError, match="^session: the transport failed: "):
         await asyncio.wait_for(saying, 1)
 
 
@@ -1224,3 +1222,36 @@ async def test_closed_names_who_ended_the_session() -> None:
     events = s.events()
     live.connection.emit(LiveToolCall(call_id="c1", name="end_call"))
     assert (await next_of(events, Closed)).triggered_by == ANA
+
+
+class DeafLine(Loopback):
+    async def send_control(self, control: dict[str, Any]) -> None:
+        if control["type"] == "ready":
+            raise ConnectionError("the phone line dropped")
+        await super().send_control(control)
+
+
+async def test_a_transport_that_fails_the_ready_closes_the_session_as_failed() -> None:
+    s = session(DeafLine(ANA, "acme"), ScriptedLive())
+    events = s.events()
+    with pytest.raises(TransportError, match="^session: the transport failed: "):
+        await s.start()
+    closed = await next_of(events, Closed)
+    assert closed.reason == "failed" and closed.triggered_by is None
+
+
+class StuckLine(Loopback):
+    def clear_audio(self) -> None:
+        raise ConnectionError("the phone line dropped")
+
+
+async def test_a_transport_that_fails_to_clear_audio_closes_the_session_as_failed() -> None:
+    live, link = ScriptedLive(), StuckLine(ANA, "acme")
+    async with session(link, live) as s:
+        events = s.events()
+        live.connection.emit(LiveStarted(), LiveAudio(frame=pcm(100, 24000)))
+        await until(lambda: len(link.audio) == 1)
+        with pytest.raises(TransportError, match="^session: the transport failed: "):
+            await s.interrupt(triggered_by=ANA)
+        closed = await next_of(events, Closed)
+    assert closed.reason == "failed"

@@ -603,7 +603,7 @@ and answers each utterance once, as the browser does — on its `silent`, or on 
 with a `Played`: all of it by default, what `played=` says, or nothing with `answer=False`. A telephone line, a meeting bot's bridge or
 a robot's microphone is a `Transport` of your own: an `identity`, a `scope`, `inbound()` yielding
 `AudioFrame`s, JPEG `Image`s and `Played` reports, `send_audio`, `send_control`, `clear_audio` and
-`close`. A send method does not raise: a far end that is gone ends `inbound()`, and a send that raises closes the session as `failed` with a `TransportError`. It answers each utterance once with a `Played`, as the client does; a far end that reports
+`close`. A send method does not raise: a far end that is gone ends `inbound()`, and a send the session makes that raises (audio, the `speaking`, `silent`, `stop` and `ready` controls, `clear_audio`) closes the session as `failed` with a `TransportError`; the events it reports to the client are best effort, and `inbound()` ending is how a gone far end is seen. It answers each utterance once with a `Played`, as the client does; a far end that reports
 progress as it plays is counted by the transport, which answers at once. `clear_audio` drops only
 what the transport has not sent yet: a far end that buffers audio is told to flush when `stop`
 arrives.

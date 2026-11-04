@@ -270,7 +270,11 @@ class Session:
             self._spawn(self._speak())
         self._spawn(self._inbound())
         self._opened = True
-        await self._transport.send_control({"type": "ready"})
+        try:
+            await self._control({"type": "ready"})
+        except TransportError as exc:
+            await self._fail(exc)
+            raise
 
     async def __aenter__(self) -> Session:
         if not self._opened:
@@ -415,7 +419,11 @@ class Session:
         self._cutting += 1
         if self._playing is not None:
             self._playing.cancel()
-        self._transport.clear_audio()
+        try:
+            self._clear_audio()
+        except TransportError as exc:
+            await self._fail(exc)
+            raise
         self._playhead = 0.0
         try:
             return await asyncio.shield(cutting)
@@ -708,6 +716,12 @@ class Session:
         except Exception as exc:
             raise TransportError(f"session: the transport failed: {exc}") from exc
 
+    def _clear_audio(self) -> None:
+        try:
+            self._transport.clear_audio()
+        except Exception as exc:
+            raise TransportError(f"session: the transport failed: {exc}") from exc
+
     async def _control(self, control: dict[str, Any]) -> None:
         try:
             await self._transport.send_control(control)
@@ -943,7 +957,7 @@ class Session:
     async def _abandon(self, u: Utterance, error: Exception) -> None:
         if self._utterance is u:
             self._utterance = None
-            self._transport.clear_audio()
+            self._clear_audio()
         u.finished = True
         self._played.pop(u.number, None)
         if u.done is not None and not u.done.done():

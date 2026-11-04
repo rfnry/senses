@@ -660,7 +660,7 @@ class Transport(Protocol):
     async def close(self) -> None: ...
 ```
 
-What a session runs on: the person, the scope, and a two-way link to them. `inbound()` yields the person's audio, JPEG camera frames and `Played` reports and ends when they leave; a far end that is gone ends `inbound()`, and a send method does not raise for it. A send that does raise closes the session as `failed` with a `TransportError`; `clear_audio` drops audio not yet sent; stopping what the far end already has is the `stop` control frame, so a transport whose far end buffers audio flushes it when `stop` arrives. `serve`, `accept_offer` and `Loopback` make one; a telephone line or a robot's microphone is one of your own.
+What a session runs on: the person, the scope, and a two-way link to them. `inbound()` yields the person's audio, JPEG camera frames and `Played` reports and ends when they leave; a far end that is gone ends `inbound()`, and a send method does not raise for it. A send the session makes that does raise (audio, the `speaking`, `silent`, `stop` and `ready` controls, `clear_audio`) closes the session as `failed` with a `TransportError`; the events it reports to the client are best effort, and `inbound()` ending is how a gone far end is seen; `clear_audio` drops audio not yet sent; stopping what the far end already has is the `stop` control frame, so a transport whose far end buffers audio flushes it when `stop` arrives. `serve`, `accept_offer` and `Loopback` make one; a telephone line or a robot's microphone is one of your own.
 
 ### `Played`
 
