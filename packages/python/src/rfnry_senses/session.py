@@ -182,7 +182,7 @@ class Session:
         self._playhead = 0.0
         self._playing: asyncio.Task[None] | None = None
         self._waiting: deque[Utterance] = deque()
-        self._queue: asyncio.Queue[Utterance] = asyncio.Queue()
+        self._arrived = asyncio.Event()
         self._causes: deque[Utterance] = deque()
         self._held: deque[tuple[Utterance, asyncio.Future[bool]]] = deque()
         self._granted: Utterance | None = None
@@ -308,7 +308,7 @@ class Session:
                 u.text = joined
             return await self._ask(u, lambda: connection.say(u.text))
         self._waiting.append(u)
-        self._queue.put_nowait(u)
+        self._arrived.set()
         return await done
 
     async def prompt(self, text: str, *, triggered_by: IdentityLike) -> Said:
@@ -806,22 +806,21 @@ class Session:
 
     async def _speak(self) -> None:
         while True:
-            u = await self._queue.get()
-            if u.finished:
-                continue
-            playing = self._playing = asyncio.create_task(self._play(u))
+            while not self._waiting:
+                self._arrived.clear()
+                await self._arrived.wait()
+            playing = self._playing = asyncio.create_task(self._play())
             await asyncio.wait({playing})
             self._playing = None
             self._settle()
             if not playing.cancelled() and (error := playing.exception()) is not None:
                 raise error
 
-    async def _play(self, u: Utterance) -> None:
+    async def _play(self) -> None:
         assert self._speech is not None
-        if u.finished:
+        if not self._waiting:
             return
-        with contextlib.suppress(ValueError):
-            self._waiting.remove(u)
+        u = self._waiting.popleft()
         if self._muted:
             await self._finish(u, "", interrupted=True)
             return

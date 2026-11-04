@@ -1,11 +1,13 @@
 import asyncio
 from collections.abc import AsyncIterator
 
+import pytest
+
 from rfnry_senses.events import Heard, Interrupted
 from rfnry_senses.session import Session
 from rfnry_senses.transport import Loopback
 
-from .fakes import ANA, HOST, ScriptedTranscription, Tone, next_of, until
+from .fakes import ANA, HOST, ScriptedTranscription, SlowLoopback, Tone, next_of, until
 
 
 async def test_the_person_talking_over_the_voice_cuts_it_and_the_queue() -> None:
@@ -84,3 +86,19 @@ async def test_a_barge_in_mid_stream_stops_reading_the_stream() -> None:
         await asyncio.wait_for(closed.wait(), 1.0)
     assert cut.heard == said.heard == said.text == "One two. " and said.interrupted
     assert pulled == ["One two. ", "Three"] and tts.spoken == ["One two. "]
+
+
+@pytest.mark.parametrize("delay", [0.02, None])
+async def test_a_barge_in_drops_the_queue_before_the_cut_waits(delay: float | None) -> None:
+    link, stt, tts = SlowLoopback(ANA, "acme", delay=delay), ScriptedTranscription(), Tone()
+    tts.held = "Three four."
+    async with Session(link, transcription=stt, speech=tts) as s:
+        first = asyncio.create_task(s.say("One two. Three four.", triggered_by=HOST))
+        queued = asyncio.create_task(s.say("Five.", triggered_by=HOST))
+        await until(lambda: len(link.audio) == 2 and "Three four." in tts.spoken)
+        stt.hear("wait", final=True, end=False)
+        said_queued = await asyncio.wait_for(queued, 0.01)
+        await first
+    assert said_queued.heard == "" and said_queued.interrupted
+    assert "Five." not in tts.spoken
+    assert [c["utterance"] for c in link.controls if c["type"] == "speaking"] == [1]

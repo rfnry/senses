@@ -172,7 +172,7 @@ async def test_an_empty_stream_says_nothing_and_a_failing_one_fails_only_its_say
             await s.say(broken(), triggered_by=HOST)
         after = await s.say("Still here.", triggered_by=HOST)
     assert nothing.text == nothing.heard == "" and not nothing.interrupted
-    assert after.heard == "Still here." and tts.spoken == ["Still here."]
+    assert after.heard == "Still here." and tts.spoken == ["One. ", "Still here."]
 
 
 async def test_cascaded_utterances_each_start_and_end_the_voice() -> None:
@@ -184,3 +184,32 @@ async def test_cascaded_utterances_each_start_and_end_the_voice() -> None:
         await first, await second
         kinds = [type(await anext(events)).__name__ for _ in range(6)]
     assert kinds == ["Speaking", "Silent", "Said", "Speaking", "Silent", "Said"]
+
+
+async def test_a_streamed_sentence_ending_in_whitespace_is_spoken_at_once() -> None:
+    s, _, _, tts = cascaded()
+
+    async def reply() -> AsyncIterator[str]:
+        yield "Let me check that for you. "
+        await asyncio.sleep(1)
+
+    async with s:
+        saying = asyncio.create_task(s.say(reply(), triggered_by=HOST))
+        await asyncio.wait_for(until(lambda: tts.spoken == ["Let me check that for you. "]), 0.1)
+        saying.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await saying
+
+
+async def test_a_full_width_sentence_cut_at_seventy_percent_keeps_what_was_heard() -> None:
+    text = "お席のご用意ができました。窓際のお席です。ご注文はいかがですか？"
+    link, tts = Loopback(ANA, "acme", played=lambda utterance, sent: int(sent * 0.7)), Tone()
+    tts.held = "ご注文はいかがですか？"
+    async with Session(link, transcription=ScriptedTranscription(), speech=tts) as s:
+        saying = asyncio.create_task(s.say(text, triggered_by=HOST))
+        await until(lambda: tts.held in tts.spoken)
+        tts.release.set()
+        await until(lambda: len(link.audio) == 3)
+        await s.interrupt(triggered_by=HOST)
+        said = await saying
+    assert said.heard == "お席のご用意ができました。窓際のお席です。"

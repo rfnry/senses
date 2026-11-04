@@ -2,22 +2,34 @@ from collections.abc import AsyncGenerator, AsyncIterator
 
 from rfnry_senses.contracts import AudioFrame
 
+SPACED = ".!?؟।"
+UNSPACED = "。！？"
+
+
+def ends_sentence(piece: str) -> bool:
+    body = piece.rstrip()
+    if not body or body[-1] not in SPACED + UNSPACED:
+        return False
+    return body[-1] in UNSPACED or len(body) < len(piece)
+
 
 def sentences(text: str) -> list[str]:
     found: list[str] = []
     start = i = 0
     n = len(text)
     while i < n:
-        if text[i] in ".!?":
+        if text[i] in SPACED + UNSPACED:
             end = i + 1
-            while end < n and text[end] in ".!?":
+            while end < n and text[end] in SPACED + UNSPACED:
                 end += 1
-            if end < n and text[end].isspace():
+            if text[end - 1] in UNSPACED or (end < n and text[end].isspace()):
                 while end < n and text[end].isspace():
                     end += 1
                 found.append(text[start:end])
                 start = i = end
                 continue
+            i = end
+            continue
         i += 1
     if text[start:].strip():
         found.append(text[start:])
@@ -31,9 +43,11 @@ async def sentences_from(text: str | AsyncIterator[str]) -> AsyncGenerator[str]:
         return
     held = ""
     async for chunk in text:
-        held += chunk
-        *complete, held = sentences(held) or [""]
-        for sentence in complete:
+        pieces = sentences(held + chunk)
+        held = ""
+        if pieces and not ends_sentence(pieces[-1]):
+            held = pieces.pop()
+        for sentence in pieces:
             yield sentence
     if held.strip():
         yield held

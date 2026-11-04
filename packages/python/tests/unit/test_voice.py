@@ -85,3 +85,36 @@ def test_nothing_is_heard_when_nothing_played() -> None:
     ledger.sent(AudioFrame(data=bytes(4800), sample_rate=24000), 0.0)
     assert ledger.heard(0) == ""
     assert ledger.heard(100) == "The terrace is open. "
+
+
+async def test_a_chunk_ending_in_a_bare_terminator_waits() -> None:
+    assert [s async for s in sentences_from(chunks("3.", "5 apples. "))] == ["3.5 apples. "]
+
+
+def test_full_width_terminators_end_sentences() -> None:
+    assert sentences("お席のご用意ができました。窓際のお席です。ご注文はいかがですか？") == [
+        "お席のご用意ができました。",
+        "窓際のお席です。",
+        "ご注文はいかがですか？",
+    ]
+    assert sentences("はい。 いいえ！\nどうも") == ["はい。 ", "いいえ！\n", "どうも"]
+
+
+def test_other_scripts_terminators_need_whitespace() -> None:
+    assert sentences("هل أنت هنا؟ نعم") == ["هل أنت هنا؟ ", "نعم"]
+    assert sentences("यह घर है। वह दुकान है।") == ["यह घर है। ", "वह दुकान है।"]
+    assert sentences("a؟b") == ["a؟b"]
+
+
+async def test_a_full_width_sentence_in_a_stream_is_spoken_at_once() -> None:
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def feed() -> AsyncIterator[str]:
+        while (chunk := await queue.get()) is not None:
+            yield chunk
+
+    pieces = sentences_from(feed())
+    queue.put_nowait("はい。")
+    assert await asyncio.wait_for(anext(pieces), 0.1) == "はい。"
+    queue.put_nowait(None)
+    assert [s async for s in pieces] == []

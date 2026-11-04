@@ -253,7 +253,10 @@ silence. When the stream reports `UtteranceEnd`, the utterance's words become a 
 `TurnEnded`.
 
 `say` synthesizes the text sentence by sentence, so the first sentence plays while the rest is
-still being made. Calls queue: a second `say` speaks after the first. Each model is optional — a
+still being made. A sentence ends at `. ! ? ؟ ।` followed by whitespace, or at `。 ！ ？` with or
+without it; a chunk ending in a bare `.` waits for the next, so `3.` then `5 apples. ` is one
+sentence. Calls queue: a second `say` speaks after the first, and a person talking over the voice
+drops the queued ones before the cut waits on the far end. Each model is optional — a
 session with only `speech=` can announce and never listens; one with only `transcription=` listens
 and never speaks, and `say` there is a `ConfigurationError`.
 
