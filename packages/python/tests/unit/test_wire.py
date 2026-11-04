@@ -48,7 +48,7 @@ def controls() -> dict[str, dict[str, Any]]:
         "silent": Silent(scope="acme", at=AT),
         "looked": Looked(scope="acme", at=AT, frames=1, triggered_by=HOST),
         "muted": Muted(scope="acme", at=AT, muted=True, triggered_by=HOST),
-        "closed": Closed(scope="acme", at=AT, reason="hung_up"),
+        "closed": Closed(scope="acme", at=AT, reason="hung_up", triggered_by=ANA),
     }
     return {
         "hello": {"type": "hello", "protocol": 1},

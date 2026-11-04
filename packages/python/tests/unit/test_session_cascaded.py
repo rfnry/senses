@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from rfnry_senses.contracts import AudioFrame
-from rfnry_senses.errors import ConfigurationError, ModelError
+from rfnry_senses.errors import ConfigurationError, ModelError, TransportError
 from rfnry_senses.events import Closed, Heard, Silent, Speaking, TurnEnded
 from rfnry_senses.session import Session
 from rfnry_senses.transport import Loopback
@@ -213,3 +213,35 @@ async def test_a_full_width_sentence_cut_at_seventy_percent_keeps_what_was_heard
         await s.interrupt(triggered_by=HOST)
         said = await saying
     assert said.heard == "お席のご用意ができました。窓際のお席です。"
+
+
+class EndingTranscription(ScriptedTranscription):
+    async def events(self) -> AsyncIterator[Any]:
+        return
+        yield
+
+
+async def test_a_transcription_stream_that_ended_is_fed_nothing() -> None:
+    link, stt, tts = Loopback(ANA, "acme"), EndingTranscription(), Tone()
+    async with Session(link, transcription=stt, speech=tts) as s:
+        await asyncio.sleep(0.01)
+        await link.speak(pcm(20))
+        await link.speak(pcm(20))
+        await asyncio.sleep(0.01)
+        assert stt.fed == []
+        assert (await s.say("Hello.", triggered_by=HOST)).heard == "Hello."
+
+
+class BrokenLine(Loopback):
+    async def send_audio(self, frame: AudioFrame, utterance: int) -> None:
+        raise ConnectionError("the phone line dropped")
+
+
+async def test_a_transport_send_failure_closes_a_cascaded_session_as_failed() -> None:
+    s = Session(BrokenLine(ANA, "acme"), speech=Tone())
+    async with s:
+        events = s.events()
+        with pytest.raises(TransportError, match="^session: the transport failed: "):
+            await s.say("Hello there.", triggered_by=HOST)
+        closed = await next_of(events, Closed)
+    assert closed.reason == "failed" and closed.triggered_by is None

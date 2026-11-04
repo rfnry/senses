@@ -85,6 +85,7 @@ class Closed(_Event):
     kind: Literal["closed"] = "closed"
     reason: Literal["closed", "hung_up", "failed"]
     message: str | None = None
+    triggered_by: Identity | None = None
 
 
 Event = Annotated[

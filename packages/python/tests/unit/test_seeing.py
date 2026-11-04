@@ -79,3 +79,14 @@ async def test_a_live_model_gets_the_newest_frame_when_it_falls_behind() -> None
         slow.gate.set()
         await until(lambda: len(slow.images) == 2)
     assert [i.data for i in slow.images] == [JPEG + b"\x00", JPEG + b"\x03"]
+
+
+async def test_look_takes_any_number_of_frames(clock: Clock) -> None:
+    link = Loopback(ANA, "acme")
+    async with Session(link, video=True) as s:
+        for n in range(3):
+            await link.show(JPEG + bytes([n]))
+            clock.advance(1)
+        await asyncio.sleep(0.01)
+        parts = await s.look(frames=25, triggered_by=HOST)
+    assert len(parts) == 6

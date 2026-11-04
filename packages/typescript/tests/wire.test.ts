@@ -41,6 +41,13 @@ describe('the wire', () => {
     expect(Array.from(audio.pcm)).toEqual([0x00, 0x01, 0xff, 0x7f])
   })
 
+  it('reads who ended the session', () => {
+    const control = parseControl(JSON.stringify(json('event-closed')))
+    expect(
+      control.type === 'event' && control.event.kind === 'closed' && control.event.triggered_by
+    ).toEqual({ role: 'user', id: 'ana', name: 'Ana', metadata: {} })
+  })
+
   it('refuses what it cannot read', () => {
     expect(() => parseControl('{"type":"nope"}')).toThrow(
       new SensesException('wire: unknown control frame nope')

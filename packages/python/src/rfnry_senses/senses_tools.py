@@ -8,7 +8,7 @@ from rfnry_senses.tools import Tool, Tools
 
 
 class LookArgs(BaseModel):
-    frames: int = Field(default=1, ge=1, le=10, description="How many of the newest frames to see")
+    frames: int = Field(default=1, ge=1, description="How many of the newest frames to see")
 
 
 class TextArgs(BaseModel):

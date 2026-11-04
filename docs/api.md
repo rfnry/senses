@@ -27,7 +27,7 @@ class LiveConnection(Protocol):
     async def close(self) -> None: ...
 ```
 
-One open live model. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`. Both may return a tag for the response they asked for — the vendor's id for the request, or the adapter's own — which the adapter then puts on that response's `LiveStarted(requested=tag)`, reported only once the call has returned it; an adapter that cannot tag returns `None`, and `respond=False` always does. The session sends one at a time and never cancels a `send_text` or `say` whose caller gave up: it runs to its end, so one that never returns holds every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
+One open live model. A `send_image` that raises is logged once and frames stop going to the model; the window and `look` go on, and so does the session. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`. Both may return a tag for the response they asked for — the vendor's id for the request, or the adapter's own — which the adapter then puts on that response's `LiveStarted(requested=tag)`, reported only once the call has returned it; an adapter that cannot tag returns `None`, and `respond=False` always does. The session sends one at a time and never cancels a `send_text` or `say` whose caller gave up: it runs to its end, so one that never returns holds every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
 
 ### `LiveEvent`
 
@@ -219,6 +219,7 @@ async def start(self, tools: ToolsLike | None = None, *, inform: Collection[str]
 Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on. The tools named in `inform` answer their calls the way `inform` speaks: the result goes back to the model with `respond=False`, and it is not asked to reply. A start that raises leaves the session open, so it can be tried again; call `close()` after one you will not retry.
 Raises `TransportError` when the session is closed, or closes while the live model opens; the connection it opened is then closed.
 Raises `ConfigurationError` when the session has already started, `tools` is given without a live model, or `inform` names something that is not one of the tools.
+Raises `InputError` when a tool definition is not valid: `session: a tool definition is not valid`.
 
 ### `Session.say`
 
@@ -303,7 +304,7 @@ Raises `TransportError` when the session is not started or is closed.
 async def look(self, frames: int = 1, *, triggered_by: IdentityLike) -> list[Part]: ...
 ```
 
-Returns the newest `frames` from the camera window, oldest first, each an `Image` followed by the `Text` of when it was taken (`frame at 12:03:04.200`), and reports `Looked`.
+Returns the newest `frames` from the camera window (at most what the window holds), oldest first, each an `Image` followed by the `Text` of when it was taken (`frame at 12:03:04.200`), and reports `Looked`.
 Raises `InputError` when `frames` is below 1 or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session was made without `video=True`.
 Raises `NotFoundError` when there is no frame in the window.
@@ -329,10 +330,10 @@ Raises `TransportError` when the session is not started.
 ### `Session.close`
 
 ```python
-async def close(self) -> None: ...
+async def close(self, *, triggered_by: IdentityLike | None = None) -> None: ...
 ```
 
-Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done; from a tool call the close is stopping, `close` returns at once. Closing a closed session does nothing.
+Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`, naming `triggered_by` when given: who ended it, a person or your own code. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done; from a tool call the close is stopping, `close` returns at once. Closing a closed session does nothing.
 
 ## Events
 
@@ -512,9 +513,10 @@ class Closed(BaseModel):
     kind: Literal["closed"] = "closed"
     reason: Literal["closed", "hung_up", "failed"]
     message: str | None = None
+    triggered_by: Identity | None = None
 ```
 
-The session ended: `closed` by `close()`, `hung_up` when the person left, `failed` with the error's `message`. It is the last event.
+The session ended: `closed` by `close()`, `hung_up` when the person left, `failed` with the error's `message`. `triggered_by` says who ended it: the cause given to `close(triggered_by=)`, the person for `hung_up`, and no one (`None`) for `failed` and for the end of `async with`. It is the last event.
 
 ## Tools
 
@@ -617,7 +619,7 @@ class SensesTools(Tools):
     def __init__(self, session: Session, *, triggered_by: IdentityLike) -> None: ...
 ```
 
-The session's verbs as tools for a text mind, pinned to one session and one cause: `look(frames)` (1 to 10) with `video=True`, `say(text)` and `interrupt()` when the session has a voice, `prompt(text)` and `inform(text)` with a live model. They return the parts, `{"heard", "interrupted"}`, `{"heard"}`, `{"said", "heard", "interrupted"}` and `"informed"`, and a call that fails raises the session verb's error.
+The session's verbs as tools for a text mind, pinned to one session and one cause: `look(frames)` with `video=True`, `say(text)` and `interrupt()` when the session has a voice, `prompt(text)` and `inform(text)` with a live model. They return the parts, `{"heard", "interrupted"}`, `{"heard"}`, `{"said", "heard", "interrupted"}` and `"informed"`, and a call that fails raises the session verb's error.
 Raises `InputError` when `triggered_by` does not fit.
 
 ## Transports
@@ -658,7 +660,7 @@ class Transport(Protocol):
     async def close(self) -> None: ...
 ```
 
-What a session runs on: the person, the scope, and a two-way link to them. `inbound()` yields the person's audio, JPEG camera frames and `Played` reports and ends when they leave; `clear_audio` drops audio not yet sent; stopping what the far end already has is the `stop` control frame, so a transport whose far end buffers audio flushes it when `stop` arrives. `serve`, `accept_offer` and `Loopback` make one; a telephone line or a robot's microphone is one of your own.
+What a session runs on: the person, the scope, and a two-way link to them. `inbound()` yields the person's audio, JPEG camera frames and `Played` reports and ends when they leave; a far end that is gone ends `inbound()`, and a send method does not raise for it. A send that does raise closes the session as `failed` with a `TransportError`; `clear_audio` drops audio not yet sent; stopping what the far end already has is the `stop` control frame, so a transport whose far end buffers audio flushes it when `stop` arrives. `serve`, `accept_offer` and `Loopback` make one; a telephone line or a robot's microphone is one of your own.
 
 ### `Played`
 
@@ -1183,7 +1185,12 @@ type SensesEvent =
   | (Stamp & { kind: 'silent' })
   | (Stamp & { kind: 'looked'; frames: number; triggered_by: Identity })
   | (Stamp & { kind: 'muted'; muted: boolean; triggered_by: Identity })
-  | (Stamp & { kind: 'closed'; reason: 'closed' | 'hung_up' | 'failed'; message: string | null })
+  | (Stamp & {
+      kind: 'closed'
+      reason: 'closed' | 'hung_up' | 'failed'
+      message: string | null
+      triggered_by: Identity | null
+    })
 ```
 
 The session's events as the client receives them: every `Event` but `Informed` and `ToolCalled`, with `at` as an ISO 8601 string.

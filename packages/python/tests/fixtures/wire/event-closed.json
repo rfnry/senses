@@ -5,6 +5,12 @@
     "at": "2026-09-24T12:03:04.200000Z",
     "kind": "closed",
     "reason": "hung_up",
-    "message": null
+    "message": null,
+    "triggered_by": {
+      "role": "user",
+      "id": "ana",
+      "name": "Ana",
+      "metadata": {}
+    }
   }
 }

@@ -10,7 +10,7 @@ from itertools import count
 from time import monotonic
 from typing import Any, Literal
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from rfnry_senses.contracts import (
     AudioFrame,
@@ -169,6 +169,7 @@ class Session:
         self._tool_timeout = tool_timeout
         self._connection: LiveConnection | None = None
         self._stream: Transcription | None = None
+        self._hearing = True
         self._subscribers: set[asyncio.Queue[Event | None]] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
         self._opened = False
@@ -236,9 +237,14 @@ class Session:
             raise ConfigurationError(
                 "session: tools are for a live model; without one they belong to your own loop"
             )
-        specs = (
-            [ToolSpec.model_validate(d) for d in tools.definitions()] if tools is not None else []
-        )
+        try:
+            specs = (
+                [ToolSpec.model_validate(d) for d in tools.definitions()]
+                if tools is not None
+                else []
+            )
+        except ValidationError as exc:
+            raise InputError(f"session: a tool definition is not valid: {exc}") from exc
         names = {spec.name for spec in specs}
         for name in inform:
             if name not in names:
@@ -362,8 +368,9 @@ class Session:
         while self._saying and not self._closed:
             await self._settled.wait()
 
-    async def close(self) -> None:
-        await self._end("closed", None, None)
+    async def close(self, *, triggered_by: IdentityLike | None = None) -> None:
+        cause = as_identity(triggered_by) if triggered_by is not None else None
+        await self._end("closed", None, None, cause)
 
     async def interrupt(self, *, triggered_by: IdentityLike) -> Interrupted | None:
         cause = as_identity(triggered_by)
@@ -426,7 +433,7 @@ class Session:
         try:
             spoken = [v for v in taken if v.spoke]
             if spoken:
-                await self._transport.send_control({"type": "stop", "utterance": spoken[-1].number})
+                await self._control({"type": "stop", "utterance": spoken[-1].number})
             reports = await asyncio.gather(
                 *(self._await_played(v, PLAYED_GRACE, None) for v in spoken)
             )
@@ -552,12 +559,12 @@ class Session:
                 await self._hear(item)
             else:
                 await self._see(item)
-        await self._end("hung_up", None, None)
+        await self._end("hung_up", None, None, self.person)
 
     async def _hear(self, frame: AudioFrame) -> None:
         if self._connection is not None:
             await self._connection.send_audio(frame)
-        elif self._stream is not None:
+        elif self._stream is not None and self._hearing:
             await self._stream.feed(frame)
 
     async def look(self, frames: int = 1, *, triggered_by: IdentityLike) -> list[Part]:
@@ -591,7 +598,13 @@ class Session:
             self._frame_ready.clear()
             frame, self._frame = self._frame, None
             if frame is not None:
-                await self._connection.send_image(frame)
+                try:
+                    await self._connection.send_image(frame)
+                except Exception as exc:
+                    logger.warning(
+                        "session: the live model takes no images; frames stop going to it: %s", exc
+                    )
+                    return
 
     async def _live_events(self) -> None:
         assert self._connection is not None
@@ -681,7 +694,7 @@ class Session:
     async def _send(self, u: Utterance, frame: AudioFrame) -> None:
         if not u.spoke:
             u.spoke = True
-            await self._transport.send_control({"type": "speaking", "utterance": u.number})
+            await self._control({"type": "speaking", "utterance": u.number})
             if not self._out:
                 await self._emit(Speaking(scope=self.scope))
             self._out.append(u)
@@ -690,12 +703,21 @@ class Session:
         start = max(monotonic(), self._playhead)
         u.ledger.sent(frame, start)
         self._playhead = start + frame.duration_ms / 1000
-        await self._transport.send_audio(frame, u.number)
+        try:
+            await self._transport.send_audio(frame, u.number)
+        except Exception as exc:
+            raise TransportError(f"session: the transport failed: {exc}") from exc
+
+    async def _control(self, control: dict[str, Any]) -> None:
+        try:
+            await self._transport.send_control(control)
+        except Exception as exc:
+            raise TransportError(f"session: the transport failed: {exc}") from exc
 
     async def _conclude(self, u: Utterance) -> None:
         played = 0.0
         if u.spoke:
-            await self._transport.send_control({"type": "silent", "utterance": u.number})
+            await self._control({"type": "silent", "utterance": u.number})
             played = await self._await_played(
                 u, u.ledger.remaining(monotonic()) + PLAYBACK_SLACK, u.ledger.sent_ms
             )
@@ -857,6 +879,7 @@ class Session:
                 finals, partial = [], ""
                 if words:
                     await self._emit(TurnEnded(scope=self.scope, text=words, speaker=self.person))
+        self._hearing = False
         logger.warning("session: the transcription stream ended; the session no longer hears")
 
     async def _speak(self) -> None:
@@ -886,18 +909,27 @@ class Session:
             async for sentence in pieces:
                 if streamed:
                     u.text += sentence
-                try:
-                    async for frame in self._speech.speak(sentence):
-                        if self._utterance is not u:
-                            return
-                        await self._send(u, frame)
-                except Exception as exc:
-                    logger.warning("session: the speech model failed: %s", exc)
-                    await self._abandon(u, ModelError(f"session: the speech model failed: {exc}"))
-                    return
+                frames = aiter(self._speech.speak(sentence))
+                while True:
+                    try:
+                        frame = await anext(frames)
+                    except StopAsyncIteration:
+                        break
+                    except Exception as exc:
+                        logger.warning("session: the speech model failed: %s", exc)
+                        await self._abandon(
+                            u, ModelError(f"session: the speech model failed: {exc}")
+                        )
+                        return
+                    if self._utterance is not u:
+                        return
+                    await self._send(u, frame)
                 if self._utterance is not u:
                     return
                 u.ledger.mark(sentence)
+        except TransportError as exc:
+            await self._abandon(u, exc)
+            raise
         except Exception as exc:
             await self._abandon(u, exc)
             return
@@ -917,7 +949,7 @@ class Session:
         if u.done is not None and not u.done.done():
             u.done.set_exception(error)
         if u.spoke:
-            await self._transport.send_control({"type": "silent", "utterance": u.number})
+            await self._control({"type": "silent", "utterance": u.number})
         await self._unvoice(u)
         self._settle()
 
@@ -932,6 +964,7 @@ class Session:
         reason: Literal["closed", "hung_up", "failed"],
         message: str | None,
         error: SensesException | None,
+        cause: Identity | None = None,
     ) -> None:
         if self._closing is None:
             self._closed = True
@@ -940,7 +973,7 @@ class Session:
             self._stopping = {t for t in (*self._tasks, self._playing, *works) if t is not None}
             for task in self._stopping:
                 task.cancel()
-            self._closing = asyncio.create_task(self._close(reason, message, error, waiting))
+            self._closing = asyncio.create_task(self._close(reason, message, error, waiting, cause))
         if asyncio.current_task() not in self._stopping:
             await asyncio.shield(self._closing)
 
@@ -950,6 +983,7 @@ class Session:
         message: str | None,
         error: SensesException | None,
         waiting: list[Utterance | None],
+        cause: Identity | None,
     ) -> None:
         await asyncio.gather(*self._stopping, return_exceptions=True)
         failure = error or TransportError("session: the session closed before the reply was spoken")
@@ -964,7 +998,9 @@ class Session:
             if closing is not None:
                 with contextlib.suppress(Exception):
                     await closing.close()
-        await self._emit(Closed(scope=self.scope, reason=reason, message=message))
+        await self._emit(
+            Closed(scope=self.scope, reason=reason, message=message, triggered_by=cause)
+        )
         for queue in list(self._subscribers):
             queue.put_nowait(None)
         with contextlib.suppress(Exception):

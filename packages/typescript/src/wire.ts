@@ -29,7 +29,12 @@ export type SensesEvent =
   | (Stamp & { kind: 'silent' })
   | (Stamp & { kind: 'looked'; frames: number; triggered_by: Identity })
   | (Stamp & { kind: 'muted'; muted: boolean; triggered_by: Identity })
-  | (Stamp & { kind: 'closed'; reason: 'closed' | 'hung_up' | 'failed'; message: string | null })
+  | (Stamp & {
+      kind: 'closed'
+      reason: 'closed' | 'hung_up' | 'failed'
+      message: string | null
+      triggered_by: Identity | null
+    })
 
 export type ServerControl =
   | { type: 'ready' }

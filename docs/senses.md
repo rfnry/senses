@@ -371,6 +371,8 @@ await session.close()
 It does not wait for a tool still running, and from inside a tool body it can wait on the response
 that is waiting for that tool: spawn it there instead.
 
+`close(triggered_by=)` names who ended the call on `Closed`; a hang-up names the person, and a failure or the end of `async with` names no one.
+
 `close` runs to the end once it begins. A caller cancelled while it waits — a deadline, a cancel
 scope, a handler torn down — stops waiting, but the model connections and the transport still close
 and `Closed` is still reported; a second `close` returns once the first is done. A tool that ends
@@ -406,7 +408,7 @@ looking at one. The browser client chooses the source ([The TypeScript client](#
 one at a time. A shared screen goes to the model you chose, as the camera does; the browser asks the
 person which screen or window to share, and shows that it is being shared.
 
-`look` returns the newest frames, oldest first, each an `Image` followed by the `Text` of when it was
+A live model that takes no images (its `send_image` raises) is logged once and no longer sent frames; the window, `look` and the session go on. `look` returns the newest frames, oldest first, each an `Image` followed by the `Text` of when it was
 taken — `frame at 12:03:04.200` — ready to hand any model that sees. With nothing in the window it
 raises `NotFoundError`. The model sees the frame itself; there is no vision model in between. Without
 `video=True`, `look` is a `ConfigurationError` and frames are dropped on arrival.
@@ -429,7 +431,7 @@ session's `scope` and the time `at`:
 | `Informed` | `text, triggered_by` | a live model was told something |
 | `ToolCalled` | `name, input, output, is_error, cancelled` | a live model's tool call ran, or was stopped |
 | `Cancelled` | `tools, triggered_by` | `cancel` stopped the tool calls running |
-| `Closed` | `reason, message` | the session ended: `closed`, `hung_up` or `failed` |
+| `Closed` | `reason, message, triggered_by` | the session ended: `closed`, `hung_up` or `failed`; `triggered_by` names who: the cause given to `close`, the person on a hang-up, no one on a failure |
 
 ```python
 async for event in session.events():
@@ -601,7 +603,7 @@ and answers each utterance once, as the browser does — on its `silent`, or on 
 with a `Played`: all of it by default, what `played=` says, or nothing with `answer=False`. A telephone line, a meeting bot's bridge or
 a robot's microphone is a `Transport` of your own: an `identity`, a `scope`, `inbound()` yielding
 `AudioFrame`s, JPEG `Image`s and `Played` reports, `send_audio`, `send_control`, `clear_audio` and
-`close`. It answers each utterance once with a `Played`, as the client does; a far end that reports
+`close`. A send method does not raise: a far end that is gone ends `inbound()`, and a send that raises closes the session as `failed` with a `TransportError`. It answers each utterance once with a `Played`, as the client does; a far end that reports
 progress as it plays is counted by the transport, which answers at once. `clear_audio` drops only
 what the transport has not sent yet: a far end that buffers audio is told to flush when `stop`
 arrives.
@@ -703,7 +705,7 @@ loop — pinned to one session and one cause:
 
 | tool | returns | offered when |
 | --- | --- | --- |
-| `look(frames)` | the newest `frames`, 1 to 10, as parts: `[Image, Text("frame at 12:03:04.200")]` | `video=True` |
+| `look(frames)` | the newest `frames`, at least 1 and at most what the window holds, as parts: `[Image, Text("frame at 12:03:04.200")]` | `video=True` |
 | `say(text)` | `{"heard": …, "interrupted": …}` — text only; a streamed `say` is for code | the session has a voice |
 | `prompt(text)` | `{"said": …, "heard": …, "interrupted": …}` | live |
 | `inform(text)` | `"informed"` | live |
@@ -781,8 +783,8 @@ with an empty scope given to `Session`. `NotFoundError` when `look` finds no fra
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the
-one `say` that needed it. `TransportError`
-for a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
+one `say` that needed it; a tool definition that is not valid raises `InputError` from `start`. `TransportError`
+for a send the transport failed (the session closes as `failed`), a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after
 its hello has the frame dropped with a warning, never the session.
 

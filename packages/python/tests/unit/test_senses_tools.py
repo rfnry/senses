@@ -61,3 +61,13 @@ async def test_a_failing_tool_raises_the_librarys_error() -> None:
     async with Session(Loopback(ANA, "acme"), video=True) as s:
         with pytest.raises(NotFoundError, match="^session: no frame in the last 10 s$"):
             await SensesTools(s, triggered_by=HOST).dispatch("look", {"frames": 2})
+
+
+async def test_look_takes_any_number_of_frames() -> None:
+    link = Loopback(ANA, "acme")
+    async with Session(link, video=True) as s:
+        tools = SensesTools(s, triggered_by=HOST)
+        await link.show(JPEG)
+        await asyncio.sleep(0.01)
+        result = await tools.dispatch("look", {"frames": 25})
+    assert len(result) == 2
