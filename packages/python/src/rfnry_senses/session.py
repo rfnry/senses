@@ -173,11 +173,12 @@ class Session:
         self._opened = False
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
+        self._stopping: set[asyncio.Task[Any]] = set()
         self._muted = False
         self._numbers = count(1)
         self._utterance: Utterance | None = None
         self._out: list[Utterance] = []
-        self._taken: list[Utterance] = []
+        self._ending: list[Utterance] = []
         self._playhead = 0.0
         self._playing: asyncio.Task[None] | None = None
         self._waiting: deque[Utterance] = deque()
@@ -212,7 +213,7 @@ class Session:
         return [
             self._utterance,
             *self._out,
-            *self._taken,
+            *self._ending,
             *self._waiting,
             *self._causes,
             self._granted,
@@ -396,7 +397,7 @@ class Session:
             return None
         cutting = self._spawn(self._complete_cut(cause, taken))
         self._utterance = None
-        self._taken += taken
+        self._ending += taken
         for v in taken:
             v.cut = True
         self._cutting += 1
@@ -435,11 +436,14 @@ class Session:
             cut = Interrupted(scope=self.scope, heard=heard[landed], triggered_by=cause)
             if not self._closed:
                 await self._emit(cut)
-                for v in taken:
-                    await self._finish(v, heard[v], interrupted=True)
-                    self._taken.remove(v)
-                self._settle()
+                await self._finish_ending(heard)
         return cut
+
+    async def _finish_ending(self, heard: dict[Utterance, str]) -> None:
+        for u, words in heard.items():
+            await self._finish(u, words, interrupted=True)
+            self._ending.remove(u)
+        self._settle()
 
     async def _interrupt_model(self, played_ms: int, heard: str, response: str | None) -> None:
         assert self._connection is not None
@@ -459,9 +463,9 @@ class Session:
         for _, turn in held:
             if not turn.done():
                 turn.set_result(False)
-        for u in (*causes, granted, *(u for u, _ in held)):
-            if u is not None:
-                await self._finish(u, "", interrupted=True)
+        dropped = [u for u in (*causes, granted, *(u for u, _ in held)) if u is not None]
+        self._ending += dropped
+        await self._finish_ending(dict.fromkeys(dropped, ""))
 
     def _next(self) -> None:
         if self._closed or self._cutting or self._granted is not None:
@@ -631,8 +635,9 @@ class Session:
         self._start(u)
         if self._muted:
             self._utterance = None
+            self._ending.append(u)
             await self._interrupt_model(0, "", u.response)
-            await self._finish(u, "", interrupted=True)
+            await self._finish_ending({u: ""})
 
     async def _response_done(self) -> None:
         if not self._responding:
@@ -696,9 +701,9 @@ class Session:
             interrupted=interrupted,
             triggered_by=u.triggered_by,
         )
-        await self._unvoice(u)
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
+        await self._unvoice(u)
         if u.done is not None or u.spoke or u.text:
             await self._emit(said)
         self._settle()
@@ -855,11 +860,11 @@ class Session:
             self._transport.clear_audio()
         u.finished = True
         self._played.pop(u.number, None)
+        if u.done is not None and not u.done.done():
+            u.done.set_exception(error)
         if u.spoke:
             await self._transport.send_control({"type": "silent", "utterance": u.number})
         await self._unvoice(u)
-        if u.done is not None and not u.done.done():
-            u.done.set_exception(error)
         self._settle()
 
     async def _unvoice(self, u: Utterance) -> None:
@@ -878,11 +883,12 @@ class Session:
             self._closed = True
             waiting = self._owed()
             works = [work for _, work, _ in self._running.values()]
-            tasks = [t for t in (*self._tasks, self._playing, *works) if t is not None]
-            for task in tasks:
+            self._stopping = {t for t in (*self._tasks, self._playing, *works) if t is not None}
+            for task in self._stopping:
                 task.cancel()
-            self._closing = asyncio.create_task(self._close(reason, message, error, waiting, tasks))
-        await asyncio.shield(self._closing)
+            self._closing = asyncio.create_task(self._close(reason, message, error, waiting))
+        if asyncio.current_task() not in self._stopping:
+            await asyncio.shield(self._closing)
 
     async def _close(
         self,
@@ -890,9 +896,8 @@ class Session:
         message: str | None,
         error: SensesException | None,
         waiting: list[Utterance | None],
-        tasks: list[asyncio.Task[Any]],
     ) -> None:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*self._stopping, return_exceptions=True)
         failure = error or TransportError("session: the session closed before the reply was spoken")
         for u in (*waiting, *self._owed()):
             if u is not None and u.done is not None and not u.done.done():

@@ -357,7 +357,8 @@ that is waiting for that tool: spawn it there instead.
 `close` runs to the end once it begins. A caller cancelled while it waits — a deadline, a cancel
 scope, a handler torn down — stops waiting, but the model connections and the transport still close
 and `Closed` is still reported; a second `close` returns once the first is done. A tool that ends
-the call by calling `close` is stopped with the other tool calls, and nothing more goes to the model.
+the call by calling `close` is stopped with the other tool calls: its `close` returns at once, as
+does one a tool calls while the close is stopping it, and nothing more goes to the model.
 
 ### Seeing
 

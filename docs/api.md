@@ -332,7 +332,7 @@ Raises `TransportError` when the session is not started.
 async def close(self) -> None: ...
 ```
 
-Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done. Closing a closed session does nothing.
+Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done; from a tool call the close is stopping, `close` returns at once. Closing a closed session does nothing.
 
 ## Events
 
