@@ -116,10 +116,10 @@ A response to a tool result or to the person answers no `say` or `prompt`: it is
 An adapter that can name the request a response answers returns a tag from `send_text(respond=True)`
 and `say` — the vendor's id for the request, or one of its own — and puts it on that response:
 `LiveStarted(requested=tag)`. Without tags, responses take their requests in order, and the order
-slips when the vendor answers a request senses already ended: `mute` and the person cutting in end
-a request even after it was sent, and the vendor's late answer to it is credited to the next one.
-A tag removes that limit: the late answer is cut before a word of it plays, and the next request
-keeps its own.
+slips when the vendor answers a request senses ended after its send began — by `mute`, the person
+cutting in, or a caller that gave up while it was being sent: the vendor's late answer is credited
+to the next request. A tag removes that limit: the late answer is cut before a word of it plays,
+and the next request keeps its own.
 
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
@@ -240,10 +240,12 @@ is `start(tools=)` — without a live model, tools belong to your own loop.
 A live model gives one response at a time, so `say` and `prompt` take turns: each goes to the model
 once no response is open and none is still owed to the last one sent — after the model's own reply,
 and after the response to the request before. The person cutting in, or `mute`, ends them, sent or
-not; `interrupt` leaves them, and they go once the cut response ends. A request ended after it was
-sent may still be answered by the vendor; how senses tells that answer from the next request's is
-in [Models](#models). A vendor that never answers a request holds the ones behind it until the
-person cuts in, `mute` or `close`. `inform` never waits.
+not; `interrupt` leaves them, and they go once the cut response ends. A `say` or `prompt` given up
+on before its send is done ends there, and a send under way still runs to its end before the next
+goes; one given up on after that is still answered. A request ended after its send began may still
+be answered by the vendor; how senses tells that answer from the next request's is in
+[Models](#models). A vendor that never answers a request holds the ones behind it until the person
+cuts in, `mute` or `close`. `inform` never waits.
 A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
 vendor that holds that response open until the result, the tool times out first: spawn it there.
 

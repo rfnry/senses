@@ -739,14 +739,7 @@ class Session:
         self._next()
         try:
             if await turn:
-                async with self._lock:
-                    if self._granted is u:
-                        self._granted = None
-                    if not u.finished and not self._closed:
-                        self._causes.append(u)
-                        u.request = await send()
-                        if u.finished and u.request is not None:
-                            self._ended_tags.add(u.request)
+                await self._send_request(u, send)
         except BaseException:
             u.done.cancel()
             with contextlib.suppress(ValueError):
@@ -759,6 +752,29 @@ class Session:
             self._settle()
             raise
         return await u.done
+
+    async def _send_request(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> None:
+        sending = asyncio.create_task(self._deliver(u, send))
+        self._tasks.add(sending)
+        sending.add_done_callback(self._tasks.discard)
+        try:
+            await asyncio.shield(sending)
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+
+    async def _deliver(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> None:
+        assert u.done is not None
+        async with self._lock:
+            if self._granted is u:
+                self._granted = None
+            if u.done.done() or self._closed:
+                return
+            self._causes.append(u)
+            u.request = await send()
+            if u.request is not None and u.done.done():
+                self._ended_tags.add(u.request)
 
     async def _dispatch(self, call: LiveToolCall) -> object:
         if self._tools is None:

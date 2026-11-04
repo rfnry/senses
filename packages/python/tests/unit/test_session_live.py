@@ -813,11 +813,18 @@ class SendingSay(ScriptedConnection):
     def __init__(self) -> None:
         super().__init__()
         self.sent = asyncio.Event()
+        self.sending = 0
+        self.overlapped = False
 
     async def say(self, text: str) -> str | None:
-        tag = await super().say(text)
-        await self.sent.wait()
-        return tag
+        self.sending += 1
+        self.overlapped = self.overlapped or self.sending > 1
+        try:
+            tag = await super().say(text)
+            await self.sent.wait()
+            return tag
+        finally:
+            self.sending -= 1
 
 
 async def test_a_late_answer_to_a_say_muted_while_it_was_sending_is_cut() -> None:
@@ -843,6 +850,54 @@ async def test_a_late_answer_to_a_say_muted_while_it_was_sending_is_cut() -> Non
     saids = [e async for e in events if isinstance(e, Said)]
     assert ended.heard == "" and ended.interrupted and saids == [ended]
     assert live.connection.interrupts == [(0, "", "late")] and link.audio == []
+
+
+async def test_a_late_answer_to_a_say_given_up_while_it_was_sending_is_cut() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = SendingSay()
+    connection.tagging = True
+    async with session(link, live) as s:
+        events = s.events()
+        first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        first.cancel()
+        second = asyncio.create_task(s.say("Shall I order the usual?", triggered_by=ANA))
+        await asyncio.sleep(0.01)
+        sent_while_sending = list(connection.calls)
+        connection.sent.set()
+        await until(lambda: len(connection.calls) == 2)
+        connection.emit(
+            LiveStarted(id="late", requested="request-1"),
+            LiveSaid(text="Your table is ready."),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+            LiveStarted(id="own", requested="request-2"),
+            LiveSaid(text="Shall I order the usual?"),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        said = await asyncio.wait_for(second, 1)
+    saids = [e async for e in events if isinstance(e, Said)]
+    assert first.cancelled() and not connection.overlapped
+    assert sent_while_sending == [("say", "Your table is ready.")]
+    assert connection.interrupts == [(0, "", "late")]
+    assert said.triggered_by == ANA and said.heard == "Shall I order the usual?"
+    assert saids == [said] and len(link.audio) == 1
+
+
+async def test_a_close_while_a_say_is_sending_fails_it() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = SendingSay()
+    s = session(link, live)
+    await s.start()
+    events = s.events()
+    asked = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+    await until(lambda: len(connection.calls) == 1)
+    await asyncio.wait_for(s.close(), 1)
+    with pytest.raises(TransportError, match="^session: the session closed before the reply"):
+        await asyncio.wait_for(asked, 1)
+    closed = await next_of(events, Closed)
+    assert closed.reason == "closed" and connection.closed and connection.sending == 0
 
 
 async def test_a_say_during_a_barge_in_cut_is_never_sent() -> None:
