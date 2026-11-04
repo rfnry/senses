@@ -13,7 +13,8 @@ from rfnry_senses.contracts import (
     Transcript,
     UtteranceEnd,
 )
-from rfnry_senses.models import Content, Identity, Image, ToolSpec
+from rfnry_senses.models import Content, Identity, IdentityLike, Image, ToolSpec
+from rfnry_senses.transport import Loopback, Played
 
 ANA = Identity(role="user", id="ana", name="Ana")
 HOST = Identity(role="assistant", id="host", name="Host")
@@ -159,3 +160,27 @@ class Tone:
             await self.release.wait()
         for _ in text.split():
             yield pcm(self.ms)
+
+
+class SlowLoopback(Loopback):
+    def __init__(self, identity: IdentityLike, scope: str, *, delay: float | None) -> None:
+        super().__init__(identity, scope, answer=False)
+        self.delay = delay
+        self._reported: set[int] = set()
+
+    async def send_control(self, control: dict[str, Any]) -> None:
+        await super().send_control(control)
+        if self.delay is None or control["type"] not in ("stop", "silent"):
+            return
+        last = control["utterance"]
+        through = {n for n in self._sent if n <= last} if control["type"] == "stop" else set()
+        for utterance in sorted((through | {last}) - self._reported):
+            self._reported.add(utterance)
+            played = Played(utterance=utterance, ms=int(self._sent.get(utterance, 0.0)))
+            asyncio.get_running_loop().call_later(self.delay, self._inbox.put_nowait, played)
+
+
+class AwaitingLoopback(Loopback):
+    async def send_control(self, control: dict[str, Any]) -> None:
+        await asyncio.sleep(0)
+        await super().send_control(control)

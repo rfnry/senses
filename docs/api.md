@@ -206,7 +206,7 @@ class Session:
     async def __aexit__(self, *exc: object) -> None: ...
 ```
 
-One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. `async with` starts it without tools if it has not started, and closes it at the end.
+One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error.
 Raises `ConfigurationError` when a live model is given with transcription or speech models, `instructions` without a live model, or a `window`, `window_bytes` or `tool_timeout` that is not positive.
 Raises `InputError` when the transport's scope is empty or its identity does not fit.
 
@@ -216,8 +216,8 @@ Raises `InputError` when the transport's scope is empty or its identity does not
 async def start(self, tools: ToolsLike | None = None, *, inform: Collection[str] = ()) -> None: ...
 ```
 
-Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on. The tools named in `inform` answer their calls the way `inform` speaks: the result goes back to the model with `respond=False`, and it is not asked to reply.
-Raises `TransportError` when the session is closed.
+Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on. The tools named in `inform` answer their calls the way `inform` speaks: the result goes back to the model with `respond=False`, and it is not asked to reply. A start that raises leaves the session open, so it can be tried again; call `close()` after one you will not retry.
+Raises `TransportError` when the session is closed, or closes while the live model opens; the connection it opened is then closed.
 Raises `ConfigurationError` when the session has already started, `tools` is given without a live model, or `inform` names something that is not one of the tools.
 
 ### `Session.say`
@@ -261,10 +261,10 @@ Raises `TransportError` when the session is not started or is closed.
 async def interrupt(self, *, triggered_by: IdentityLike) -> Interrupted | None: ...
 ```
 
-Stops the voice, cuts what is playing to what the person heard, and has a live model cut its context to the same point. Returns the `Interrupted` it reports, or `None` when nothing was being said; calls queued behind the cut still play.
+Stops the voice, cuts what is playing to what the person heard, and has a live model cut its context to the same point. Returns the `Interrupted` it reports, or `None` when nothing was being said; calls queued behind the cut still play. The cut finishes even when its caller gives up.
 Raises `InputError` when `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
-Raises `TransportError` when the session is not started or is closed.
+Raises `TransportError` when the session is not started or is closed, or closes before the cut ends.
 
 ### `Session.cancel`
 
@@ -285,7 +285,7 @@ async def mute(self, *, triggered_by: IdentityLike) -> None: ...
 
 Closes the output gate: queued calls end with nothing heard, what is playing is cut as by `interrupt`, and no audio reaches the person until `unmute`. Reports `Muted`; the session still hears and sees, and muting a muted session does nothing.
 Raises `InputError` when `triggered_by` does not fit.
-Raises `TransportError` when the session is not started or is closed.
+Raises `TransportError` when the session is not started or is closed, or closes before the cut ends.
 
 ### `Session.unmute`
 
@@ -332,7 +332,7 @@ Raises `TransportError` when the session is not started.
 async def close(self) -> None: ...
 ```
 
-Ends the session: calls still waiting raise `TransportError`, the model connections and the transport close, and `Closed` is reported with reason `closed`. Closing a closed session does nothing.
+Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done. Closing a closed session does nothing.
 
 ## Events
 

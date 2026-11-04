@@ -192,7 +192,10 @@ The model runs inside its vendor's session. `start` opens it with the definition
 instructions, sends it the person's audio, and plays its voice. The tools are fixed from then on:
 vendors take tool definitions when their session opens. They are given to `start`, not to
 `Session`, so a tool can hold the session it runs in ([Two minds](#two-minds)). `async with` closes
-the session at the end, and starts it without tools if it has not started. When the model calls a
+the session at the end, and starts it without tools if it has not started; when that start fails, it
+closes the session as `failed`, so the client is told and the transport closes, and raises the error.
+A `start` you call yourself leaves the session open when it fails, to be tried again: `close` it
+when you will not. When the model calls a
 tool, senses dispatches the call through `tools` — any family `Tools`: an engine agent as a tool, rfnry-thread's
 `ThreadTools`, rfnry-memory's `MemoryTools`, your own — and submits the result. A string or a list of
 parts goes back as it is, a dict as JSON; an exception goes back as an error the model reads,
@@ -335,6 +338,11 @@ while muted returns at once with nothing heard, and a response a live model star
 cut before a word of it plays. The session still hears and sees. A product's floor policy or mandate
 gate is built on these two verbs.
 
+A cut finishes whatever happens to the code that asked for it. An `interrupt` or `mute` given up on
+— a timeout, a cancelled task, a tool call the model withdrew — still waits for the client's report,
+tells the model what was heard, and ends each utterance it cut. If the session closes during a cut,
+the calls it cut raise `TransportError`, as every call still waiting does.
+
 `quiet` waits until the voice has nothing left to say — no response open, no `say` or `prompt`
 waiting, every utterance played or cut — so a call can end after its last words were heard:
 
@@ -345,6 +353,11 @@ await session.close()
 
 It does not wait for a tool still running, and from inside a tool body it can wait on the response
 that is waiting for that tool: spawn it there instead.
+
+`close` runs to the end once it begins. A caller cancelled while it waits — a deadline, a cancel
+scope, a handler torn down — stops waiting, but the model connections and the transport still close
+and `Closed` is still reported; a second `close` returns once the first is done. A tool that ends
+the call by calling `close` is stopped with the other tool calls, and nothing more goes to the model.
 
 ### Seeing
 
