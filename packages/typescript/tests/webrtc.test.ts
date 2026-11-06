@@ -738,7 +738,7 @@ describe('when the connection ends over WebRTC', () => {
   async function playing() {
     vi.useFakeTimers({ now: 0 })
     vi.stubGlobal('Audio', Element)
-    const reader = receiver({ emitted: 0, packets: 0, concealed: 0 })
+    const reader = receiver({ emitted: 0, concealed: 0 })
     const read = vi.spyOn(reader, 'getStats')
     const devices = equipped()
     const { peer, channel } = await connected()
@@ -785,7 +785,6 @@ class Element {
 
 type Stats = {
   emitted: number
-  packets: number
   concealed: number
   lost?: number
   discarded?: number
@@ -800,7 +799,6 @@ function receiver(counts: Stats) {
           {
             type: 'inbound-rtp',
             jitterBufferEmittedCount: counts.emitted,
-            packetsReceived: counts.packets,
             packetsLost: counts.lost ?? 0,
             packetsDiscarded: counts.discarded ?? 0,
             concealedSamples: counts.concealed,
@@ -818,44 +816,40 @@ type Stretch = {
   starts?: number
   lost?: number
   discarded?: number
-  unplayed?: number
 }
 
 function bufferedReceiver(audio: Stretch[]) {
   const counts = (t: number) => {
-    let packets = 0
     let played = 0
     let lost = 0
     let discarded = 0
     let free = 0
     for (const stretch of audio) {
-      const { at, ms, starts = 20, unplayed = 0 } = stretch
+      const { at, ms, starts = 20 } = stretch
       const from = Math.max(at + starts, free)
       free = from + ms
       if (t <= at) continue
       const past = t > at + ms / 2
       const missing = past ? (stretch.lost ?? 0) : 0
       const dropped = past ? (stretch.discarded ?? 0) : 0
-      packets += Math.min(ms / 20, Math.ceil((t - at + 120) / 20)) - missing + unplayed
       played += Math.floor(Math.min(Math.max(t - from, 0), ms - (missing + dropped) * 20) / 20) * 20
       lost += missing
       discarded += dropped
     }
-    return { packets, played, lost, discarded }
+    return { played, lost, discarded }
   }
   return {
     getStats: async () => {
       const t = Date.now()
       const first = audio[0]?.at ?? 0
       if (t <= first) return new Map()
-      const { packets, played, lost, discarded } = counts(t)
+      const { played, lost, discarded } = counts(t)
       return new Map<string, Record<string, unknown>>([
         [
           'in',
           {
             type: 'inbound-rtp',
             jitterBufferEmittedCount: played * 48,
-            packetsReceived: packets,
             packetsLost: lost,
             packetsDiscarded: discarded,
             concealedSamples: (t - first - played) * 48,
@@ -891,20 +885,18 @@ async function play(
 describe('remote playback', () => {
   it('counts what played from the receiver, per utterance', async () => {
     vi.stubGlobal('Audio', Element)
-    const counts = { emitted: 0, packets: 0, concealed: 0 }
+    const counts = { emitted: 0, concealed: 0 }
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
     playback.speaking(1, 0)
     await Promise.resolve()
     counts.emitted += 9600
-    counts.packets += 10
     counts.concealed += 480
     await playback.stop(1)
     playback.speaking(2, 200)
     await Promise.resolve()
     counts.emitted += 4800
-    counts.packets += 5
     await playback.stop(2)
     expect(reports).toEqual([
       [1, 200],
@@ -916,13 +908,13 @@ describe('remote playback', () => {
     vi.useFakeTimers()
     vi.stubGlobal('Audio', Element)
     const playback = new RemotePlayback(() => {})
-    playback.start({} as MediaStream, receiver({ emitted: 0, packets: 0, concealed: 0 }))
+    playback.start({} as MediaStream, receiver({ emitted: 0, concealed: 0 }))
     const element = (playback as unknown as { element: Element }).element
     playback.speaking(1, 0)
     await playback.stop(1)
     expect([element.volume, element.muted]).toEqual([1, false])
     await vi.advanceTimersByTimeAsync(30)
-    expect(element.volume).toBeCloseTo(0.5)
+    expect(element.volume).toBe(0.5)
     expect(element.muted).toBe(false)
     await vi.advanceTimersByTimeAsync(30)
     expect([element.volume, element.muted]).toEqual([0, true])
@@ -938,7 +930,7 @@ describe('remote playback', () => {
   it('reports a natural end once the count reaches the stamp', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('Audio', Element)
-    const counts = { emitted: 0, packets: 0, concealed: 0 }
+    const counts = { emitted: 0, concealed: 0 }
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
@@ -962,7 +954,7 @@ describe('remote playback', () => {
       ],
       4000
     )
-    expect(Math.abs((reports.get(1) ?? 0) - 1800)).toBeLessThanOrEqual(20)
+    expect(reports.get(1)).toBe(1800)
   })
 
   it('the first utterance still counts when its audio starts after its silent', async () => {
@@ -991,7 +983,6 @@ describe('remote playback', () => {
       ],
       9000
     )
-    expect(reports.get(2)).toBeGreaterThanOrEqual(1800 - 20)
     expect(reports.get(2)).toBe(1800)
   })
 
@@ -1074,7 +1065,7 @@ describe('remote playback', () => {
       8000
     )
     expect(reports.get(1)).toBe(4000)
-    expect(reports.get(2)).toBeGreaterThanOrEqual(2000)
+    expect(reports.get(2)).toBe(2000)
   })
 
   it('a played utterance with packets too late to play reads whole', async () => {
@@ -1097,17 +1088,15 @@ describe('remote playback', () => {
   it('a packet that turns from lost to too late never moves the count back', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('Audio', Element)
-    const counts: Stats = { emitted: 0, packets: 0, concealed: 0 }
+    const counts: Stats = { emitted: 0, concealed: 0 }
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
     playback.speaking(1, 0)
     counts.emitted = 9600
-    counts.packets = 10
     counts.lost = 1
     const ending = playback.silent(1, 220)
     await vi.advanceTimersByTimeAsync(100)
-    counts.packets = 11
     counts.lost = 0
     counts.discarded = 1
     await vi.advanceTimersByTimeAsync(100)
@@ -1117,14 +1106,13 @@ describe('remote playback', () => {
 
   it('a negative packetsLost, from duplicates, adds nothing', async () => {
     vi.stubGlobal('Audio', Element)
-    const counts: Stats = { emitted: 0, packets: 0, concealed: 0 }
+    const counts: Stats = { emitted: 0, concealed: 0 }
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
     playback.speaking(1, 0)
     await Promise.resolve()
     counts.emitted = 9600
-    counts.packets = 11
     counts.lost = -1
     await playback.stop(1)
     expect(reports).toEqual([[1, 200]])
@@ -1147,7 +1135,7 @@ describe('remote playback', () => {
       9000
     )
     expect(reports.get(2)).toBe(2000)
-    expect(Math.abs((reports.get(3) ?? 0) - 1000)).toBeLessThanOrEqual(40)
+    expect(reports.get(3)).toBe(1000)
   })
 
   it('back-to-back responses each report all of their own audio', async () => {
@@ -1162,8 +1150,7 @@ describe('remote playback', () => {
       6000
     )
     expect(reports.get(1)).toBe(2000)
-    expect(reports.get(2)).toBeGreaterThanOrEqual(2000)
-    expect(reports.get(2)).toBeLessThanOrEqual(2020)
+    expect(reports.get(2)).toBe(2000)
   })
 
   it('a natural end that played nothing reports nothing', async () => {
@@ -1204,8 +1191,8 @@ describe('remote playback', () => {
       ],
       6000
     )
-    expect(reports.get(1)).toBeGreaterThanOrEqual(2000)
-    expect(reports.get(2)).toBeGreaterThanOrEqual(2000)
+    expect(reports.get(1)).toBe(2000)
+    expect(reports.get(2)).toBe(2000)
   })
 
   it('a speaking handled late still reports the whole utterance', async () => {
@@ -1241,7 +1228,7 @@ describe('remote playback', () => {
       3000
     )
     expect(reports.get(1)).toBe(980)
-    expect(Math.abs((reports.get(2) ?? 0) - 380)).toBeLessThanOrEqual(40)
+    expect(reports.get(2)).toBe(380)
   })
 
   it('the fade of an utterance that never reached the client is not counted as the next one', async () => {
@@ -1260,7 +1247,7 @@ describe('remote playback', () => {
       ],
       8000
     )
-    expect(Math.abs((reports.get(3) ?? 0) - 980)).toBeLessThanOrEqual(40)
+    expect(reports.get(3)).toBe(980)
   })
 
   it('a silent that comes after the next speaking still ends at the next utterance', async () => {
@@ -1275,7 +1262,7 @@ describe('remote playback', () => {
       6000
     )
     expect(reports.get(1)).toBe(2000)
-    expect(reports.get(2)).toBeGreaterThanOrEqual(2000)
+    expect(reports.get(2)).toBe(2000)
   })
 
   it('a cut while the previous response is still playing out counts neither past it', async () => {
@@ -1293,10 +1280,10 @@ describe('remote playback', () => {
     expect(reports.get(2)).toBe(0)
   })
 
-  it('packets the jitter buffer never played do not shift the next utterance', async () => {
+  it('a back-to-back pair after a quiet stretch reads exact from its own stamps', async () => {
     const reports = await play(
       [
-        { at: 0, ms: 300, unplayed: 3 },
+        { at: 0, ms: 300 },
         { at: 5000, ms: 4000 },
       ],
       [
@@ -1311,8 +1298,7 @@ describe('remote playback', () => {
     )
     expect(reports.get(1)).toBe(300)
     expect(reports.get(2)).toBe(2000)
-    expect(reports.get(3)).toBeGreaterThanOrEqual(2000)
-    expect(reports.get(3)).toBeLessThanOrEqual(2020)
+    expect(reports.get(3)).toBe(2000)
   })
 
   it('a speaking handled late changes neither edge', async () => {
@@ -1419,7 +1405,7 @@ describe('remote playback', () => {
   it('a late silent for an utterance a cut took changes nothing', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('Audio', Element)
-    const counts = { emitted: 0, packets: 0, concealed: 0 }
+    const counts = { emitted: 0, concealed: 0 }
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
