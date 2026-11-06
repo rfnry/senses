@@ -3,7 +3,7 @@ import { SensesException } from '../src/errors'
 import { connect } from '../src/index'
 import { RemotePlayback } from '../src/remote-playback'
 import { hello, played } from '../src/wire'
-import { media, type Track } from './fakes'
+import { behindAThrowingSubscriber, media, type Track, unhandledDuring } from './fakes'
 
 class Channel {
   readyState = 'connecting'
@@ -501,13 +501,63 @@ describe('when the connection ends over WebRTC', () => {
     ])
   })
 
-  it('releases everything when a subscriber throws on the closed event', async () => {
+  it('tells every subscriber the closed event and the status when the first throws on both', async () => {
+    vi.useFakeTimers()
     const devices = equipped()
     const { senses, peer, channel } = await connected({ camera: { fps: 1 } })
-    senses.subscribe((frame) => {
-      if (frame.kind === 'closed') throw new Error('an app bug')
+    const failed = { ...event.event, reason: 'failed', message: 'models: the connection dropped' }
+    const told = behindAThrowingSubscriber(senses)
+    const rejected = await unhandledDuring(async () => {
+      channel.deliver({ type: 'event', event: failed })
+      await senses.close()
     })
-    expect(() => channel.deliver(event)).toThrow('an app bug')
+    expect(told).toEqual([
+      { kind: 'status', status: 'open' },
+      failed,
+      { kind: 'status', status: 'closed' },
+    ])
+    expect(rejected).toEqual([])
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on closed')
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on status')
+    expectReleased(devices, peer)
+    expect(senses.status).toBe('closed')
+  })
+
+  it.each([
+    ['the data channel closes', (_: Peer, channel: Channel) => channel.close()],
+    ['the peer fails', (peer: Peer) => peer.become('failed')],
+  ])('tells every subscriber the status when the first throws on it and %s', async (_, end) => {
+    vi.useFakeTimers()
+    const devices = equipped()
+    const { senses, peer, channel } = await connected({ camera: { fps: 1 } })
+    const told = behindAThrowingSubscriber(senses)
+    const rejected = await unhandledDuring(async () => {
+      end(peer, channel)
+      await senses.close()
+    })
+    expect(told).toEqual([
+      { kind: 'status', status: 'open' },
+      { kind: 'status', status: 'closed' },
+    ])
+    expect(rejected).toEqual([])
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on status')
+    expectReleased(devices, peer)
+  })
+
+  it('resolves close and tells every subscriber the status when the first throws on it', async () => {
+    vi.useFakeTimers()
+    const devices = equipped()
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    const told = behindAThrowingSubscriber(senses)
+    const rejected = await unhandledDuring(async () => {
+      await expect(senses.close()).resolves.toBeUndefined()
+    })
+    expect(told).toEqual([
+      { kind: 'status', status: 'open' },
+      { kind: 'status', status: 'closed' },
+    ])
+    expect(rejected).toEqual([])
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on status')
     expectReleased(devices, peer)
   })
 

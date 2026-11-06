@@ -1076,7 +1076,7 @@ A connection, from `connect`. `status` is the latest status.
 subscribe(listener: SensesListener): () => void
 ```
 
-Calls `listener` with the current status at once, then with every event the session sends, each video switch and each status change. Returns a function that unsubscribes.
+Calls `listener` with the current status at once, then with every event the session sends, each video switch and each status change. Returns a function that unsubscribes. A listener that throws on an event stops no other listener and nothing the client is doing: the error is rethrown on its own, as an uncaught error for `window.onerror`.
 
 ### `Senses.mute`
 

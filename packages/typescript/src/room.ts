@@ -76,7 +76,15 @@ export class Listeners {
   }
 
   tell(event: Parameters<SensesListener>[0]): void {
-    for (const listener of this.listeners) listener(event)
+    for (const listener of this.listeners) {
+      try {
+        listener(event)
+      } catch (error) {
+        setTimeout(() => {
+          throw error
+        })
+      }
+    }
   }
 
   end(): void {
@@ -114,11 +122,8 @@ export class Ending {
   }
 
   tell(event: SensesEvent): void {
-    try {
-      this.room.tell(event)
-    } finally {
-      if (event.kind === 'closed') this.lost()
-    }
+    this.room.tell(event)
+    if (event.kind === 'closed') this.lost()
   }
 
   until<T>(connecting: Promise<T>): Promise<T> {

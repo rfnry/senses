@@ -1,3 +1,6 @@
+import { setTimeout as sleep } from 'node:timers/promises'
+import type { Senses } from '../src/index'
+
 export class Node {
   buffer: unknown = null
   onended: (() => void) | null = null
@@ -216,4 +219,27 @@ export function documentWithCanvas() {
     },
   }
   return { createElement: (tag: string) => (tag === 'video' ? video : canvas) }
+}
+
+export function behindAThrowingSubscriber(senses: Senses): unknown[] {
+  senses.subscribe((event) => {
+    if (event.kind === 'closed') throw new Error('a bug on closed')
+    if (event.kind === 'status' && event.status === 'closed') throw new Error('a bug on status')
+  })
+  const told: unknown[] = []
+  senses.subscribe((event) => told.push(event))
+  return told
+}
+
+export async function unhandledDuring(work: () => Promise<void>): Promise<unknown[]> {
+  const rejected: unknown[] = []
+  const record = (reason: unknown) => rejected.push(reason)
+  process.on('unhandledRejection', record)
+  try {
+    await work()
+    await sleep(0)
+    return rejected
+  } finally {
+    process.off('unhandledRejection', record)
+  }
 }

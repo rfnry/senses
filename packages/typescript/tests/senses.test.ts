@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { connect, type Senses, SensesException, type SensesListener } from '../src/index'
 import { encodeAudio, encodeImage, hello, played } from '../src/wire'
-import { Context, documentWithCanvas, JPEG, media, Socket, WorkletNode } from './fakes'
+import {
+  behindAThrowingSubscriber,
+  Context,
+  documentWithCanvas,
+  JPEG,
+  media,
+  Socket,
+  unhandledDuring,
+  WorkletNode,
+} from './fakes'
 
 const ANA = { role: 'user', id: 'ana', name: 'Ana', metadata: {} }
 const at = { scope: 'acme', at: '2026-09-24T12:03:04.200000Z' }
@@ -554,15 +563,58 @@ describe('when the connection ends over a WebSocket', () => {
     ])
   })
 
-  it('releases everything when a subscriber throws on the closed event', async () => {
+  it('tells every subscriber the closed event and the status when the first throws on both', async () => {
     const { devices } = equipped()
     const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
-    senses.subscribe((event) => {
-      if (event.kind === 'closed') throw new Error('an app bug')
+    const failed = { ...closed, reason: 'failed', message: 'models: the connection dropped' }
+    const told = behindAThrowingSubscriber(senses)
+    const rejected = await unhandledDuring(async () => {
+      socket.deliver({ type: 'event', event: failed })
+      await senses.close()
     })
-    expect(() => socket.deliver({ type: 'event', event: closed })).toThrow('an app bug')
+    expect(told).toEqual([
+      { kind: 'status', status: 'open' },
+      failed,
+      { kind: 'status', status: 'closed' },
+    ])
+    expect(rejected).toEqual([])
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on closed')
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on status')
     expectReleased(devices, socket)
     expect(senses.status).toBe('closed')
+  })
+
+  it('tells every subscriber the status when the first throws on it and the socket closes', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    const told = behindAThrowingSubscriber(senses)
+    const rejected = await unhandledDuring(async () => {
+      socket.close()
+      await senses.close()
+    })
+    expect(told).toEqual([
+      { kind: 'status', status: 'open' },
+      { kind: 'status', status: 'closed' },
+    ])
+    expect(rejected).toEqual([])
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on status')
+    expectReleased(devices, socket)
+  })
+
+  it('resolves close and tells every subscriber the status when the first throws on it', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    const told = behindAThrowingSubscriber(senses)
+    const rejected = await unhandledDuring(async () => {
+      await expect(senses.close()).resolves.toBeUndefined()
+    })
+    expect(told).toEqual([
+      { kind: 'status', status: 'open' },
+      { kind: 'status', status: 'closed' },
+    ])
+    expect(rejected).toEqual([])
+    expect(() => vi.advanceTimersToNextTimer()).toThrow('a bug on status')
+    expectReleased(devices, socket)
   })
 
   it('runs the stop once when a subscriber closes from inside the ending', async () => {

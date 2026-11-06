@@ -703,11 +703,12 @@ A connection has one stop. `close()` runs it, and so does every end from the far
 microphone and camera never outlive the call, and `close()` after that, or twice, does nothing more.
 The order is fixed. A `closed` event reaches subscribers first, with the devices still live; then
 the microphone, the camera, the voice and the connection are released, all in that same turn; then
-`status` turns `'closed'` and subscribers are told. A subscriber that throws on the `closed` event
-stops none of it. Voice still playing stops with the rest, so a call that should end on its last
-words waits on `quiet` before it closes. A peer that is only `disconnected` is no end, since it can
-recover. A `connect` that loses the connection partway rejects at once, even with a permission
-prompt still open, and a device the person grants after that is stopped as it arrives.
+`status` turns `'closed'` and subscribers are told. A subscriber that throws stops none of it: every
+other subscriber is still told, `close()` still resolves, and the error surfaces on its own as an
+uncaught error, for `window.onerror`. Voice still playing stops with the rest, so a call that should
+end on its last words waits on `quiet` before it closes. A peer that is only `disconnected` is no
+end, since it can recover. A `connect` that loses the connection partway rejects at once, even with
+a permission prompt still open, and a device the person grants after that is stopped as it arrives.
 
 ## Tools
 
