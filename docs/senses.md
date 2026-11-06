@@ -590,6 +590,16 @@ its offer to it, and `accept_offer` answers it for the person and scope you name
 tasks: set[asyncio.Task[None]] = set()
 
 
+async def converse(link: WebRTCTransport) -> None:
+    if not await link.greeted():
+        return
+    async with Session(link, transcription=stt, speech=tts) as session:
+        async for event in session.events():
+            if isinstance(event, TurnEnded):
+                run = await engine.run("concierge", scope=session.scope, input=event.text)
+                await session.say(run.reply, triggered_by=event.speaker)
+
+
 @app.post("/senses/offer")
 async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
     link = await accept_offer(body["sdp"], identity=user.identity, scope=user.org)
@@ -601,11 +611,14 @@ async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
 
 The server sends every utterance whole, at any rate, as 48 kHz mono with its last 20 ms frame padded with silence. Its control frames wait for the client's hello: a refused hello gets only an `error`, and no `ready`. `speaking` and `silent` leave with the utterance's first and last audio.
 
-`accept_offer` lives in `rfnry_senses.webrtc` and returns a `WebRTCTransport`; `converse` is the
-same function the WebSocket endpoint runs over its `link`. The endpoint keeps each conversation's
-task in `tasks` until it ends, since the event loop holds a task only weakly and one nobody
-references can be collected mid-conversation. The client sends its hello on the data
-channel, and a refused one ends the transport. The inbound audio is resampled to
+`accept_offer` lives in `rfnry_senses.webrtc` and returns a `WebRTCTransport`. The offer is answered
+before the client can say hello, so `converse` waits for it: `greeted` is what `serve` is to a
+WebSocket, `True` once the hello is accepted, and `False`, with the transport closed, when it is
+refused or the connection ends first. Then no session opens, and no live model opens for a client
+that is turned away. A peer that connects and never says hello keeps `greeted` waiting until it
+leaves; to stop waiting sooner, put a timeout on it and `close` the link. The endpoint keeps each
+conversation's task in `tasks` until it ends, since the event loop holds a task only weakly and one
+nobody references can be collected mid-conversation. The inbound audio is resampled to
 `sample_rate` (16 kHz) and camera frames are encoded to JPEG at the client's rate, inside the extra.
 `ice_servers=` takes STUN and TURN servers in the shape of the browser's `iceServers`.
 

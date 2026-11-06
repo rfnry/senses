@@ -247,6 +247,7 @@ class WebRTCTransport:
         self._jpeg: Any = None
         self._jpeg_size = (0, 0)
         self._greeted = False
+        self._hello = asyncio.Event()
         self._closed = False
 
         @self._pc.on("track")
@@ -268,9 +269,11 @@ class WebRTCTransport:
                         self._refused = True
                         self._unsent.clear()
                         channel.send(control({"type": "error", "message": str(exc)}))
+                        self._hello.set()
                         self._inbox.put_nowait(None)
                         return
                     self._greeted = True
+                    self._hello.set()
                     self._flush()
                     return
                 try:
@@ -284,7 +287,14 @@ class WebRTCTransport:
         @self._pc.on("connectionstatechange")
         def on_state() -> None:
             if self._pc.connectionState in ("failed", "closed"):
+                self._hello.set()
                 self._inbox.put_nowait(None)
+
+    async def greeted(self) -> bool:
+        await self._hello.wait()
+        if not self._greeted:
+            await self.close()
+        return self._greeted
 
     async def inbound(self) -> AsyncIterator[AudioFrame | Image | Played]:
         while (item := await self._inbox.get()) is not None:
@@ -346,6 +356,7 @@ class WebRTCTransport:
         if self._closed:
             return
         self._closed = True
+        self._hello.set()
         for reader in self._readers:
             reader.cancel()
         with contextlib.suppress(Exception):

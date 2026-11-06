@@ -29,7 +29,16 @@ from rfnry_senses.models import Image
 from rfnry_senses.session import Session
 from rfnry_senses.webrtc import _Encoded, _Marker, _Voice, accept_offer
 
-from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, lookalike, next_of, until
+from ..unit.fakes import (
+    ANA,
+    HOST,
+    ScriptedLive,
+    ScriptedTranscription,
+    Tone,
+    lookalike,
+    next_of,
+    until,
+)
 
 pytestmark = pytest.mark.webrtc
 
@@ -58,8 +67,10 @@ class Client:
         protocol: int = 1,
         played: Callable[[dict[str, Any]], int] | None = None,
         codecs: tuple[str, ...] = (),
+        greets: bool = True,
     ) -> None:
         self.played = played
+        self.opened = False
         self.stamped: list[tuple[float, dict[str, Any]]] = []
         self.arrivals: list[float] = []
         self.pc = RTCPeerConnection()
@@ -76,7 +87,9 @@ class Client:
 
         @self.channel.on("open")
         def on_open() -> None:
-            self.channel.send(json.dumps({"type": "hello", "protocol": protocol}))
+            self.opened = True
+            if greets:
+                self.channel.send(json.dumps({"type": "hello", "protocol": protocol}))
 
         @self.channel.on("message")
         def on_message(message: str) -> None:
@@ -593,5 +606,73 @@ async def test_a_refused_hello_sends_no_ready() -> None:
             await next_of(s.events(), Closed, timeout=10)
         await asyncio.sleep(0.3)
         assert [m["type"] for m in client.messages] == ["error"]
+    finally:
+        await client.pc.close()
+
+
+async def answered(client: Client) -> Any:
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
+    return link
+
+
+async def test_greeted_is_true_once_the_hello_is_accepted() -> None:
+    client = Client()
+    link = await answered(client)
+    try:
+        assert await asyncio.wait_for(link.greeted(), 10) is True
+        async with Session(link) as s:
+            await until(lambda: {"type": "ready"} in client.messages, timeout=5)
+            await s.close()
+    finally:
+        await client.pc.close()
+
+
+async def test_greeted_is_false_for_a_refused_hello_and_the_client_is_told_why() -> None:
+    client = Client(protocol=2)
+    link = await answered(client)
+    try:
+        assert await asyncio.wait_for(link.greeted(), 10) is False
+        await until(lambda: any(m["type"] == "error" for m in client.messages), timeout=5)
+        assert [m["type"] for m in client.messages] == ["error"]
+        assert [item async for item in link.inbound()] == []
+    finally:
+        await client.pc.close()
+
+
+async def test_greeted_waits_for_a_peer_that_never_greets_until_the_peer_leaves() -> None:
+    client = Client(greets=False)
+    link = await answered(client)
+    waiting = asyncio.create_task(link.greeted())
+    try:
+        await until(lambda: client.opened, timeout=10)
+        await asyncio.sleep(0.1)
+        assert not waiting.done()
+    finally:
+        await client.pc.close()
+    assert await asyncio.wait_for(waiting, 45) is False
+
+
+async def test_greeted_is_false_once_the_transport_ends_first() -> None:
+    client = Client(greets=False)
+    link = await answered(client)
+    waiting = asyncio.create_task(link.greeted())
+    try:
+        await until(lambda: client.opened, timeout=10)
+        await link.close()
+        assert await asyncio.wait_for(waiting, 1) is False
+        assert await asyncio.wait_for(link.greeted(), 1) is False
+    finally:
+        await client.pc.close()
+
+
+async def test_a_refused_hello_opens_no_live_model_when_greeted_comes_first() -> None:
+    client, live = Client(protocol=2), ScriptedLive()
+    link = await answered(client)
+    try:
+        if await asyncio.wait_for(link.greeted(), 10):
+            async with Session(link, live=live):
+                pass
+        assert live.opened == {}
     finally:
         await client.pc.close()

@@ -794,6 +794,14 @@ class WebRTCTransport:
 A `Transport` over one peer connection: the microphone and an optional camera track in, the voice out, the control frames on a data channel. It lives in `rfnry_senses.webrtc`, needs the `webrtc` extra, and is made by `accept_offer`.
 Raises `InputError` when `identity` does not fit.
 
+### `WebRTCTransport.greeted`
+
+```python
+async def greeted(self) -> bool: ...
+```
+
+Waits for the client's hello. `True` once it is accepted; `False`, with the transport closed, when it is refused or the transport ends first. Call it first and open no session on `False`, as with a `None` from `serve`, so a client that is turned away opens no live model. A peer that stays connected and never says hello keeps it waiting: to stop sooner, put a timeout on it and call `close`.
+
 ### `WebRTCTransport.inbound`
 
 ```python
