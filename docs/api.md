@@ -824,7 +824,7 @@ Queues `frame` on the voice track, resampled to 48 kHz mono whatever its rate or
 async def send_control(self, control_frame: dict[str, Any]) -> None: ...
 ```
 
-Sends the control frame on the data channel, holding it until the client's hello is accepted; a refused hello sends only the `error`. `speaking` leaves with the utterance's first audio frame and `silent` with its last; `stop` and `event` frames go at once.
+Sends the control frame on the data channel, holding it until the client's hello is accepted; a refused hello sends only the `error`. `speaking` leaves with the utterance's first audio frame and `silent` with its last, each stamped with `sent_ms` as it leaves; `stop` and `event` frames go at once.
 
 ### `WebRTCTransport.clear_audio`
 

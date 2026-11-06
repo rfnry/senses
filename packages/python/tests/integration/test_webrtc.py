@@ -64,7 +64,7 @@ class Silence(MediaStreamTrack):
 class Client:
     def __init__(
         self,
-        protocol: int = 1,
+        protocol: int = 2,
         played: Callable[[dict[str, Any]], int] | None = None,
         codecs: tuple[str, ...] = (),
         greets: bool = True,
@@ -142,7 +142,7 @@ async def test_a_cascaded_session_over_a_peer_connection() -> None:
 
 
 async def test_a_wrong_protocol_on_the_channel_ends_the_transport() -> None:
-    client = Client(protocol=2)
+    client = Client(protocol=1)
     link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
     await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
     try:
@@ -152,7 +152,7 @@ async def test_a_wrong_protocol_on_the_channel_ends_the_transport() -> None:
         assert closed.reason == "hung_up"
         await until(lambda: any(m["type"] == "error" for m in client.messages), timeout=5)
         error = next(m for m in client.messages if m["type"] == "error")
-        assert error["message"] == "transport: protocol 2 is not supported; this server speaks 1"
+        assert error["message"] == "transport: protocol 1 is not supported; this server speaks 2"
     finally:
         await client.pc.close()
 
@@ -269,7 +269,7 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
     client = Client()
     link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
     left = [0]
-    delivered: list[tuple[str, int, int]] = []
+    delivered: list[tuple[str, int, int, int]] = []
     original = link._voice.recv
     deliver = link._deliver
 
@@ -280,7 +280,7 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
 
     def recorded(text: str) -> None:
         frame = json.loads(text)
-        delivered.append((frame["type"], frame["utterance"], left[0]))
+        delivered.append((frame["type"], frame["utterance"], left[0], frame["sent_ms"]))
         deliver(text)
 
     link._voice.recv = counted  # type: ignore[method-assign]
@@ -292,11 +292,13 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
             await s.say("one two three four", triggered_by=HOST)
             await s.say("one two three four", triggered_by=HOST)
             await asyncio.sleep(0.3)
-        kinds = [(kind, number) for kind, number, _ in delivered]
+        kinds = [(kind, number) for kind, number, _, _ in delivered]
         assert kinds == [("speaking", 1), ("silent", 1), ("speaking", 2), ("silent", 2)]
-        counts = [count for _, _, count in delivered]
+        counts = [count for _, _, count, _ in delivered]
         assert counts[0] == 0 and counts[1] == counts[2] and counts[1] in (100, 101)
         assert counts[3] == left[0] and counts[3] - counts[1] in (100, 101)
+        stamps = [sent_ms for _, _, _, sent_ms in delivered]
+        assert stamps == [count * 20 for count in counts]
     finally:
         await client.pc.close()
 
@@ -468,7 +470,7 @@ def kinds_queued(voice: _Voice) -> list[str]:
     while not voice._queue.empty():
         item = voice._queue.get_nowait()
         if isinstance(item, _Marker):
-            frame = json.loads(item.text or "{}")
+            frame = item.frame or {}
             out.append(f"{frame['type']} {frame['utterance']}")
         else:
             out.append("frame")
@@ -489,8 +491,8 @@ async def test_overlapping_live_utterances_each_keep_their_own_markers() -> None
         while not link._voice._queue.empty():
             queued.append(link._voice._queue.get_nowait())
         labels = [
-            f"{json.loads(i.text or '')['type']} {json.loads(i.text or '')['utterance']}"
-            if isinstance(i, _Marker)
+            f"{i.frame['type']} {i.frame['utterance']}"
+            if isinstance(i, _Marker) and i.frame
             else "frame"
             for i in queued
         ]
@@ -589,6 +591,64 @@ async def test_a_cut_answers_a_speaking_held_while_its_frame_waits() -> None:
         await link.close()
 
 
+async def test_a_silent_filled_after_its_marker_left_keeps_the_stamp_of_its_last_frame() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    rate = link._voice.RATE
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(60, 100, rate), 1)
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(60, 100, rate), 2)
+        for _ in range(5):
+            await link._voice.recv()
+        await link.send_control({"type": "silent", "utterance": 1})
+        assert link._voice.sent_ms == 100
+        assert json.loads(link._unsent[-1]) == {"type": "silent", "utterance": 1, "sent_ms": 60}
+    finally:
+        await link.close()
+
+
+async def test_a_silent_for_an_utterance_a_cut_took_still_carries_a_stamp() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    rate = link._voice.RATE
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(100, 100, rate), 1)
+        await link._voice.recv()
+        link.clear_audio()
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(100, 100, rate), 2)
+        await link.send_control({"type": "silent", "utterance": 1})
+        assert link._voice.sent_ms == 20
+        assert json.loads(link._unsent[-1]) == {
+            "type": "silent",
+            "utterance": 1,
+            "sent_ms": link._voice.sent_ms,
+        }
+    finally:
+        await link.close()
+
+
+async def test_the_fade_counts_toward_the_next_speaking() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    rate = link._voice.RATE
+    emitted: list[dict[str, Any]] = []
+    link._voice._emit = lambda text: emitted.append(json.loads(text))
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(200, 100, rate), 1)
+        link.clear_audio()
+        faded = link._voice._queue.qsize()
+        await link.send_control({"type": "speaking", "utterance": 2})
+        await link.send_audio(tone(100, 100, rate), 2)
+        for _ in range(faded + 5):
+            await link._voice.recv()
+        assert faded == 3
+        assert emitted == [{"type": "speaking", "utterance": 2, "sent_ms": 20 * faded}]
+    finally:
+        await link.close()
+
+
 async def test_an_empty_frame_sends_nothing_and_does_not_raise() -> None:
     link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
     try:
@@ -599,7 +659,7 @@ async def test_an_empty_frame_sends_nothing_and_does_not_raise() -> None:
 
 
 async def test_a_refused_hello_sends_no_ready() -> None:
-    client = Client(protocol=2)
+    client = Client(protocol=1)
     link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
     await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
     try:
@@ -630,7 +690,7 @@ async def test_greeted_is_true_once_the_hello_is_accepted() -> None:
 
 
 async def test_greeted_is_false_for_a_refused_hello_and_the_client_is_told_why() -> None:
-    client = Client(protocol=2)
+    client = Client(protocol=1)
     link = await answered(client)
     try:
         assert await asyncio.wait_for(link.greeted(), 10) is False
@@ -668,7 +728,7 @@ async def test_greeted_is_false_once_the_transport_ends_first() -> None:
 
 
 async def test_a_refused_hello_opens_no_live_model_when_greeted_comes_first() -> None:
-    client, live = Client(protocol=2), ScriptedLive()
+    client, live = Client(protocol=1), ScriptedLive()
     link = await answered(client)
     try:
         if await asyncio.wait_for(link.greeted(), 10):

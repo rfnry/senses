@@ -51,15 +51,17 @@ def controls() -> dict[str, dict[str, Any]]:
         "closed": Closed(scope="acme", at=AT, reason="hung_up", triggered_by=ANA),
     }
     return {
-        "hello": {"type": "hello", "protocol": 1},
+        "hello": {"type": "hello", "protocol": 2},
         "ready": {"type": "ready"},
         "played": {"type": "played", "utterance": 3, "ms": 1200},
         "speaking": {"type": "speaking", "utterance": 3},
         "silent": {"type": "silent", "utterance": 3},
+        "speaking-webrtc": {"type": "speaking", "utterance": 3, "sent_ms": 1800},
+        "silent-webrtc": {"type": "silent", "utterance": 3, "sent_ms": 3600},
         "stop": {"type": "stop", "utterance": 3},
         "error": {
             "type": "error",
-            "message": "transport: protocol 2 is not supported; this server speaks 1",
+            "message": "transport: protocol 1 is not supported; this server speaks 2",
         },
         **{
             f"event-{kind}": {"type": "event", "event": event.model_dump(mode="json")}
@@ -99,7 +101,7 @@ def test_frames_decode_to_what_was_encoded() -> None:
     )
     image = decode(BINARY["image"])
     assert isinstance(image, Image) and image.data == b"\xff\xd8\xff\xd9"
-    assert parse_hello(json.dumps(controls()["hello"])).protocol == 1
+    assert parse_hello(json.dumps(controls()["hello"])).protocol == 2
     assert parse_played(json.dumps(controls()["played"])) == Played(utterance=3, ms=1200)
 
 

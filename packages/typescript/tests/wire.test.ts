@@ -2,7 +2,15 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { SensesException } from '../src/errors'
-import { decodeAudio, encodeAudio, encodeImage, hello, parseControl, played } from '../src/wire'
+import {
+  decodeAudio,
+  encodeAudio,
+  encodeImage,
+  hello,
+  parseControl,
+  played,
+  sentMs,
+} from '../src/wire'
 
 const FIXTURES = join(import.meta.dirname, '../../python/tests/fixtures/wire')
 const json = (name: string): unknown =>
@@ -26,7 +34,15 @@ describe('the wire', () => {
   })
 
   it('reads every server frame', () => {
-    for (const name of ['ready', 'speaking', 'silent', 'stop', 'error']) {
+    for (const name of [
+      'ready',
+      'speaking',
+      'silent',
+      'speaking-webrtc',
+      'silent-webrtc',
+      'stop',
+      'error',
+    ]) {
       expect(parseControl(JSON.stringify(json(name)))).toEqual(json(name))
     }
     for (const kind of [
@@ -46,6 +62,11 @@ describe('the wire', () => {
     const audio = decodeAudio(hex('audio').buffer as ArrayBuffer)
     expect(audio).toMatchObject({ utterance: 3, sampleRate: 16000, channels: 1 })
     expect(Array.from(audio.pcm)).toEqual([0x00, 0x01, 0xff, 0x7f])
+  })
+
+  it('reads the stamp of a voice frame', () => {
+    expect(sentMs({ sent_ms: 1800 })).toBe(1800)
+    expect(() => sentMs({})).toThrow(new SensesException('wire: a voice frame without sent_ms'))
   })
 
   it('reads who ended the session', () => {

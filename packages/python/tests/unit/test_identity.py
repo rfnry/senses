@@ -17,7 +17,7 @@ from .test_websocket import Socket
 
 async def test_serve_and_the_loopback_read_the_person_by_their_fields() -> None:
     link = await serve(
-        Socket(json.dumps({"type": "hello", "protocol": 1})), identity=lookalike(ANA), scope="acme"
+        Socket(json.dumps({"type": "hello", "protocol": 2})), identity=lookalike(ANA), scope="acme"
     )
     assert link is not None and link.identity == ANA
     loopback = Loopback(lookalike(ANA), "acme")

@@ -22,7 +22,7 @@ from .socket_adapter import Socket
 
 pytestmark = pytest.mark.integration
 
-HELLO = json.dumps({"type": "hello", "protocol": 1})
+HELLO = json.dumps({"type": "hello", "protocol": 2})
 
 
 class Adapted:

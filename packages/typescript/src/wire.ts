@@ -1,6 +1,6 @@
 import { SensesException } from './errors.js'
 
-export const PROTOCOL = 1
+export const PROTOCOL = 2
 const AUDIO = 1
 const IMAGE = 2
 const HEADER = 10
@@ -38,7 +38,8 @@ export type SensesEvent =
 
 export type ServerControl =
   | { type: 'ready' }
-  | { type: 'speaking' | 'silent' | 'stop'; utterance: number }
+  | { type: 'speaking' | 'silent'; utterance: number; sent_ms?: number }
+  | { type: 'stop'; utterance: number }
   | { type: 'event'; event: SensesEvent }
   | { type: 'error'; message: string }
 
@@ -86,6 +87,12 @@ export function decodeAudio(data: ArrayBuffer): AudioOut {
     utterance: view.getUint32(6, true),
     pcm: new Uint8Array(data, HEADER),
   }
+}
+
+export function sentMs(frame: { sent_ms?: number }): number {
+  if (typeof frame.sent_ms !== 'number')
+    throw new SensesException('wire: a voice frame without sent_ms')
+  return frame.sent_ms
 }
 
 export function parseControl(text: string): ServerControl {

@@ -2,7 +2,6 @@ import array
 import asyncio
 import contextlib
 import fractions
-import json
 import logging
 import sys
 import time
@@ -50,10 +49,10 @@ def fade(frame: AudioFrame, begin: float, end: float) -> AudioFrame:
 
 
 class _Marker:
-    def __init__(self, text: str | None, with_next: bool) -> None:
-        self.text = text
+    def __init__(self, frame: dict[str, Any] | None, with_next: bool) -> None:
+        self.frame = frame
         self.with_next = with_next
-        self.left = False
+        self.sent_ms: int | None = None
 
 
 class _Voice(MediaStreamTrack):
@@ -74,9 +73,10 @@ class _Voice(MediaStreamTrack):
         self._began: float | None = None
         self._start: float | None = None
         self._samples = 0
+        self.sent_ms = 0
         self._resampler: av.AudioResampler | None = None
         self._source: tuple[int, int] | None = None
-        self._held: list[str] = []
+        self._held: list[dict[str, Any]] = []
 
     def push(self, frame: AudioFrame) -> None:
         if not frame.data:
@@ -102,16 +102,16 @@ class _Voice(MediaStreamTrack):
             self._rest += bytes(self.CHUNK - len(self._rest))
             self._take([])
 
-    def mark(self, text: str | None, *, with_next: bool) -> _Marker:
-        marker = _Marker(text, with_next)
+    def mark(self, frame: dict[str, Any] | None, *, with_next: bool) -> _Marker:
+        marker = _Marker(frame, with_next)
         self._queue.put_nowait(marker)
         return marker
 
-    def fill(self, marker: _Marker, text: str) -> None:
-        if marker.left:
-            self._fire([text])
+    def fill(self, marker: _Marker, frame: dict[str, Any]) -> None:
+        if marker.sent_ms is None:
+            marker.frame = frame
         else:
-            marker.text = text
+            self._fire([{**frame, "sent_ms": marker.sent_ms}])
 
     def _drain(self) -> None:
         if self._resampler is not None:
@@ -126,7 +126,7 @@ class _Voice(MediaStreamTrack):
             self._queue.put_nowait(AudioFrame(data=chunk, sample_rate=self.RATE))
 
     def clear(self) -> list[int]:
-        unsent = [json.loads(text)["utterance"] for text in self._held]
+        unsent = [frame["utterance"] for frame in self._held]
         self._held = []
         kept: list[AudioFrame | _Marker] = []
         frames = 0
@@ -134,7 +134,7 @@ class _Voice(MediaStreamTrack):
             item = self._queue.get_nowait()
             if isinstance(item, _Marker):
                 if item.with_next:
-                    unsent.extend([json.loads(item.text)["utterance"]] if item.text else [])
+                    unsent.extend([item.frame["utterance"]] if item.frame else [])
                 elif frames < self.FADE_FRAMES:
                     kept.append(item)
             elif frames < self.FADE_FRAMES:
@@ -155,10 +155,10 @@ class _Voice(MediaStreamTrack):
                 n += 1
         return sorted(set(unsent))
 
-    def _fire(self, texts: list[str]) -> None:
+    def _fire(self, frames: list[dict[str, Any]]) -> None:
         if self._emit is not None:
-            for text in texts:
-                self._emit(text)
+            for frame in frames:
+                self._emit(control(frame))
 
     async def recv(self) -> av.AudioFrame:
         while True:
@@ -166,12 +166,13 @@ class _Voice(MediaStreamTrack):
             if not isinstance(item, _Marker):
                 frame = item
                 break
-            item.left = True
+            item.sent_ms = self.sent_ms
+            stamped = [{**item.frame, "sent_ms": item.sent_ms}] if item.frame else []
             if item.with_next:
-                self._held.extend([item.text] if item.text else [])
+                self._held.extend(stamped)
             else:
                 held, self._held = self._held, []
-                self._fire([*held, *([item.text] if item.text else [])])
+                self._fire([*held, *stamped])
         now = time.monotonic()
         due = None if self._start is None else self._start + self._samples / self.RATE
         if due is None or now - due > self.GAP_S + self.PREBUFFER_S:
@@ -186,6 +187,7 @@ class _Voice(MediaStreamTrack):
         self._pts += out.samples
         await asyncio.sleep(max(0.0, due - now))
         self._samples += out.samples
+        self.sent_ms += self.FRAME_MS
         held, self._held = self._held, []
         self._fire(held)
         return out
@@ -302,24 +304,23 @@ class WebRTCTransport:
         self._voice.push(frame)
 
     async def send_control(self, control_frame: dict[str, Any]) -> None:
-        text = control(control_frame)
         number = control_frame.get("utterance")
         match control_frame.get("type"):
             case "speaking":
                 if self._utterance is not None:
                     self._switch(None)
-                self._voice.mark(text, with_next=True)
+                self._voice.mark(control_frame, with_next=True)
             case "silent":
                 if number in self._ends:
-                    self._voice.fill(self._ends.pop(number), text)
+                    self._voice.fill(self._ends.pop(number), control_frame)
                 elif self._utterance is None or self._utterance == number:
                     self._voice.finish()
                     self._utterance = None
-                    self._voice.mark(text, with_next=False)
+                    self._voice.mark(control_frame, with_next=False)
                 else:
-                    self._deliver(text)
+                    self._deliver(control({**control_frame, "sent_ms": self._voice.sent_ms}))
             case _:
-                self._deliver(text)
+                self._deliver(control(control_frame))
 
     def clear_audio(self) -> None:
         self._utterance = None

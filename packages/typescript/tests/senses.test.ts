@@ -86,10 +86,10 @@ describe('connect over a WebSocket', () => {
     socket.open()
     socket.deliver({
       type: 'error',
-      message: 'transport: protocol 2 is not supported; this server speaks 1',
+      message: 'transport: protocol 1 is not supported; this server speaks 2',
     })
     await expect(connecting).rejects.toEqual(
-      new SensesException('transport: protocol 2 is not supported; this server speaks 1')
+      new SensesException('transport: protocol 1 is not supported; this server speaks 2')
     )
     expect((Context.made[0] as Context).closed).toBe(true)
   })
@@ -654,9 +654,9 @@ describe('when the connection ends over a WebSocket', () => {
 
   it('closes the socket after a refused hello, whether or not the server does', async () => {
     const { connecting, socket } = await dialing({ microphone: false })
-    socket.deliver({ type: 'error', message: 'transport: protocol 2 is not supported' })
+    socket.deliver({ type: 'error', message: 'transport: protocol 1 is not supported' })
     await expect(connecting).rejects.toEqual(
-      new SensesException('transport: protocol 2 is not supported')
+      new SensesException('transport: protocol 1 is not supported')
     )
     expect(socket.readyState).toBe(3)
   })

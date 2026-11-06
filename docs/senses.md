@@ -582,8 +582,11 @@ Media has its own socket, apart from any thread socket. Audio and camera frames 
 behind a small header; control frames are JSON: `hello` (the protocol version) and `played` from
 the client; `ready`, `speaking`, `silent`, `stop`, `event` and `error` from the server. `silent`
 says an utterance has all been sent; `stop` names the newest utterance spoken and stops every one
-through it. The client answers each utterance once, with one `played`, when it has played all of it
-or been stopped. The frames are pinned by golden fixtures both clients' tests read.
+through it. Over WebRTC, `speaking` and `silent` also carry `sent_ms`: the milliseconds of voice this
+connection had handed to the sender when the frame left the queue, which for `speaking` is where the
+utterance's first frame starts and for `silent` where its last frame ends, always a multiple of 20.
+Over a WebSocket they do not. The client answers each utterance once, with one `played`, when it has
+played all of it or been stopped. The frames are pinned by golden fixtures both clients' tests read.
 
 WebRTC is the transport for browser voice: Opus bandwidth, loss concealment, and the echo
 cancellation that lets the person interrupt over speakers. One peer connection carries the audio,
@@ -614,7 +617,7 @@ async def offer(body: dict, user: User = Depends(signed_in)) -> dict:
     return {"sdp": link.answer}
 ```
 
-The server sends every utterance whole, at any rate, as 48 kHz mono with its last 20 ms frame padded with silence. Its control frames wait for the client's hello: a refused hello gets only an `error`, and no `ready`. `speaking` and `silent` leave with the utterance's first and last audio.
+The server sends every utterance whole, at any rate, as 48 kHz mono with its last 20 ms frame padded with silence. Its control frames wait for the client's hello: a refused hello gets only an `error`, and no `ready`. `speaking` and `silent` leave with the utterance's first and last audio, stamped with `sent_ms` as they leave; a `silent` that comes after its audio has left keeps the stamp of its last frame, and a `silent` for an utterance a cut took carries the count when it is sent.
 
 `accept_offer` lives in `rfnry_senses.webrtc` and returns a `WebRTCTransport`. The offer is answered
 before the client can say hello, so `converse` waits for it: `greeted` is what `serve` is to a
@@ -868,4 +871,4 @@ its hello has the frame dropped with a warning, never the session.
 All under `SensesException` — the root takes the `Exception` suffix, every child ends in `Error`,
 the family's shape. Every message names the module that raised it, then says what went wrong in
 lowercase: `session: prompt needs a live model`, `session: no frame in the last 10 s`,
-`transport: protocol 2 is not supported; this server speaks 1`.
+`transport: protocol 1 is not supported; this server speaks 2`.
