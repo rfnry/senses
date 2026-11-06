@@ -179,6 +179,7 @@ class Session:
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
         self._stopping: set[asyncio.Task[Any]] = set()
+        self._releases: set[asyncio.Task[None]] = set()
         self._muted = False
         self._numbers = count(1)
         self._utterance: Utterance | None = None
@@ -317,7 +318,7 @@ class Session:
             source=text,
         )
         if self._muted:
-            await self._release(u)
+            self._let_go(u)
             await self._finish(u, "", interrupted=True)
             return await done
         if self._connection is not None:
@@ -668,7 +669,7 @@ class Session:
             raise ModelError("session: a response started before the last one was done")
         self._responding = True
         late = self._answers_ended(event.requested)
-        u = self._cause(event.requested) or Utterance(None)
+        u = (None if late else self._cause(event.requested)) or Utterance(None)
         u.response = event.id
         self._start(u)
         if self._muted or late:
@@ -975,7 +976,9 @@ class Session:
 
     def _let_go(self, u: Utterance) -> None:
         if not isinstance(u.source, str):
-            self._spawn(self._release(u))
+            releasing = asyncio.create_task(self._release(u))
+            self._releases.add(releasing)
+            releasing.add_done_callback(self._releases.discard)
 
     async def _release(self, u: Utterance) -> None:
         source, u.source = u.source, ""
@@ -1046,8 +1049,9 @@ class Session:
         message: str | None,
         cause: Identity | None,
     ) -> None:
-        streams = [asyncio.create_task(self._release(u)) for u in self._waiting]
-        stopping = {*self._stopping, *streams}
+        for u in self._waiting:
+            self._let_go(u)
+        stopping = {*self._stopping, *self._releases}
         if stopping:
             _, left = await asyncio.wait(stopping, timeout=CLOSE_GRACE)
             if left:
@@ -1066,7 +1070,12 @@ class Session:
             queue.put_nowait(None)
         self._subscribers.clear()
         reporting = asyncio.create_task(self._report(closed))
-        await asyncio.wait({reporting}, timeout=CLOSE_GRACE)
+        sent, _ = await asyncio.wait({reporting}, timeout=CLOSE_GRACE)
+        if not sent:
+            logger.warning(
+                "session: the closed event was not sent within %g s; the close goes on",
+                CLOSE_GRACE,
+            )
         reporting.cancel()
         with contextlib.suppress(Exception):
             await self._transport.close()

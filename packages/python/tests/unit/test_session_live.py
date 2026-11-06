@@ -1468,6 +1468,42 @@ class EarlyTag(ScriptedConnection):
         return "early"
 
 
+async def test_a_late_answer_landing_during_another_send_warns_of_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = SendingSay()
+    connection.tagging = True
+    async with session(link, live) as s:
+        first = asyncio.create_task(s.say("Your table is ready.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        first.cancel()
+        connection.sent.set()
+        await until(lambda: connection.sending == 0)
+        connection.sent.clear()
+        second = asyncio.create_task(s.say("Shall I order the usual?", triggered_by=ANA))
+        await until(lambda: len(connection.calls) == 2)
+        connection.emit(
+            LiveStarted(id="late", requested="request-1"),
+            LiveSaid(text="Your table is ready."),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        await until(lambda: bool(connection.interrupts))
+        connection.sent.set()
+        await until(lambda: connection.sending == 0)
+        connection.emit(
+            LiveStarted(id="own", requested="request-2"),
+            LiveSaid(text="Shall I order the usual?"),
+            LiveAudio(frame=pcm(100, 24000)),
+            LiveDone(),
+        )
+        said = await asyncio.wait_for(second, 1)
+    assert connection.interrupts == [(0, "", "late")]
+    assert said.triggered_by == ANA and said.heard == "Shall I order the usual?"
+    assert not any("before its send returned" in m for m in caplog.messages)
+
+
 async def test_a_tag_that_lands_before_its_send_returns_is_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

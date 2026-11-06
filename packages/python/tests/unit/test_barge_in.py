@@ -144,6 +144,58 @@ async def test_a_stream_said_while_muted_is_closed() -> None:
     assert said.interrupted and stream.closes == 1
 
 
+class StuckOnClose(Stream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.released = asyncio.Event()
+
+    async def aclose(self) -> None:
+        await self.released.wait()
+        await super().aclose()
+
+
+async def test_a_say_while_muted_returns_without_waiting_for_its_stream_to_close() -> None:
+    link, tts = Loopback(ANA, "acme"), Tone()
+    stream = StuckOnClose()
+    async with Session(link, speech=tts) as s:
+        await s.mute(triggered_by=HOST)
+        said = await asyncio.wait_for(s.say(stream, triggered_by=HOST), 1)
+        stream.released.set()
+    assert said.interrupted and stream.closes == 1
+
+
+async def test_a_stream_stuck_closing_holds_a_close_only_for_the_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("rfnry_senses.session.CLOSE_GRACE", 0.05)
+    link, tts = Loopback(ANA, "acme"), Tone()
+    stream = StuckOnClose()
+    s = Session(link, speech=tts)
+    await s.start()
+    await s.mute(triggered_by=HOST)
+    asked = asyncio.create_task(s.say(stream, triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    await asyncio.wait_for(s.close(), 1)
+    stream.released.set()
+    said = await asyncio.wait_for(asked, 1)
+    assert said.interrupted and link.closed
+
+
+async def test_a_stream_dropped_in_the_same_step_as_a_close_is_closed() -> None:
+    link, tts = SlowLoopback(ANA, "acme", delay=None), Tone()
+    playing, queued = Stream(), Stream()
+    s = Session(link, speech=tts)
+    await s.start()
+    first = asyncio.create_task(s.say(playing, triggered_by=HOST))
+    await until(lambda: len(link.audio) > 0)
+    second = asyncio.create_task(s.say(queued, triggered_by=HOST))
+    await asyncio.sleep(0.001)
+    muting = asyncio.create_task(s.mute(triggered_by=HOST))
+    closing = asyncio.create_task(s.close())
+    await asyncio.gather(muting, closing, first, second, return_exceptions=True)
+    assert queued.closes == 1
+
+
 async def test_a_queued_stream_a_mute_drops_is_closed() -> None:
     link, tts = SlowLoopback(ANA, "acme", delay=None), Tone()
     playing, queued = Stream(), Stream()

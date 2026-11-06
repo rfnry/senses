@@ -333,8 +333,9 @@ what was heard. Every utterance is numbered, and audio from an interrupted one �
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
 in the client. Queued `say` and `prompt` calls end too, as the person cuts in and before `Interrupted`
 is reported: the person is talking, and they return `Said(heard="", interrupted=True)`. On a live
-model a call that arrives during the cut ends the same way, and none of them reaches the model; in a
-cascaded session it is a new `say`, and it speaks.
+model a call that arrives during the cut ends the same way, and none of them reaches the model. A
+cascaded `say` that arrives then speaks if it reaches the voice before the cut ends, and ends the
+same way if it is still queued.
 
 A live model can start its next response while the last one is still playing. The client plays them
 back to back, one stretch of voice: `Speaking` when it starts after quiet, `Silent` when all of it
@@ -369,9 +370,9 @@ gate is built on these two verbs.
 A cut finishes whatever happens to the code that asked for it. An `interrupt` or `mute` given up on
 — a timeout, a cancelled task, a tool call the model withdrew — still waits for the client's report,
 tells the model what was heard, and ends each utterance it cut. If the session closes during a cut,
-the calls it cut raise `TransportError`, as every call still waiting does. That includes a `stop`
-the transport fails: the session closes as `failed`, and no `Interrupted` is reported, since nothing
-says what the person heard.
+the calls it cut raise `TransportError`, as every `say` and `prompt` still waiting does. That
+includes a `stop` the transport fails: the session closes as `failed`, and no `Interrupted` is
+reported, since nothing says what the person heard.
 
 `quiet` waits until the voice has nothing left to say — no response open, no `say` or `prompt`
 waiting, every utterance played or cut — so a call can end after its last words were heard:
@@ -386,11 +387,14 @@ that is waiting for that tool: spawn it there instead.
 
 `close(triggered_by=)` names who ended the call on `Closed`; a hang-up names the person, and a failure or the end of `async with` names no one.
 
-`close` runs to the end once it begins. It fails every call still waiting first, then waits at most
-2 seconds for what it stopped and at most 2 seconds for the final `Closed` send, so a tool that
-ignores being cancelled or a send that hangs delays it and cannot hold it: what has not stopped by
-then is left running and logged, and the model connections and the transport close all the same.
-Subscribers have `Closed` before that send goes. A caller cancelled while it waits — a deadline, a
+`close` runs to the end once it begins. It fails every `say` and `prompt` still waiting first and
+lets `quiet` return, then waits at most 2 seconds for what it stopped and at most 2 seconds for the
+final `Closed` send, so a tool that ignores being cancelled or a send that hangs delays it and
+cannot hold it. A task that has not stopped by then is left running and logged, a `Closed` send
+that has not finished is cancelled and logged, and the model connections and the transport close
+all the same. Subscribers have `Closed` before that send goes. A `cancel` still waits for the tools
+it stopped, and an `interrupt` or `mute` for a `stop` send that will not end, so those calls can
+outlast the close. A caller cancelled while it waits — a deadline, a
 cancel scope, a handler torn down — stops waiting, but the model connections and the transport still
 close and `Closed` is still reported; a second `close` returns once the first is done. A tool that ends
 the call by calling `close` is stopped with the other tool calls: its `close` returns at once, as

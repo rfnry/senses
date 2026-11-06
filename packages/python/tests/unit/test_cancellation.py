@@ -580,6 +580,35 @@ async def test_a_send_that_hangs_on_closed_holds_a_close_only_for_the_grace(
     assert isinstance(seen[-1], Closed) and link.closed
 
 
+class HungClosed(Loopback):
+    def __init__(self) -> None:
+        super().__init__(ANA, "acme")
+        self.cancelled = False
+
+    async def send_control(self, control: dict[str, Any]) -> None:
+        if event("closed")(control):
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+        await super().send_control(control)
+
+
+async def test_a_closed_send_given_up_on_is_cancelled_and_logged(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr("rfnry_senses.session.CLOSE_GRACE", 0.05)
+    link = HungClosed()
+    s = Session(link, speech=Tone())
+    await s.start()
+    await asyncio.wait_for(s.close(), 1)
+    await until(lambda: link.cancelled)
+    assert "session: the closed event was not sent within 0.05 s; the close goes on" in (
+        caplog.messages
+    )
+
+
 async def test_the_events_end_while_the_closed_send_still_hangs() -> None:
     link = GatedLink(event("closed"))
     s = Session(link, speech=Tone())
