@@ -1,5 +1,6 @@
 import asyncio
 import fractions
+import itertools
 import json
 import struct
 import time
@@ -12,13 +13,14 @@ pytest.importorskip("aiortc")
 
 import av
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc.codecs.opus import OpusEncoder
 
 from rfnry_senses.contracts import AudioFrame
 from rfnry_senses.errors import InputError
 from rfnry_senses.events import Closed
 from rfnry_senses.models import Image
 from rfnry_senses.session import Session
-from rfnry_senses.webrtc import _Marker, _Voice, accept_offer
+from rfnry_senses.webrtc import _Encoded, _Marker, _Voice, accept_offer
 
 from ..unit.fakes import ANA, HOST, ScriptedTranscription, Tone, lookalike, next_of, until
 
@@ -270,6 +272,96 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
         assert counts[3] == left[0] and counts[3] - counts[1] in (100, 101)
     finally:
         await client.pc.close()
+
+
+def stamp(frame: av.AudioFrame) -> int:
+    assert frame.pts is not None
+    return frame.pts
+
+
+async def spoken(voice: _Voice, ms: int) -> list[int]:
+    voice.push(tone(ms, 2000, voice.RATE))
+    voice.finish()
+    return [stamp(await voice.recv()) for _ in range(ms // voice.FRAME_MS)]
+
+
+async def test_the_voice_timestamps_keep_time_across_a_pause() -> None:
+    voice = _Voice()
+    before = await spoken(voice, 200)
+    left = time.monotonic()
+    await asyncio.sleep(1.0)
+    voice.push(tone(200, 2000, voice.RATE))
+    voice.finish()
+    first = stamp(await voice.recv())
+    paused = time.monotonic() - left
+    rest = [stamp(await voice.recv()) for _ in range(9)]
+    advanced = (first - before[-1]) / voice.RATE
+    assert advanced == pytest.approx(paused - voice.PREBUFFER_S, abs=0.05)
+    assert rest == [first + 960 * (i + 1) for i in range(9)]
+
+
+async def test_every_packet_after_a_pause_carries_the_silence() -> None:
+    voice = _Voice()
+    track = _Encoded(voice)
+    pack = OpusEncoder().pack
+    voice.push(tone(100, 2000, voice.RATE))
+    voice.finish()
+    before = [pack(await track.recv())[1] for _ in range(5)]
+    await asyncio.sleep(0.5)
+    voice.push(tone(100, 2000, voice.RATE))
+    voice.finish()
+    after = [pack(await track.recv())[1] for _ in range(5)]
+    assert after[0] - before[-1] > voice.RATE // 4
+    assert [later - earlier for earlier, later in itertools.pairwise(before)] == [960] * 4
+    assert [later - earlier for earlier, later in itertools.pairwise(after)] == [960] * 4
+
+
+async def test_a_peer_receives_the_silence_on_the_first_packet_after_a_pause() -> None:
+    client = Client()
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
+    try:
+        async with Session(link, speech=Speech(48000)) as s:
+            await until(lambda: {"type": "ready"} in client.messages, timeout=10)
+            await s.say("one two", triggered_by=HOST)
+            await asyncio.sleep(0.5)
+            await s.say("one two", triggered_by=HOST)
+            await asyncio.sleep(0.3)
+        pts = [frame.pts for frame in client.audio]
+        steps = [later - earlier for earlier, later in itertools.pairwise(pts)]
+        assert steps.index(max(steps)) == 19
+        assert max(steps) > 9600
+        assert steps[:19] == [960] * 19
+    finally:
+        await client.pc.close()
+
+
+async def test_a_short_gap_leaves_the_voice_timestamps_running() -> None:
+    voice = _Voice()
+    before = await spoken(voice, 100)
+    await asyncio.sleep(0.05)
+    after = await spoken(voice, 100)
+    assert after[0] == before[-1] + 960
+
+
+async def test_cuts_leave_the_voice_timestamps_on_the_clock() -> None:
+    voice = _Voice()
+    started = time.monotonic()
+    stamps: list[int] = []
+    for _ in range(4):
+        voice.push(tone(200, 2000, voice.RATE))
+        voice.finish()
+        stamps += [stamp(await voice.recv()) for _ in range(8)]
+        voice.clear()
+        while not voice._queue.empty():
+            stamps.append(stamp(await voice.recv()))
+        await asyncio.sleep(0.3)
+    voice.push(tone(200, 2000, voice.RATE))
+    voice.finish()
+    last = stamp(await voice.recv())
+    assert stamps == sorted(set(stamps))
+    assert last > stamps[-1]
+    assert last / voice.RATE == pytest.approx(time.monotonic() - started, abs=0.06)
 
 
 def kinds_queued(voice: _Voice) -> list[str]:

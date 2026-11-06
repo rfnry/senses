@@ -18,6 +18,7 @@ from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
 )
+from aiortc.codecs.opus import OpusEncoder
 from aiortc.mediastreams import MediaStreamError
 
 from rfnry_senses.contracts import AudioFrame
@@ -68,6 +69,7 @@ class _Voice(MediaStreamTrack):
         self._queue: asyncio.Queue[AudioFrame | _Marker] = asyncio.Queue()
         self._rest = b""
         self._pts = 0
+        self._began: float | None = None
         self._start: float | None = None
         self._samples = 0
         self._resampler: av.AudioResampler | None = None
@@ -173,21 +175,42 @@ class _Voice(MediaStreamTrack):
             else:
                 held, self._held = self._held, []
                 self._fire([*held, *([item.text] if item.text else [])])
+        now = time.monotonic()
+        due = None if self._start is None else self._start + self._samples / self.RATE
+        if due is None or now - due > self.GAP_S + self.PREBUFFER_S:
+            self._start, self._samples, due = now - self.PREBUFFER_S, 0, now - self.PREBUFFER_S
+            self._began = due if self._began is None else self._began
+            self._pts = max(self._pts, int((due - self._began) * self.RATE))
         out = av.AudioFrame(format="s16", layout="mono", samples=len(frame.data) // 2)
         out.planes[0].update(frame.data)
         out.sample_rate = frame.sample_rate
         out.pts = self._pts
         out.time_base = fractions.Fraction(1, frame.sample_rate)
         self._pts += out.samples
-        now = time.monotonic()
-        due = None if self._start is None else self._start + self._samples / out.sample_rate
-        if due is None or now - due > self.GAP_S + self.PREBUFFER_S:
-            self._start, self._samples, due = now - self.PREBUFFER_S, 0, now - self.PREBUFFER_S
         await asyncio.sleep(max(0.0, due - now))
         self._samples += out.samples
         held, self._held = self._held, []
         self._fire(held)
         return out
+
+
+class _Encoded(MediaStreamTrack):
+    kind = "audio"
+
+    def __init__(self, voice: _Voice) -> None:
+        super().__init__()
+        self._voice = voice
+        self._encoder = OpusEncoder()
+
+    async def recv(self) -> Any:
+        while True:
+            frame = await self._voice.recv()
+            payloads, _ = await asyncio.to_thread(self._encoder.encode, frame)
+            if payloads:
+                packet = av.Packet(payloads[0])
+                packet.pts = frame.pts
+                packet.time_base = fractions.Fraction(1, frame.sample_rate)
+                return packet
 
 
 class WebRTCTransport:
@@ -211,7 +234,7 @@ class WebRTCTransport:
         self._ends: dict[int, _Marker] = {}
         self._refused = False
         self._cut: set[int] = set()
-        self._pc.addTrack(self._voice)
+        self._pc.addTrack(_Encoded(self._voice))
         self._inbox: asyncio.Queue[AudioFrame | Image | Played | None] = asyncio.Queue()
         self._channel: RTCDataChannel | None = None
         self._unsent: list[str] = []

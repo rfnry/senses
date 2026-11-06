@@ -806,7 +806,7 @@ Yields the microphone resampled to mono PCM at `sample_rate`, camera frames enco
 async def send_audio(self, frame: AudioFrame, utterance: int) -> None: ...
 ```
 
-Queues `frame` on the voice track, resampled to 48 kHz mono whatever its rate or channels, in 20 ms frames. The last frame of an utterance is padded with silence, so it is sent whole. Each stretch of voice starts 120 ms after its first audio.
+Queues `frame` on the voice track, resampled to 48 kHz mono whatever its rate or channels, in 20 ms frames. The last frame of an utterance is padded with silence, so it is sent whole. Each stretch of voice starts 120 ms after its first audio, and its timestamps show the silence before it, so the far end's jitter buffer does not take a pause for delay.
 
 ### `WebRTCTransport.send_control`
 
