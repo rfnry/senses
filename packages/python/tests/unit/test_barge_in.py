@@ -112,8 +112,10 @@ async def test_a_barge_in_drops_the_queue_before_the_cut_waits(delay: float | No
         queued = asyncio.create_task(s.say("Five.", triggered_by=HOST))
         await until(lambda: len(link.audio) == 2 and "Three four." in tts.spoken)
         stt.hear("wait", final=True, end=False)
-        said_queued = await asyncio.wait_for(queued, 0.01)
+        said_queued = await asyncio.wait_for(queued, 1)
+        cut_still_waits = not first.done()
         await first
+    assert cut_still_waits
     assert said_queued.heard == "" and said_queued.interrupted
     assert "Five." not in tts.spoken
     assert [c["utterance"] for c in link.controls if c["type"] == "speaking"] == [1]

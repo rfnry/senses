@@ -72,7 +72,6 @@ class Client:
         self.played = played
         self.opened = False
         self.stamped: list[tuple[float, dict[str, Any]]] = []
-        self.arrivals: list[float] = []
         self.pc = RTCPeerConnection()
         self.messages: list[dict[str, Any]] = []
         self.audio: list[Any] = []
@@ -112,7 +111,6 @@ class Client:
         while True:
             try:
                 self.audio.append(await track.recv())
-                self.arrivals.append(time.monotonic())
             except Exception:
                 return
 
@@ -240,6 +238,7 @@ async def test_an_utterance_not_a_whole_number_of_frames_is_sent_whole() -> None
     await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
     try:
         async with Session(link, speech=Speech(24000, ms=905, words=False)) as s:
+            await until(lambda: {"type": "ready"} in client.messages, timeout=10)
             said = await s.say("The table is ready. Please come in.", triggered_by=HOST)
         assert round(sent[0]) == 1820
         assert said.heard == "The table is ready. Please come in."
@@ -557,10 +556,12 @@ async def test_a_cut_answers_a_speaking_kept_among_the_fade_frames() -> None:
         await link.send_audio(tone(60, 100, 24000), 1)
         await link.send_control({"type": "speaking", "utterance": 2})
         await link.send_audio(tone(200, 100, 24000), 2)
+        await link.send_control({"type": "speaking", "utterance": 3})
+        await link.send_audio(tone(200, 100, 24000), 3)
         await link._voice.recv()
         link.clear_audio()
         assert [json.loads(t)["utterance"] for t in link._unsent] == [1]
-        assert answers(link, 2) == [1, 2]
+        assert answers(link, 3) == [1, 2, 3]
     finally:
         await link.close()
 
@@ -676,3 +677,31 @@ async def test_a_refused_hello_opens_no_live_model_when_greeted_comes_first() ->
         assert live.opened == {}
     finally:
         await client.pc.close()
+
+
+async def frames_of(pieces: list[AudioFrame]) -> list[av.AudioFrame]:
+    voice = _Voice()
+    for piece in pieces:
+        voice.push(piece)
+    voice.finish()
+    return [await voice.recv() for _ in range(voice._queue.qsize())]
+
+
+def stereo(ms: int, value: int, rate: int) -> AudioFrame:
+    data = struct.pack("<hh", value, value) * (rate * ms // 1000)
+    return AudioFrame(data=data, sample_rate=rate, channels=2)
+
+
+@pytest.mark.parametrize(
+    "pieces",
+    [
+        [stereo(905, 4000, 48000), stereo(905, 4000, 48000)],
+        [tone(905, 4000, 24000), tone(905, 4000, 48000)],
+        [tone(905, 4000, 16000), stereo(905, 4000, 16000)],
+    ],
+    ids=["stereo", "a rate change", "a channel change"],
+)
+async def test_the_voice_keeps_the_length_of_what_it_was_given(pieces: list[AudioFrame]) -> None:
+    frames = await frames_of(pieces)
+    assert all(f.sample_rate == 48000 and f.samples == 960 for f in frames)
+    assert 1810 <= len(frames) * 20 <= 1840

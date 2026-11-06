@@ -48,6 +48,21 @@ describe('the microphone', () => {
     expect(16000 - samples).toBeLessThanOrEqual(32)
   })
 
+  it("upsamples to a rate above the browser's, in step and at its level", () => {
+    const out = downsample(fresh(), tone(1000, 16000, 16000), 16000, 48000)
+    expect(48000 - out.length).toBeGreaterThanOrEqual(0)
+    expect(48000 - out.length).toBeLessThanOrEqual(96)
+    expect(decibels(through(1000, 16000, 48000) / level(tone(1000, 16000, 16000)))).toBeCloseTo(
+      0,
+      1
+    )
+    const expected = tone(1000, 48000, 48000)
+    const apart = out
+      .slice(1000, 40000)
+      .reduce((most, sample, i) => Math.max(most, Math.abs(sample - (expected[i + 1000] ?? 0))), 0)
+    expect(apart).toBeLessThan(0.01)
+  })
+
   it('passes audio through when the rates match', () => {
     const signal = tone(1000, 48000, 480)
     const out = downsample(fresh(), signal, 48000, 48000)

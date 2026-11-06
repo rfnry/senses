@@ -806,6 +806,22 @@ async def test_a_failed_stop_fails_the_calls_it_cut() -> None:
     assert isinstance(seen[-1], Closed) and seen[-1].reason == "failed"
 
 
+async def test_the_last_words_play_out_before_a_close_that_waits_on_quiet() -> None:
+    link = SlowLoopback(ANA, "acme", delay=0.05)
+    s = Session(link, speech=Tone())
+    await s.start()
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("Thank you. Goodbye.", triggered_by=HOST))
+    await until(lambda: len(link.audio) > 0)
+    await asyncio.wait_for(s.quiet(), 2)
+    await s.close()
+    await recorder
+    said = await asked
+    assert said.heard == "Thank you. Goodbye." and not said.interrupted
+    assert [type(e) for e in seen] == [Speaking, Silent, Said, Closed]
+    assert link.controls[-1]["event"]["kind"] == "closed"
+
+
 class HungSend(ScriptedConnection):
     def __init__(self) -> None:
         super().__init__()

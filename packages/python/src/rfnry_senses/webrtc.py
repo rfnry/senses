@@ -60,6 +60,7 @@ class _Voice(MediaStreamTrack):
     kind = "audio"
     RATE = 48000
     FRAME_MS = 20
+    CHUNK = RATE * FRAME_MS // 1000 * 2
     PREBUFFER_S = 0.12
     GAP_S = 0.1
     FADE_FRAMES = 3
@@ -76,10 +77,6 @@ class _Voice(MediaStreamTrack):
         self._resampler: av.AudioResampler | None = None
         self._source: tuple[int, int] | None = None
         self._held: list[str] = []
-
-    @property
-    def _chunk(self) -> int:
-        return self.RATE * self.FRAME_MS // 1000 * 2
 
     def push(self, frame: AudioFrame) -> None:
         if not frame.data:
@@ -102,7 +99,7 @@ class _Voice(MediaStreamTrack):
     def finish(self) -> None:
         self._drain()
         if self._rest:
-            self._rest += bytes(self._chunk - len(self._rest))
+            self._rest += bytes(self.CHUNK - len(self._rest))
             self._take([])
 
     def mark(self, text: str | None, *, with_next: bool) -> _Marker:
@@ -124,9 +121,8 @@ class _Voice(MediaStreamTrack):
     def _take(self, frames: list[av.AudioFrame]) -> None:
         for out in frames:
             self._rest += bytes(out.planes[0])[: out.samples * 2]
-        size = self._chunk
-        while len(self._rest) >= size:
-            chunk, self._rest = self._rest[:size], self._rest[size:]
+        while len(self._rest) >= self.CHUNK:
+            chunk, self._rest = self._rest[: self.CHUNK], self._rest[self.CHUNK :]
             self._queue.put_nowait(AudioFrame(data=chunk, sample_rate=self.RATE))
 
     def clear(self) -> list[int]:
