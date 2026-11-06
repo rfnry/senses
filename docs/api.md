@@ -1023,7 +1023,7 @@ function connect(options: ConnectOptions): Promise<Senses>
 ```
 
 Connects to your senses endpoint, starts the microphone and, with `camera`, the video, and resolves with the `Senses` once the server is ready.
-Rejects with `SensesException` when the server refuses the hello, the connection closes or fails before the microphone and the video have started, the WebRTC offer is refused, or `camera` names both `facing` and `deviceId`. A connection that ends during a permission prompt rejects at once. Whatever `connect` took is released when it rejects, and a device granted after that is stopped as it arrives.
+Rejects with `SensesException` when the server refuses the hello, the connection closes or fails before `connect` resolves, the session fails before it, with the server's reason, the WebRTC offer is refused, `camera` names both `facing` and `deviceId`, or `signal` aborts. A connection that ends during a permission prompt rejects at once. Whatever `connect` took is released when it rejects, and a device granted after that is stopped as it arrives.
 
 ### `ConnectOptions`
 
@@ -1039,10 +1039,11 @@ type ConnectOptions = {
     | ({ source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice)
   sampleRate?: number
   iceServers?: RTCIceServer[]
+  signal?: AbortSignal
 }
 ```
 
-`url` is the WebSocket endpoint, or the offer endpoint over WebRTC; `protocols` goes with the WebSocket and `headers` with the offer's request. `microphone: false` connects to listen only, and `sampleRate` is the microphone's PCM rate over a WebSocket (16000), filtered and resampled from the browser's own rate. `camera` sends video from `source` (`'camera'`) at `fps` (1) and `width` (640), as JPEG at `quality` (0.7) over a WebSocket.
+`url` is the WebSocket endpoint, or the offer endpoint over WebRTC; `protocols` goes with the WebSocket and `headers` with the offer's request. `microphone: false` connects to listen only, and `sampleRate` is the microphone's PCM rate over a WebSocket (16000), filtered and resampled from the browser's own rate. `camera` sends video from `source` (`'camera'`) at `fps` (1) and `width` (640), as JPEG at `quality` (0.7) over a WebSocket. `signal` gives up on `connect`, on either transport: an abort at any point before it resolves rejects with a `SensesException` and releases everything taken, the offer's request included. One that has already aborted rejects at once and takes nothing, and after `connect` has resolved it does nothing.
 
 ### `CameraChoice`
 

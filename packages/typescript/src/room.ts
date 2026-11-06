@@ -13,7 +13,10 @@ export type ConnectOptions = {
     | ({ source?: VideoSource; fps?: number; width?: number; quality?: number } & CameraChoice)
   sampleRate?: number
   iceServers?: RTCIceServer[]
+  signal?: AbortSignal
 }
+
+export const ABORTED = 'senses: connect was aborted'
 
 export type SensesStatus = 'open' | 'closed'
 
@@ -107,6 +110,10 @@ export class Ending {
     private readonly release: () => Promise<unknown>
   ) {}
 
+  get stopped(): boolean {
+    return this.stopping
+  }
+
   async stop(): Promise<void> {
     if (!this.stopping) {
       this.stopping = true
@@ -123,11 +130,17 @@ export class Ending {
 
   tell(event: SensesEvent): void {
     this.room.tell(event)
-    if (event.kind === 'closed') this.lost()
+    if (event.kind === 'closed') this.lost(event.message ?? undefined)
   }
 
-  until<T>(connecting: Promise<T>): Promise<T> {
-    return Promise.race([connecting, this.gone])
+  async until<T>(connecting: Promise<T>, signal?: AbortSignal): Promise<T> {
+    const abort = () => this.lost(ABORTED)
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      return await Promise.race([connecting, this.gone])
+    } finally {
+      signal?.removeEventListener('abort', abort)
+    }
   }
 }
 

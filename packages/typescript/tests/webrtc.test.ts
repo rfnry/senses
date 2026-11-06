@@ -457,6 +457,155 @@ describe('when the connection ends over WebRTC', () => {
     expectReleased(devices, peer)
   })
 
+  it('rejects with the reason of a session that failed before ready', async () => {
+    equipped()
+    const { connecting, channel } = await dialing()
+    channel.open()
+    const failed = { ...closed, reason: 'failed', message: 'session: the live model failed' }
+    channel.deliver({ type: 'event', event: { scope: 'acme', at: 'now', ...failed } })
+    await expect(connecting).rejects.toEqual(new SensesException('session: the live model failed'))
+  })
+
+  describe('with a signal', () => {
+    const aborted = new SensesException('senses: connect was aborted')
+
+    function neverAnswered() {
+      const requests: Request[] = []
+      vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+        requests.push({ url, init })
+        return new Promise<never>(() => {})
+      })
+      return requests
+    }
+
+    function held(devices: ReturnType<typeof media>) {
+      let answer = () => {}
+      devices.prompt.answered = new Promise<void>((resolve) => {
+        answer = resolve
+      })
+      return () => answer()
+    }
+
+    it('rejects at once and takes nothing when the signal has already aborted', async () => {
+      const devices = equipped()
+      const requests = neverAnswered()
+      await expect(
+        connect({
+          url: '/senses/offer',
+          transport: 'webrtc',
+          camera: {},
+          signal: AbortSignal.abort(),
+        })
+      ).rejects.toEqual(aborted)
+      expect(Peer.made).toEqual([])
+      expect(devices.asked).toEqual([])
+      expect(requests).toEqual([])
+    })
+
+    it('rejects and releases everything when the offer never answers', async () => {
+      const devices = equipped()
+      const requests = neverAnswered()
+      const controller = new AbortController()
+      const connecting = connect({
+        url: '/senses/offer',
+        transport: 'webrtc',
+        signal: controller.signal,
+      })
+      connecting.catch(() => {})
+      await vi.waitFor(() => expect(requests).toHaveLength(1))
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      expectReleased(devices, Peer.made[0] as Peer)
+      expect((requests[0] as Request).init.signal?.aborted).toBe(true)
+    })
+
+    it('rejects and releases everything when aborted before ready', async () => {
+      const devices = equipped()
+      const controller = new AbortController()
+      const { connecting, peer, channel } = await dialing({ signal: controller.signal })
+      channel.open()
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      expectReleased(devices, peer)
+    })
+
+    it('rejects during the microphone prompt and stops the device as it arrives', async () => {
+      const devices = equipped()
+      const answer = held(devices)
+      const controller = new AbortController()
+      const connecting = connect({
+        url: '/senses/offer',
+        transport: 'webrtc',
+        signal: controller.signal,
+      })
+      connecting.catch(() => {})
+      await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      const peer = Peer.made[0] as Peer
+      expect(peer.closed).toBe(true)
+      answer()
+      await vi.waitFor(() => expect(devices.tracks()).toHaveLength(1))
+      await vi.waitFor(() => expect(devices.tracks()[0]?.stopped).toBe(true))
+      expect(peer.added).toEqual([])
+    })
+
+    it('rejects during the camera prompt and stops the device as it arrives', async () => {
+      const devices = equipped()
+      const requests = neverAnswered()
+      const answer = held(devices)
+      const controller = new AbortController()
+      const connecting = connect({
+        url: '/senses/offer',
+        transport: 'webrtc',
+        microphone: false,
+        camera: {},
+        signal: controller.signal,
+      })
+      connecting.catch(() => {})
+      await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      answer()
+      await vi.waitFor(() => expect(devices.video()).toHaveLength(1))
+      await vi.waitFor(() => expect(devices.video()[0]?.stopped).toBe(true))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(requests).toEqual([])
+    })
+
+    it('raises nothing more once the rest of the connect has nowhere to go', async () => {
+      const devices = equipped()
+      const answer = held(devices)
+      const controller = new AbortController()
+      const rejected = await unhandledDuring(async () => {
+        const connecting = connect({
+          url: '/senses/offer',
+          transport: 'webrtc',
+          signal: controller.signal,
+        })
+        connecting.catch(() => {})
+        await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+        controller.abort()
+        await expect(connecting).rejects.toEqual(aborted)
+        answer()
+        await vi.waitFor(() => expect(devices.tracks()[0]?.stopped).toBe(true))
+      })
+      expect(rejected).toEqual([])
+    })
+
+    it('does nothing once connect has resolved', async () => {
+      const devices = equipped()
+      const controller = new AbortController()
+      const { senses, peer } = await connected({ signal: controller.signal })
+      controller.abort()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(senses.status).toBe('open')
+      expect(peer.closed).toBe(false)
+      expect(devices.tracks().filter((track) => track.stopped)).toEqual([])
+      await senses.close()
+    })
+  })
+
   it('rejects on a closed event before ready, without waiting for the peer to fail', async () => {
     const devices = equipped()
     const { connecting, peer, channel } = await dialing()

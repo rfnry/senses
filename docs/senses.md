@@ -743,6 +743,13 @@ uncaught error, for `window.onerror`. Voice still playing stops with the rest, s
 end on its last words waits on `quiet` before it closes. A peer that is only `disconnected` is no
 end, since it can recover. A `connect` that loses the connection partway rejects at once, even with
 a permission prompt still open, and a device the person grants after that is stopped as it arrives.
+It rejects with the server's reason when a failing session gave one.
+
+`connect` waits as long as your endpoint does, so a page that gives up on it passes `signal`, an
+`AbortSignal`: an abort before `connect` resolves rejects with a `SensesException` and releases
+everything the same way, including an offer request that never answered. A signal that has already
+aborted rejects at once and takes nothing, and once `connect` has resolved the signal does nothing:
+`close()` ends a call.
 
 ## Tools
 

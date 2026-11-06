@@ -71,11 +71,16 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     if (options.microphone === false) pc.addTransceiver('audio', { direction: 'recvonly' })
     else {
       const microphone = await navigator.mediaDevices.getUserMedia({ audio: MICROPHONE })
+      if (ending.stopped) {
+        for (const track of microphone.getTracks()) track.stop()
+        return
+      }
       streams.push(microphone)
       for (const track of microphone.getAudioTracks()) pc.addTrack(track, microphone)
     }
     if (camera !== null && settings !== null) {
       await camera.use(settings.source)
+      if (ending.stopped) return
       sender = pc.addTransceiver(camera.track ?? 'video', {
         direction: 'sendonly',
         sendEncodings: [{ maxFramerate: settings.fps }],
@@ -90,6 +95,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       headers: { 'content-type': 'application/json', ...options.headers },
       body: JSON.stringify({ sdp: pc.localDescription?.sdp }),
       credentials: 'same-origin',
+      signal: options.signal ?? null,
     })
     if (!response.ok)
       throw new SensesException(`webrtc: the offer was refused with status ${response.status}`)
@@ -98,7 +104,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     await ready
   }
   try {
-    await ending.until(negotiate())
+    await ending.until(negotiate(), options.signal)
   } catch (error) {
     await ending.stop()
     throw error

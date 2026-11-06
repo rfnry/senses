@@ -514,6 +514,136 @@ describe('when the connection ends over a WebSocket', () => {
     expect(Context.made.filter((context) => !context.closed)).toEqual([])
   })
 
+  it('rejects with the reason of a session that failed before ready', async () => {
+    const { connecting, socket } = await dialing({ microphone: false })
+    const failed = { ...closed, reason: 'failed', message: 'session: the live model failed' }
+    socket.deliver({ type: 'event', event: failed })
+    await expect(connecting).rejects.toEqual(new SensesException('session: the live model failed'))
+  })
+
+  describe('with a signal', () => {
+    const aborted = new SensesException('senses: connect was aborted')
+
+    it('rejects at once and takes nothing when the signal has already aborted', async () => {
+      const devices = media()
+      vi.stubGlobal('navigator', devices.navigator)
+      await expect(
+        connect({
+          url: 'wss://example.com/senses',
+          transport: 'websocket',
+          camera: {},
+          signal: AbortSignal.abort(),
+        })
+      ).rejects.toEqual(aborted)
+      expect(Socket.made).toEqual([])
+      expect(Context.made).toEqual([])
+      expect(devices.asked).toEqual([])
+    })
+
+    it('rejects and closes the socket when aborted before it opens', async () => {
+      const controller = new AbortController()
+      const connecting = connect({
+        url: 'wss://example.com/senses',
+        transport: 'websocket',
+        microphone: false,
+        signal: controller.signal,
+      })
+      connecting.catch(() => {})
+      await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      expect((Socket.made[0] as Socket).readyState).toBe(3)
+      expect(Context.made.filter((context) => !context.closed)).toEqual([])
+    })
+
+    it('rejects and lets go of everything when aborted before ready', async () => {
+      const controller = new AbortController()
+      const { connecting, socket } = await dialing({
+        microphone: false,
+        signal: controller.signal,
+      })
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      expect(socket.readyState).toBe(3)
+      expect(Context.made.filter((context) => !context.closed)).toEqual([])
+    })
+
+    it('rejects during the microphone prompt and stops the device as it arrives', async () => {
+      const devices = media()
+      vi.stubGlobal('navigator', devices.navigator)
+      const held = promptHeld(devices)
+      const controller = new AbortController()
+      const { connecting, socket } = await dialing({ signal: controller.signal })
+      socket.deliver({ type: 'ready' })
+      await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      expect(socket.readyState).toBe(3)
+      held.answer()
+      await vi.waitFor(() => expect(devices.tracks()).toHaveLength(1))
+      await vi.waitFor(() => expect(devices.tracks()[0]?.stopped).toBe(true))
+      expect(WorkletNode.made).toHaveLength(0)
+    })
+
+    it('rejects during the camera prompt and stops the device as it arrives', async () => {
+      const devices = media()
+      vi.stubGlobal('navigator', devices.navigator)
+      vi.stubGlobal('document', documentWithCanvas())
+      const held = promptHeld(devices)
+      const controller = new AbortController()
+      const { connecting, socket } = await dialing({
+        microphone: false,
+        camera: {},
+        signal: controller.signal,
+      })
+      socket.deliver({ type: 'ready' })
+      await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+      controller.abort()
+      await expect(connecting).rejects.toEqual(aborted)
+      held.answer()
+      await vi.waitFor(() => expect(devices.video()).toHaveLength(1))
+      await vi.waitFor(() => expect(devices.video()[0]?.stopped).toBe(true))
+    })
+
+    it('raises nothing more when the person refuses a prompt after an abort', async () => {
+      const devices = media()
+      vi.stubGlobal('navigator', devices.navigator)
+      const held = promptHeld(devices)
+      const controller = new AbortController()
+      const rejected = await unhandledDuring(async () => {
+        const { connecting, socket } = await dialing({ signal: controller.signal })
+        socket.deliver({ type: 'ready' })
+        await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+        controller.abort()
+        await expect(connecting).rejects.toEqual(aborted)
+        held.refuse()
+      })
+      expect(rejected).toEqual([])
+    })
+
+    it('does nothing once connect has resolved', async () => {
+      const devices = media()
+      vi.stubGlobal('navigator', devices.navigator)
+      const controller = new AbortController()
+      const connecting = connect({
+        url: 'wss://example.com/senses',
+        transport: 'websocket',
+        signal: controller.signal,
+      })
+      await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
+      const socket = Socket.made[0] as Socket
+      socket.open()
+      socket.deliver({ type: 'ready' })
+      const senses = await connecting
+      controller.abort()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(senses.status).toBe('open')
+      expect(socket.readyState).toBe(1)
+      expect(devices.tracks().filter((track) => track.stopped)).toEqual([])
+      await senses.close()
+    })
+  })
+
   it('closes the socket and rejects on a closed event before ready', async () => {
     const { connecting, socket } = await dialing({ microphone: false })
     socket.deliver({ type: 'event', event: closed })

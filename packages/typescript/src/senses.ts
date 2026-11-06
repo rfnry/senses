@@ -1,8 +1,10 @@
 import { Camera } from './camera.js'
+import { SensesException } from './errors.js'
 import { Frames } from './frames.js'
 import { Microphone } from './microphone.js'
 import { Playback } from './playback.js'
 import {
+  ABORTED,
   type ConnectOptions,
   cameraOptions,
   checkFps,
@@ -15,6 +17,7 @@ import { overWebRTC } from './webrtc.js'
 import { WebSocketLink } from './websocket.js'
 
 export function connect(options: ConnectOptions): Promise<Senses> {
+  if (options.signal?.aborted) return Promise.reject(new SensesException(ABORTED))
   return options.transport === 'webrtc' ? overWebRTC(options) : overWebSocket(options)
 }
 
@@ -59,7 +62,7 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
       },
       closed: () => ending.lost(),
     })
-    await ending.until(start())
+    await ending.until(start(), options.signal)
   } catch (error) {
     await ending.stop()
     throw error
