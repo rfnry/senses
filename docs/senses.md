@@ -332,8 +332,9 @@ that point — whole sentences in a cascaded session, the model's own transcript
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
 in the client. Queued `say` and `prompt` calls end too, as the person cuts in and before `Interrupted`
-is reported: the person is talking, and they return `Said(heard="", interrupted=True)`. A call that
-arrives during the cut ends the same way, and none of them reaches the model.
+is reported: the person is talking, and they return `Said(heard="", interrupted=True)`. On a live
+model a call that arrives during the cut ends the same way, and none of them reaches the model; in a
+cascaded session it is a new `say`, and it speaks.
 
 A live model can start its next response while the last one is still playing. The client plays them
 back to back, one stretch of voice: `Speaking` when it starts after quiet, `Silent` when all of it
@@ -711,9 +712,10 @@ comes from the new camera over a WebSocket, and the track is replaced over WebRT
 returns to the last camera chosen, as the client does when a screen share ends. Both at once reject
 with a `SensesException`.
 
-It plays the voice, counts what it played, and answers `stop` with it on its own. Each stretch of
-voice starts 120 ms after its first audio arrives, over a WebSocket in the client and over WebRTC on
-the server, so uneven first chunks play without a hole. Only audio that has played is counted, as
+It plays the voice, counts what it played, and answers `stop` with it on its own. Over a WebSocket
+each stretch of voice starts 120 ms after its first audio arrives; over WebRTC the server sends the
+first 120 ms of it at once, ahead of the clock. Either way uneven first chunks play without a hole.
+Only audio that has played is counted, as
 far as the browser can tell. Over a WebSocket a stop counts up to `currentTime` less the context's
 `outputLatency`, what has reached the speakers. Over WebRTC the count is the receiver's
 `jitterBufferEmittedCount`, which leaves out the concealment it plays while no audio comes. It stops
@@ -737,7 +739,9 @@ A connection has one stop. `close()` runs it, and so does every end from the far
 microphone and camera never outlive the call, and `close()` after that, or twice, does nothing more.
 The order is fixed. A `closed` event reaches subscribers first, with the devices still live; then
 the microphone, the camera, the voice and the connection are released, all in that same turn; then
-`status` turns `'closed'` and subscribers are told. A subscriber that throws stops none of it: every
+`status` turns `'closed'` and subscribers are told. A subscriber that calls `close()` from its
+`closed` handler runs that release early, so the subscribers after it hear the status first and the
+`closed` event with the devices gone. A subscriber that throws stops none of it: every
 other subscriber is still told, `close()` still resolves, and the error surfaces on its own as an
 uncaught error, for `window.onerror`. Voice still playing stops with the rest, so a call that should
 end on its last words waits on `quiet` before it closes. A peer that is only `disconnected` is no
