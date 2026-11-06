@@ -94,6 +94,46 @@ describe('playback', () => {
     ])
   })
 
+  it('a stop counts only audio that reached the output', () => {
+    const cut = (latency: number | undefined) => {
+      const { context, reports, playback } = setup()
+      context.outputLatency = latency
+      for (let i = 0; i < 5; i++) playback.push(frame(1))
+      for (const node of context.nodes.slice(0, 3)) node.onended?.()
+      context.currentTime = 0.52
+      playback.stop(1)
+      return reports
+    }
+    expect(cut(0)).toEqual([[1, 400]])
+    expect(cut(0.2)).toEqual([[1, 200]])
+    expect(cut(undefined)).toEqual([[1, 400]])
+  })
+
+  it('a stop leaves a later utterance only what reached the output', () => {
+    const { context, reports, playback } = setup()
+    context.outputLatency = 0.05
+    playback.push(frame(1))
+    playback.push(frame(2))
+    context.nodes[0]?.onended?.()
+    context.currentTime = 0.27
+    playback.stop(1)
+    playback.silent(2)
+    expect(reports).toEqual([
+      [1, 100],
+      [2, 0],
+    ])
+  })
+
+  it('a natural end reports all of it, whatever the output latency', () => {
+    const { context, reports, playback } = setup()
+    context.outputLatency = 0.2
+    playback.push(frame(1))
+    playback.push(frame(1))
+    playback.silent(1)
+    for (const node of context.nodes) node.onended?.()
+    expect(reports).toEqual([[1, 200]])
+  })
+
   it('closing reports what was playing and nothing more', async () => {
     const { reports, playback } = setup()
     playback.push(frame(1))

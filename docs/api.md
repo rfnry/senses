@@ -670,7 +670,7 @@ class Played(BaseModel):
     ms: int
 ```
 
-The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance. A transport that learns how much played as it goes keeps the count and answers with it at once.
+The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance. A transport that learns how much played as it goes keeps the count and answers with it at once. A full play over WebRTC can report a little more than was sent: the last frame is padded to 20 ms, and the edge between utterances played back to back is known to a frame.
 
 ### `Loopback`
 
@@ -1032,7 +1032,7 @@ type ConnectOptions = {
 }
 ```
 
-`url` is the WebSocket endpoint, or the offer endpoint over WebRTC; `protocols` goes with the WebSocket and `headers` with the offer's request. `microphone: false` connects to listen only, and `sampleRate` is the microphone's PCM rate over a WebSocket (16000). `camera` sends video from `source` (`'camera'`) at `fps` (1) and `width` (640), as JPEG at `quality` (0.7) over a WebSocket.
+`url` is the WebSocket endpoint, or the offer endpoint over WebRTC; `protocols` goes with the WebSocket and `headers` with the offer's request. `microphone: false` connects to listen only, and `sampleRate` is the microphone's PCM rate over a WebSocket (16000), filtered and resampled from the browser's own rate. `camera` sends video from `source` (`'camera'`) at `fps` (1) and `width` (640), as JPEG at `quality` (0.7) over a WebSocket.
 
 ### `CameraChoice`
 

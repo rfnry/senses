@@ -28,6 +28,7 @@ export class Gain {
 export class Context {
   static made: Context[] = []
   currentTime = 0
+  outputLatency: number | undefined = undefined
   destination = {} as AudioNode
   nodes: Node[] = []
   gains: Gain[] = []

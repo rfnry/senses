@@ -3,19 +3,20 @@ import type { AudioOut } from './wire.js'
 export type AudioContextLike = Pick<
   AudioContext,
   'currentTime' | 'destination' | 'createBuffer' | 'createBufferSource' | 'createGain' | 'close'
->
+> & { readonly outputLatency?: number }
 
 const FADE_S = 0.06
 const START_S = 0.12
 
-type Scheduled = { utterance: number; start: number; duration: number; node: AudioBufferSourceNode }
+type Chunk = { start: number; duration: number }
+type Scheduled = { utterance: number; start: number; node: AudioBufferSourceNode }
 
 export class Playback {
   private next = 0
   private fenced = 0
   private gain: GainNode | null = null
   private readonly scheduled = new Set<Scheduled>()
-  private readonly played = new Map<number, number>()
+  private readonly played = new Map<number, Chunk[]>()
   private readonly ending = new Set<number>()
   private readonly reported = new Set<number>()
 
@@ -26,7 +27,7 @@ export class Playback {
 
   speaking(utterance: number): void {
     if (utterance > this.fenced && !this.played.has(utterance) && !this.reported.has(utterance))
-      this.played.set(utterance, 0)
+      this.played.set(utterance, [])
   }
 
   push(frame: AudioOut): void {
@@ -48,10 +49,10 @@ export class Playback {
     node.connect(this.output())
     const now = this.context.currentTime
     const start = this.next > now ? this.next : now + START_S
-    const entry: Scheduled = { utterance: frame.utterance, start, duration: buffer.duration, node }
+    const entry: Scheduled = { utterance: frame.utterance, start, node }
+    this.played.get(frame.utterance)?.push({ start, duration: buffer.duration })
     node.onended = () => {
       this.scheduled.delete(entry)
-      this.add(entry.utterance, entry.duration * 1000)
       this.settle(entry.utterance)
     }
     node.start(start)
@@ -74,10 +75,13 @@ export class Playback {
     for (const entry of this.scheduled) {
       entry.node.onended = null
       entry.node.stop(Math.max(now + FADE_S, entry.start))
-      this.add(entry.utterance, Math.min(Math.max(now - entry.start, 0), entry.duration) * 1000)
     }
     this.scheduled.clear()
     this.next = now
+    const reached = now - (this.context.outputLatency ?? 0)
+    for (const chunks of this.played.values())
+      for (const chunk of chunks)
+        chunk.duration = Math.min(Math.max(reached - chunk.start, 0), chunk.duration)
     for (const number of [...this.played.keys()].sort((a, b) => a - b))
       if (number <= utterance) this.finish(number)
   }
@@ -95,11 +99,6 @@ export class Playback {
     return this.gain
   }
 
-  private add(utterance: number, ms: number): void {
-    const sum = this.played.get(utterance)
-    if (sum !== undefined) this.played.set(utterance, sum + ms)
-  }
-
   private settle(utterance: number): void {
     if (!this.ending.has(utterance)) return
     for (const entry of this.scheduled) if (entry.utterance === utterance) return
@@ -107,11 +106,12 @@ export class Playback {
   }
 
   private finish(utterance: number): void {
-    const ms = this.played.get(utterance)
-    if (ms === undefined) return
+    const chunks = this.played.get(utterance)
+    if (chunks === undefined) return
     this.played.delete(utterance)
     this.ending.delete(utterance)
     this.reported.add(utterance)
-    this.report(utterance, Math.round(ms))
+    const seconds = chunks.reduce((sum, chunk) => sum + chunk.duration, 0)
+    this.report(utterance, Math.round(seconds * 1000))
   }
 }

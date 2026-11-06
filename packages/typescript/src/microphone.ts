@@ -1,4 +1,4 @@
-export type Resampling = { tail: Float32Array; position: number }
+export type Resampling = { tail: Float32Array; position: number; phases?: Float64Array[] }
 
 export const MICROPHONE: MediaTrackConstraints = {
   echoCancellation: true,
@@ -14,21 +14,41 @@ export function downsample(
   inRate: number,
   outRate: number
 ): Float32Array {
+  const crossings = 16
+  const passband = 0.9
+  const divisor = (a: number, b: number): number => (b === 0 ? a : divisor(b, a % b))
+  const shared = divisor(inRate, outRate)
+  const steps = outRate / shared
+  const advance = inRate / shared
+  const ratio = inRate / outRate
+  const cutoff = ratio > 1 ? passband / ratio : 1
+  const reach = Math.ceil(crossings * Math.max(1, ratio))
+  state.phases ??= Array.from({ length: steps }, (_, phase) =>
+    Float64Array.from({ length: 2 * reach }, (_, tap) => {
+      const offset = tap - reach + 1 - phase / steps
+      const turn = (Math.PI * offset) / reach
+      const taper = 0.42 + 0.5 * Math.cos(turn) + 0.08 * Math.cos(2 * turn)
+      const sinc = offset === 0 ? cutoff : Math.sin(Math.PI * cutoff * offset) / (Math.PI * offset)
+      return taper * sinc
+    })
+  )
   const buffer = new Float32Array(state.tail.length + input.length)
   buffer.set(state.tail, 0)
   buffer.set(input, state.tail.length)
-  const step = inRate / outRate
   const out: number[] = []
   let position = state.position
-  while (Math.floor(position) + 1 < buffer.length) {
-    const low = Math.floor(position)
-    const t = position - low
-    out.push((buffer[low] ?? 0) * (1 - t) + (buffer[low + 1] ?? 0) * t)
-    position += step
+  while (Math.floor(position / steps) + reach < buffer.length) {
+    const first = Math.floor(position / steps) - reach + 1
+    const taps = state.phases[position % steps] as Float64Array
+    let sample = 0
+    for (let tap = 0; tap < taps.length; tap++)
+      sample += (buffer[first + tap] ?? 0) * (taps[tap] as number)
+    out.push(sample)
+    position += advance
   }
-  const consumed = Math.floor(position)
+  const consumed = Math.max(0, Math.floor(position / steps) - reach + 1)
   state.tail = buffer.slice(consumed)
-  state.position = position - consumed
+  state.position = position - consumed * steps
   return Float32Array.from(out)
 }
 

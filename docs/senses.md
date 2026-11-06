@@ -638,7 +638,8 @@ senses.subscribe((event) => {
 ```
 
 It captures the microphone with echo cancellation and noise suppression and sends PCM at
-`sampleRate` (16 kHz), or an Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer
+`sampleRate` (16 kHz), filtered from the browser's own rate so nothing above it folds back into the
+speech, or an Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer
 endpoint and optional `iceServers`); `microphone: false` connects to listen only. It authenticates as your endpoint expects: cookies go with the request on their own,
 a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`. With
 `camera` it sends frames at `fps` for as long as the camera runs: JPEG at `quality` (0.7) over a
@@ -678,7 +679,12 @@ with a `SensesException`.
 
 It plays the voice, counts what it played, and answers `stop` with it on its own. Each stretch of
 voice starts 120 ms after its first audio arrives, over a WebSocket in the client and over WebRTC on
-the server, so uneven first chunks play without a hole. Only audio that has played is counted.
+the server, so uneven first chunks play without a hole. Only audio that has played is counted. Over
+a WebSocket a stop counts up to `currentTime` less the context's `outputLatency`, what has reached
+the speakers. Over WebRTC the count is the receiver's `jitterBufferEmittedCount`, which leaves out
+the concealment it plays while no audio comes, and the line between utterances played back to back
+is what had arrived when the second's `speaking` did, known to a 20 ms packet. A natural end gives
+that packet to the utterance, so a full play reads as whole; a cut does not.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,
