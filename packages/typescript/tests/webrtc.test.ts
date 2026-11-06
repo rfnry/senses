@@ -748,8 +748,8 @@ describe('when the connection ends over WebRTC', () => {
 
   it('reads no stats and reports nothing once the connection has ended during a poll', async () => {
     const { devices, peer, channel, read } = await playing()
-    channel.deliver({ type: 'speaking', utterance: 1 })
-    channel.deliver({ type: 'silent', utterance: 1 })
+    channel.deliver({ type: 'speaking', utterance: 1, sent_ms: 0 })
+    channel.deliver({ type: 'silent', utterance: 1, sent_ms: 1800 })
     await vi.advanceTimersByTimeAsync(150)
     expect(vi.getTimerCount()).toBe(1)
     const sent = channel.sent.length
@@ -765,7 +765,7 @@ describe('when the connection ends over WebRTC', () => {
 
   it('leaves no fade running once the connection has ended', async () => {
     const { channel } = await playing()
-    channel.deliver({ type: 'speaking', utterance: 1 })
+    channel.deliver({ type: 'speaking', utterance: 1, sent_ms: 0 })
     channel.deliver({ type: 'stop', utterance: 1 })
     await vi.advanceTimersByTimeAsync(10)
     expect(vi.getTimerCount()).toBe(1)
@@ -895,13 +895,13 @@ describe('remote playback', () => {
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
-    playback.speaking(1)
+    playback.speaking(1, 0)
     await Promise.resolve()
     counts.emitted += 9600
     counts.packets += 10
     counts.concealed += 480
     await playback.stop(1)
-    playback.speaking(2)
+    playback.speaking(2, 200)
     await Promise.resolve()
     counts.emitted += 4800
     counts.packets += 5
@@ -918,7 +918,7 @@ describe('remote playback', () => {
     const playback = new RemotePlayback(() => {})
     playback.start({} as MediaStream, receiver({ emitted: 0, packets: 0, concealed: 0 }))
     const element = (playback as unknown as { element: Element }).element
-    playback.speaking(1)
+    playback.speaking(1, 0)
     await playback.stop(1)
     expect([element.volume, element.muted]).toEqual([1, false])
     await vi.advanceTimersByTimeAsync(30)
@@ -926,30 +926,29 @@ describe('remote playback', () => {
     expect(element.muted).toBe(false)
     await vi.advanceTimersByTimeAsync(30)
     expect([element.volume, element.muted]).toEqual([0, true])
-    playback.speaking(2)
+    playback.speaking(2, 0)
     expect([element.volume, element.muted]).toEqual([1, false])
     await playback.stop(2)
     await vi.advanceTimersByTimeAsync(20)
-    playback.speaking(3)
+    playback.speaking(3, 0)
     await vi.advanceTimersByTimeAsync(100)
     expect([element.volume, element.muted]).toEqual([1, false])
   })
 
-  it('reports a natural end once the emitted count stops moving', async () => {
+  it('reports a natural end once the count reaches the stamp', async () => {
     vi.useFakeTimers()
     vi.stubGlobal('Audio', Element)
     const counts = { emitted: 0, packets: 0, concealed: 0 }
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
-    playback.speaking(1)
+    playback.speaking(1, 0)
     counts.emitted = 4800
-    const ending = playback.silent(1)
+    const ending = playback.silent(1, 200)
     await vi.advanceTimersByTimeAsync(150)
+    expect(reports).toEqual([])
     counts.emitted = 9600
     await vi.advanceTimersByTimeAsync(100)
-    expect(reports).toEqual([])
-    await vi.advanceTimersByTimeAsync(50)
     await ending
     expect(reports).toEqual([[1, 200]])
   })
@@ -958,8 +957,8 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 1800 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1660, (p) => p.silent(1)],
+        [0, (p) => p.speaking(1, 0)],
+        [1660, (p) => p.silent(1, 1800)],
       ],
       4000
     )
@@ -970,8 +969,8 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 150, ms: 100 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1, (p) => p.silent(1)],
+        [0, (p) => p.speaking(1, 0)],
+        [1, (p) => p.silent(1, 100)],
       ],
       2000
     )
@@ -985,10 +984,10 @@ describe('remote playback', () => {
         { at: 5000, ms: 1800 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [6660, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [6660, (p) => p.silent(2, 2100)],
       ],
       9000
     )
@@ -1003,10 +1002,10 @@ describe('remote playback', () => {
         { at: 5150, ms: 100 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [5001, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [5001, (p) => p.silent(2, 400)],
       ],
       9000
     )
@@ -1021,12 +1020,12 @@ describe('remote playback', () => {
         { at: 7000, ms: 1800 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [5260, (p) => p.silent(2)],
-        [7000, (p) => p.speaking(3)],
-        [8660, (p) => p.silent(3)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [5260, (p) => p.silent(2, 700)],
+        [7000, (p) => p.speaking(3, 700)],
+        [8660, (p) => p.silent(3, 2500)],
       ],
       10000
     )
@@ -1038,26 +1037,12 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 4020 }],
       [
-        [0, (p) => p.speaking(1)],
-        [3880, (p) => p.silent(1)],
+        [0, (p) => p.speaking(1, 0)],
+        [3880, (p) => p.silent(1, 4020)],
       ],
       4500
     )
     expect(reports.get(1)).toBe(4020)
-  })
-
-  it('a report does not wait for ever on packets that arrived and never play', async () => {
-    const reports = await play(
-      [{ at: 0, ms: 300, unplayed: 3 }],
-      [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-      ],
-      1900
-    )
-    expect(reports.has(1)).toBe(false)
-    await vi.advanceTimersByTimeAsync(500)
-    expect(reports.get(1)).toBe(300)
   })
 
   it('a played utterance with lost packets reads whole', async () => {
@@ -1067,10 +1052,10 @@ describe('remote playback', () => {
         { at: 5000, ms: 1800, lost: 2 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [6660, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [6660, (p) => p.silent(2, 2100)],
       ],
       9000
     )
@@ -1081,10 +1066,10 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 6000, lost: 2 }],
       [
-        [0, (p) => p.speaking(1)],
-        [3860, (p) => p.silent(1)],
-        [3880, (p) => p.speaking(2)],
-        [5860, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [3860, (p) => p.silent(1, 4000)],
+        [3880, (p) => p.speaking(2, 4000)],
+        [5860, (p) => p.silent(2, 6000)],
       ],
       8000
     )
@@ -1099,10 +1084,10 @@ describe('remote playback', () => {
         { at: 5000, ms: 1800, discarded: 2 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [6660, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [6660, (p) => p.silent(2, 2100)],
       ],
       9000
     )
@@ -1116,11 +1101,11 @@ describe('remote playback', () => {
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
-    playback.speaking(1)
+    playback.speaking(1, 0)
     counts.emitted = 9600
     counts.packets = 10
     counts.lost = 1
-    const ending = playback.silent(1)
+    const ending = playback.silent(1, 220)
     await vi.advanceTimersByTimeAsync(100)
     counts.packets = 11
     counts.lost = 0
@@ -1136,7 +1121,7 @@ describe('remote playback', () => {
     const reports: Array<[number, number]> = []
     const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
     playback.start({} as MediaStream, receiver(counts))
-    playback.speaking(1)
+    playback.speaking(1, 0)
     await Promise.resolve()
     counts.emitted = 9600
     counts.packets = 11
@@ -1152,11 +1137,11 @@ describe('remote playback', () => {
         { at: 5000, ms: 4000 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [6860, (p) => p.silent(2)],
-        [6880, (p) => p.speaking(3)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [6860, (p) => p.silent(2, 2300)],
+        [6880, (p) => p.speaking(3, 2300)],
         [8020, (p) => p.stop(3)],
       ],
       9000
@@ -1169,10 +1154,10 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 4000 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1860, (p) => p.silent(1)],
-        [1880, (p) => p.speaking(2)],
-        [3860, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [1860, (p) => p.silent(1, 2000)],
+        [1880, (p) => p.speaking(2, 2000)],
+        [3860, (p) => p.silent(2, 4000)],
       ],
       6000
     )
@@ -1185,10 +1170,10 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 2000 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1860, (p) => p.silent(1)],
-        [1880, (p) => p.speaking(2)],
-        [1890, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [1860, (p) => p.silent(1, 2000)],
+        [1880, (p) => p.speaking(2, 2000)],
+        [1890, (p) => p.silent(2, 2000)],
       ],
       4000
     )
@@ -1199,9 +1184,9 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 4000 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1860, (p) => p.silent(1)],
-        [1880, (p) => p.speaking(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [1860, (p) => p.silent(1, 2000)],
+        [1880, (p) => p.speaking(2, 2000)],
       ],
       2200
     )
@@ -1212,10 +1197,10 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 4000 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1860, (p) => p.silent(1)],
-        [1881, (p) => p.speaking(2)],
-        [3860, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [1860, (p) => p.silent(1, 2000)],
+        [1881, (p) => p.speaking(2, 2000)],
+        [3860, (p) => p.silent(2, 4000)],
       ],
       6000
     )
@@ -1230,10 +1215,10 @@ describe('remote playback', () => {
         { at: 5000, ms: 1800 },
       ],
       [
-        [40, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5150, (p) => p.speaking(2)],
-        [6660, (p) => p.silent(2)],
+        [40, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5150, (p) => p.speaking(2, 300)],
+        [6660, (p) => p.silent(2, 2100)],
       ],
       9000
     )
@@ -1248,9 +1233,9 @@ describe('remote playback', () => {
         { at: 1020, ms: 1000 },
       ],
       [
-        [0, (p) => p.speaking(1)],
+        [0, (p) => p.speaking(1, 0)],
         [1000, (p) => p.stop(1)],
-        [1020, (p) => p.speaking(2)],
+        [1020, (p) => p.speaking(2, 1100)],
         [1500, (p) => p.stop(2)],
       ],
       3000
@@ -1267,10 +1252,10 @@ describe('remote playback', () => {
         { at: 6000, ms: 1800 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
         [5000, (p) => p.stop(2)],
-        [6000, (p) => p.speaking(3)],
+        [6000, (p) => p.speaking(3, 360)],
         [7000, (p) => p.stop(3)],
       ],
       8000
@@ -1282,10 +1267,10 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 4000 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1880, (p) => p.speaking(2)],
-        [2500, (p) => p.silent(1)],
-        [3860, (p) => p.silent(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [1880, (p) => p.speaking(2, 2000)],
+        [2500, (p) => p.silent(1, 2000)],
+        [3860, (p) => p.silent(2, 4000)],
       ],
       6000
     )
@@ -1297,9 +1282,9 @@ describe('remote playback', () => {
     const reports = await play(
       [{ at: 0, ms: 4000 }],
       [
-        [0, (p) => p.speaking(1)],
-        [1860, (p) => p.silent(1)],
-        [1880, (p) => p.speaking(2)],
+        [0, (p) => p.speaking(1, 0)],
+        [1860, (p) => p.silent(1, 2000)],
+        [1880, (p) => p.speaking(2, 2000)],
         [1920, (p) => p.stop(2)],
       ],
       3000
@@ -1315,12 +1300,12 @@ describe('remote playback', () => {
         { at: 5000, ms: 4000 },
       ],
       [
-        [0, (p) => p.speaking(1)],
-        [160, (p) => p.silent(1)],
-        [5000, (p) => p.speaking(2)],
-        [6860, (p) => p.silent(2)],
-        [6880, (p) => p.speaking(3)],
-        [8860, (p) => p.silent(3)],
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [5000, (p) => p.speaking(2, 300)],
+        [6860, (p) => p.silent(2, 2300)],
+        [6880, (p) => p.speaking(3, 2300)],
+        [8860, (p) => p.silent(3, 4300)],
       ],
       11000
     )
@@ -1330,14 +1315,148 @@ describe('remote playback', () => {
     expect(reports.get(3)).toBeLessThanOrEqual(2020)
   })
 
+  it('a speaking handled late changes neither edge', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 3600 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1980, (p) => p.speaking(2, 1800)],
+        [1990, (p) => p.silent(1, 1800)],
+        [3460, (p) => p.silent(2, 3600)],
+      ],
+      4500
+    )
+    expect(reports.get(1)).toBe(1800)
+    expect(reports.get(2)).toBe(1800)
+  })
+
+  it('a cut reads from the stamp, however late the speaking was handled', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 3600 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1980, (p) => p.speaking(2, 1800)],
+        [2100, (p) => p.stop(2)],
+      ],
+      2500
+    )
+    expect(reports.get(1)).toBe(1800)
+    expect(reports.get(2)).toBe(2080 - 1800)
+  })
+
+  it('a lost last packet reads whole, a poll after the count stops', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 1780 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1640, (p) => p.silent(1, 1800)],
+      ],
+      1800 + 300
+    )
+    expect(reports.get(1)).toBe(1800)
+  })
+
+  it('lost first packets leave every utterance whole, without waiting out the stall', async () => {
+    const script: Array<[number, (playback: RemotePlayback) => unknown]> = [
+      [0, (p) => p.speaking(1, 0)],
+      [1640, (p) => p.silent(1, 1800)],
+      [5000, (p) => p.speaking(2, 1800)],
+      [6640, (p) => p.silent(2, 3600)],
+    ]
+    const first = await play(
+      [
+        { at: 0, ms: 1760 },
+        { at: 5000, ms: 1800 },
+      ],
+      script.slice(0, 2),
+      1780 + 300
+    )
+    expect(first.get(1)).toBe(1800)
+    const both = await play(
+      [
+        { at: 0, ms: 1760 },
+        { at: 5000, ms: 1800 },
+      ],
+      script,
+      6820 + 300
+    )
+    expect(both.get(1)).toBe(1800)
+    expect(both.get(2)).toBe(1800)
+  })
+
+  it('a count stalled far from the end waits the stall out and reads what it reached', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 900 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [760, (p) => p.silent(1, 1800)],
+      ],
+      920 + 1900
+    )
+    expect(reports.has(1)).toBe(false)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(reports.get(1)).toBe(900)
+  })
+
+  it('a count stalled far from the end reads whole once the next voice carries it past', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1700 },
+        { at: 3000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1640, (p) => p.silent(1, 1800)],
+        [3000, (p) => p.speaking(2, 1800)],
+      ],
+      3000
+    )
+    expect(reports.has(1)).toBe(false)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(reports.get(1)).toBe(1800)
+  })
+
+  it('a late silent for an utterance a cut took changes nothing', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('Audio', Element)
+    const counts = { emitted: 0, packets: 0, concealed: 0 }
+    const reports: Array<[number, number]> = []
+    const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
+    playback.start({} as MediaStream, receiver(counts))
+    playback.speaking(1, 0)
+    counts.emitted = 400 * 48
+    await playback.stop(1)
+    playback.speaking(2, 500)
+    await playback.silent(1, 900)
+    counts.emitted = 700 * 48
+    await playback.stop(2)
+    expect(reports).toEqual([
+      [1, 400],
+      [2, 200],
+    ])
+  })
+
+  it('a silent never moves an end the next speaking already set', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 2200 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1700, (p) => p.speaking(2, 1800)],
+        [1710, (p) => p.silent(1, 2000)],
+      ],
+      2400
+    )
+    expect(reports.get(1)).toBe(1800)
+  })
+
   it('ignores a speaking at or below the last stop', async () => {
     const reports = await play(
       [{ at: 0, ms: 1000 }],
       [
-        [0, (p) => p.speaking(1)],
+        [0, (p) => p.speaking(1, 0)],
         [500, (p) => p.stop(3)],
-        [510, (p) => p.speaking(2)],
-        [520, (p) => p.silent(2)],
+        [510, (p) => p.speaking(2, 500)],
+        [520, (p) => p.silent(2, 500)],
       ],
       2000
     )

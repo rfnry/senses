@@ -1,15 +1,11 @@
-type Counts = { emitted: number; arrived: number }
-type Spoken = {
-  start: Promise<number | null>
-  end: Promise<number | null> | null
-  slack: number
-}
+type Spoken = { start: number; end: number | null }
 
 const POLL_MS = 100
 const FADE_MS = 60
 const FADE_STEPS = 6
 const PACKET_MS = 20
 const STALL_POLLS = 20
+const TAIL_MS = 60
 
 const counted = (packets: unknown) => (typeof packets === 'number' ? Math.max(0, packets) : 0)
 
@@ -17,8 +13,6 @@ export class RemotePlayback {
   private element: HTMLAudioElement | null = null
   private receiver: RTCRtpReceiver | null = null
   private fenced = 0
-  private rest: Counts = { emitted: 0, arrived: 0 }
-  private quiet = true
   private fading: ReturnType<typeof setInterval> | null = null
   private readonly spoken = new Map<number, Spoken>()
   private readonly reported = new Set<number>()
@@ -34,7 +28,7 @@ export class RemotePlayback {
     this.element = element
   }
 
-  speaking(utterance: number): void {
+  speaking(utterance: number, sentMs: number): void {
     if (utterance <= this.fenced || this.spoken.has(utterance) || this.reported.has(utterance))
       return
     this.stopFading()
@@ -42,15 +36,12 @@ export class RemotePlayback {
       this.element.volume = 1
       this.element.muted = false
     }
-    const start = this.quiet ? Promise.resolve(this.rest.emitted) : this.edge()
-    for (const earlier of this.spoken.values()) earlier.end ??= start
-    this.spoken.set(utterance, { start, end: null, slack: this.quiet ? 0 : PACKET_MS })
-    this.quiet = false
+    for (const earlier of this.spoken.values()) earlier.end ??= sentMs
+    this.spoken.set(utterance, { start: sentMs, end: null })
   }
 
   async stop(utterance: number): Promise<void> {
     this.fenced = Math.max(this.fenced, utterance)
-    this.quiet = false
     this.fadeOut()
     if (!this.spoken.has(utterance) && !this.reported.has(utterance)) {
       this.reported.add(utterance)
@@ -62,24 +53,22 @@ export class RemotePlayback {
     for (const number of ending) await this.finish(number)
   }
 
-  async silent(utterance: number): Promise<void> {
+  async silent(utterance: number, sentMs: number): Promise<void> {
+    const spoken = this.spoken.get(utterance)
+    if (spoken === undefined) return
+    spoken.end ??= sentMs
+    const end = spoken.end
     let last: number | null = null
     let idle = 0
     while (this.spoken.has(utterance)) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS))
-      const [now, end] = await Promise.all([this.counts(), this.spoken.get(utterance)?.end])
-      const spoken = this.spoken.get(utterance)
-      if (spoken === undefined) return
+      const now = await this.position()
+      if (!this.spoken.has(utterance)) return
       if (now === null) return this.finish(utterance)
-      idle = now.emitted === last ? idle + 1 : 0
-      const stalled = idle > 0 && (now.emitted >= this.position(now) || idle >= STALL_POLLS)
-      if (stalled) {
-        this.rest = now
-        this.quiet = this.spoken.size === 1
-      }
-      if (stalled || (typeof end === 'number' && now.emitted >= end))
-        return this.finish(utterance, spoken.slack)
-      last = now.emitted
+      idle = now === last ? idle + 1 : 0
+      if (now >= end || (idle > 0 && end - now <= TAIL_MS)) return this.finish(utterance, true)
+      if (idle >= STALL_POLLS) return this.finish(utterance)
+      last = now
     }
   }
 
@@ -109,41 +98,29 @@ export class RemotePlayback {
     this.fading = null
   }
 
-  private position(now: Counts): number {
-    return this.rest.emitted + now.arrived - this.rest.arrived
-  }
-
-  private async edge(): Promise<number | null> {
-    const now = await this.counts()
-    return now && this.position(now)
-  }
-
-  private async finish(utterance: number, slack = 0): Promise<void> {
+  private async finish(utterance: number, whole = false): Promise<void> {
     const spoken = this.spoken.get(utterance)
     if (spoken === undefined) return
     this.spoken.delete(utterance)
     this.reported.add(utterance)
-    const [start, end, now] = await Promise.all([spoken.start, spoken.end, this.counts()])
-    if (start === null || now === null) return this.report(utterance, 0)
-    const played = Math.min(now.emitted, end ?? now.emitted) - start
-    this.report(utterance, played > 0 ? Math.round(played + slack) : 0)
+    const { start, end } = spoken
+    if (whole && end !== null) return this.report(utterance, end - start)
+    const now = await this.position()
+    if (now === null) return this.report(utterance, 0)
+    this.report(utterance, Math.max(0, Math.round(Math.min(now, end ?? now) - start)))
   }
 
-  private async counts(): Promise<Counts | null> {
+  private async position(): Promise<number | null> {
     const stats = await this.receiver?.getStats().catch(() => null)
     if (stats === null || stats === undefined) return null
     const entries = Array.from(stats.values()) as Array<Record<string, unknown>>
     const inbound = entries.find((entry) => entry.type === 'inbound-rtp')
-    if (inbound === undefined) return { emitted: 0, arrived: 0 }
-    const { jitterBufferEmittedCount: emitted, packetsReceived: packets, codecId } = inbound
-    if (typeof emitted !== 'number' || typeof packets !== 'number') return null
+    if (inbound === undefined) return 0
+    const { jitterBufferEmittedCount: emitted, codecId } = inbound
+    if (typeof emitted !== 'number') return null
     const codec = entries.find((entry) => entry.id === codecId)
     const rate = typeof codec?.clockRate === 'number' ? codec.clockRate : 48000
-    const lost = counted(inbound.packetsLost)
-    const concealed = lost + counted(inbound.packetsDiscarded)
-    return {
-      emitted: (emitted * 1000) / rate + concealed * PACKET_MS,
-      arrived: (packets + lost) * PACKET_MS,
-    }
+    const concealed = counted(inbound.packetsLost) + counted(inbound.packetsDiscarded)
+    return (emitted * 1000) / rate + concealed * PACKET_MS
   }
 }

@@ -729,13 +729,12 @@ far as the browser can tell. Over a WebSocket a stop counts up to `currentTime` 
 short of the speakers, so a cut there does not subtract the output latency, and it cannot see a
 muted output or an element the browser would not play: those count as played. A packet lost or too
 late to play also counts, because the person heard it concealed and one lost packet should not cost
-a sentence; only a lost final packet still does, about 1 loss in 90 on a 1.8-second utterance, since
-nothing shows it was lost until the next packet comes. Concealment only covers short losses: a long
-outage counts the same way, so the reply reads whole and `heard` claims words the person never got.
-The line between utterances played back to back is what had arrived when the page handled the
-second's `speaking`: within a 20 ms packet on an idle page, and 100 ms or more off on a busy one. A
-natural end gives one packet to the utterance, so a full play on an idle page reads as whole; a cut
-does not.
+a sentence. Concealment only covers short losses: a long outage counts the same way, so the reply
+reads whole and `heard` claims words the person never got. The line between utterances is the
+server's stamp, exact on a busy page. A count that stops within 60 ms of the end reads whole, so a
+lost final packet does not shorten a play. Packets lost at the very start of a session are never
+counted: each cut in that session reads short by them, and more than three of them also delay each
+natural end by up to two seconds, after which it reads short by them unless more voice came first.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,

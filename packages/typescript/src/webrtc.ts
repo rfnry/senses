@@ -11,7 +11,7 @@ import {
   Listeners,
   type Senses,
 } from './room.js'
-import { hello, parseControl, played } from './wire.js'
+import { hello, parseControl, played, sentMs } from './wire.js'
 
 function gathered(pc: RTCPeerConnection): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve()
@@ -54,8 +54,8 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       const frame = parseControl(String(message.data))
       if (frame.type === 'ready') resolve()
       else if (frame.type === 'error') reject(new SensesException(frame.message))
-      else if (frame.type === 'speaking') remote.speaking(frame.utterance)
-      else if (frame.type === 'silent') void remote.silent(frame.utterance)
+      else if (frame.type === 'speaking') remote.speaking(frame.utterance, sentMs(frame))
+      else if (frame.type === 'silent') void remote.silent(frame.utterance, sentMs(frame))
       else if (frame.type === 'stop') void remote.stop(frame.utterance)
       else if (frame.type === 'event') ending.tell(frame.event)
     }
