@@ -206,7 +206,7 @@ class Session:
     async def __aexit__(self, *exc: object) -> None: ...
 ```
 
-One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error.
+One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error, and when that start is cancelled, it closes the session with reason `closed`.
 Raises `ConfigurationError` when a live model is given with transcription or speech models, `instructions` without a live model, or a `window`, `window_bytes` or `tool_timeout` that is not positive.
 Raises `InputError` when the transport's scope is empty or its identity does not fit.
 
@@ -216,8 +216,8 @@ Raises `InputError` when the transport's scope is empty or its identity does not
 async def start(self, tools: ToolsLike | None = None, *, inform: Collection[str] = ()) -> None: ...
 ```
 
-Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on. The tools named in `inform` answer their calls the way `inform` speaks: the result goes back to the model with `respond=False`, and it is not asked to reply. A start that raises leaves the session open, so it can be tried again; call `close()` after one you will not retry.
-Raises `TransportError` when the session is closed, or closes while the live model opens; the connection it opened is then closed.
+Opens the live model with the definitions of `tools` and the instructions, starts hearing, seeing and speaking, and tells the client the session is ready. `tools` is any `Tools`, or any object with `definitions()` and `dispatch()`; it is fixed from then on. The tools named in `inform` answer their calls the way `inform` speaks: the result goes back to the model with `respond=False`, and it is not asked to reply. A start that raises before it sends `ready` leaves the session open, so it can be tried again; call `close()` after one you will not retry.
+Raises `TransportError` when the session is closed, or closes while the live model opens; the connection it opened is then closed. A `ready` the transport fails closes the session with reason `failed`, and raises `TransportError` too.
 Raises `ConfigurationError` when the session has already started, `tools` is given without a live model, or `inform` names something that is not one of the tools.
 Raises `InputError` when a tool definition is not valid: `session: a tool definition is not valid`.
 

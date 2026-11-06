@@ -10,7 +10,7 @@ from rfnry_senses.events import Closed, Heard, Silent, Speaking, TurnEnded
 from rfnry_senses.session import Session
 from rfnry_senses.transport import Loopback
 
-from .fakes import ANA, HOST, ScriptedTranscription, Tone, next_of, pcm, until
+from .fakes import ANA, HOST, ScriptedTranscription, SlowLoopback, Tone, next_of, pcm, until
 
 
 def cascaded(**kwargs: Any) -> tuple[Session, Loopback, ScriptedTranscription, Tone]:
@@ -245,3 +245,17 @@ async def test_a_transport_send_failure_closes_a_cascaded_session_as_failed() ->
             await s.say("Hello there.", triggered_by=HOST)
         closed = await next_of(events, Closed)
     assert closed.reason == "failed" and closed.triggered_by is None
+
+
+async def test_a_say_given_up_on_while_queued_is_never_spoken() -> None:
+    link, tts = SlowLoopback(ANA, "acme", delay=0.05), Tone()
+    async with Session(link, speech=tts) as s:
+        first = asyncio.create_task(s.say("First one.", triggered_by=HOST))
+        await until(lambda: len(link.audio) > 0)
+        second = asyncio.create_task(s.say("Second one.", triggered_by=HOST))
+        await asyncio.sleep(0.001)
+        second.cancel()
+        await asyncio.gather(second, return_exceptions=True)
+        await asyncio.wait_for(first, 1)
+        await asyncio.wait_for(s.quiet(), 1)
+    assert second.cancelled() and tts.spoken == ["First one."]

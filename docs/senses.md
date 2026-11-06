@@ -208,8 +208,10 @@ vendors take tool definitions when their session opens. They are given to `start
 `Session`, so a tool can hold the session it runs in ([Two minds](#two-minds)). `async with` closes
 the session at the end, and starts it without tools if it has not started; when that start fails, it
 closes the session as `failed`, so the client is told and the transport closes, and raises the error.
-A `start` you call yourself leaves the session open when it fails, to be tried again: `close` it
-when you will not. When the model calls a
+A start cancelled there, by a deadline or a handler torn down, closes it as `closed`. A `start` you
+call yourself that raises before it sends `ready` leaves the session open, to be tried again: `close`
+it when you will not. A transport that fails the `ready` closes the session as `failed`, and there
+is nothing left to try. When the model calls a
 tool, senses dispatches the call through `tools` — any family `Tools`: an engine agent as a tool, rfnry-thread's
 `ThreadTools`, rfnry-memory's `MemoryTools`, your own — and submits the result. A string or a list of
 parts goes back as it is, a dict as JSON; an exception goes back as an error the model reads,
@@ -275,8 +277,9 @@ silence. When the stream reports `UtteranceEnd`, the utterance's words become a 
 `say` synthesizes the text sentence by sentence, so the first sentence plays while the rest is
 still being made. A sentence ends at `. ! ? ؟ ।` followed by whitespace, or at `。 ！ ？` with or
 without it; a chunk ending in a bare `.` waits for the next, so `3.` then `5 apples. ` is one
-sentence. Calls queue: a second `say` speaks after the first, and a person talking over the voice
-drops the queued ones before the cut waits on the far end. Each model is optional — a
+sentence. Calls queue: a second `say` speaks after the first, a person talking over the voice
+drops the queued ones before the cut waits on the far end, and one given up on while it waits is
+never spoken. A stream that is dropped this way is closed unread. Each model is optional — a
 session with only `speech=` can announce and never listens; one with only `transcription=` listens
 and never speaks, and `say` there is a `ConfigurationError`.
 

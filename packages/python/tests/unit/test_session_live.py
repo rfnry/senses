@@ -1176,6 +1176,20 @@ async def test_a_waiting_say_raises_transport_error_when_a_send_fails() -> None:
         await asyncio.wait_for(saying, 1)
 
 
+async def test_an_invalid_tool_definition_is_one_line() -> None:
+    class Broken:
+        def definitions(self) -> list[dict[str, Any]]:
+            return [{"name": "broken"}]
+
+        async def dispatch(self, name: str, args: dict[str, Any]) -> str:
+            return ""
+
+    s = session(Loopback(ANA, "acme"), ScriptedLive())
+    with pytest.raises(InputError) as raised:
+        await s.start(tools=Broken())
+    assert "\n" not in str(raised.value) and "description" in str(raised.value)
+
+
 async def test_an_invalid_tool_definition_raises_input_error() -> None:
     class Broken:
         def definitions(self) -> list[dict[str, Any]]:

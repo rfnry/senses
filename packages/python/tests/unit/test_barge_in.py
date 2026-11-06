@@ -10,6 +10,21 @@ from rfnry_senses.transport import Loopback
 from .fakes import ANA, HOST, ScriptedTranscription, SlowLoopback, Tone, next_of, until
 
 
+class Stream:
+    def __init__(self) -> None:
+        self.closes = 0
+
+    def __aiter__(self) -> Stream:
+        return self
+
+    async def __anext__(self) -> str:
+        await asyncio.sleep(0.01)
+        return "Hello. "
+
+    async def aclose(self) -> None:
+        self.closes += 1
+
+
 async def test_the_person_talking_over_the_voice_cuts_it_and_the_queue() -> None:
     link, stt, tts = Loopback(ANA, "acme"), ScriptedTranscription(), Tone()
     tts.held = "Three four."
@@ -102,6 +117,79 @@ async def test_a_barge_in_drops_the_queue_before_the_cut_waits(delay: float | No
     assert said_queued.heard == "" and said_queued.interrupted
     assert "Five." not in tts.spoken
     assert [c["utterance"] for c in link.controls if c["type"] == "speaking"] == [1]
+
+
+async def test_a_queued_stream_a_barge_in_drops_is_closed() -> None:
+    link, stt, tts = SlowLoopback(ANA, "acme", delay=None), ScriptedTranscription(), Tone()
+    playing, queued = Stream(), Stream()
+    async with Session(link, transcription=stt, speech=tts) as s:
+        first = asyncio.create_task(s.say(playing, triggered_by=HOST))
+        await until(lambda: len(link.audio) > 0)
+        second = asyncio.create_task(s.say(queued, triggered_by=HOST))
+        await asyncio.sleep(0.001)
+        stt.hear("wait", final=False, end=False)
+        await asyncio.wait_for(asyncio.gather(first, second), 2)
+        await until(lambda: queued.closes == 1)
+    assert playing.closes == 1 and queued.closes == 1
+
+
+async def test_a_stream_said_while_muted_is_closed() -> None:
+    link, tts = Loopback(ANA, "acme"), Tone()
+    stream = Stream()
+    async with Session(link, speech=tts) as s:
+        await s.mute(triggered_by=HOST)
+        said = await s.say(stream, triggered_by=HOST)
+    assert said.interrupted and stream.closes == 1
+
+
+async def test_a_queued_stream_a_mute_drops_is_closed() -> None:
+    link, tts = SlowLoopback(ANA, "acme", delay=None), Tone()
+    playing, queued = Stream(), Stream()
+    async with Session(link, speech=tts) as s:
+        first = asyncio.create_task(s.say(playing, triggered_by=HOST))
+        await until(lambda: len(link.audio) > 0)
+        second = asyncio.create_task(s.say(queued, triggered_by=HOST))
+        await asyncio.sleep(0.001)
+        await s.mute(triggered_by=HOST)
+        await asyncio.wait_for(asyncio.gather(first, second), 2)
+        await until(lambda: queued.closes == 1)
+    assert queued.closes == 1
+
+
+async def test_a_stream_still_queued_when_the_session_closes_is_closed() -> None:
+    link, tts = SlowLoopback(ANA, "acme", delay=None), Tone()
+    playing, queued = Stream(), Stream()
+    s = Session(link, speech=tts)
+    await s.start()
+    first = asyncio.create_task(s.say(playing, triggered_by=HOST))
+    await until(lambda: len(link.audio) > 0)
+    second = asyncio.create_task(s.say(queued, triggered_by=HOST))
+    await asyncio.sleep(0.001)
+    await s.close()
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert queued.closes == 1
+
+
+class BreaksOnClose(Stream):
+    async def aclose(self) -> None:
+        raise RuntimeError("the stream broke")
+
+
+async def test_a_dropped_stream_that_fails_to_close_is_logged_and_ends_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    link, stt, tts = SlowLoopback(ANA, "acme", delay=None), ScriptedTranscription(), Tone()
+    async with Session(link, transcription=stt, speech=tts) as s:
+        first = asyncio.create_task(s.say(Stream(), triggered_by=HOST))
+        await until(lambda: len(link.audio) > 0)
+        second = asyncio.create_task(s.say(BreaksOnClose(), triggered_by=HOST))
+        await asyncio.sleep(0.001)
+        stt.hear("wait", final=False, end=False)
+        await asyncio.wait_for(asyncio.gather(first, second), 2)
+        await asyncio.sleep(0.01)
+        said = await s.say("Still here.", triggered_by=HOST)
+    assert said.heard == "Still here."
+    assert "session: a text stream failed to close: the stream broke" in caplog.messages
 
 
 async def test_the_queue_ends_before_the_interruption_is_reported() -> None:

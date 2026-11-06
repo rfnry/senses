@@ -248,7 +248,9 @@ class Session:
                 else []
             )
         except ValidationError as exc:
-            raise InputError(f"session: a tool definition is not valid: {exc}") from exc
+            raise InputError(
+                f"session: a tool definition is not valid: {exc.errors(include_url=False, include_input=False)}"
+            ) from exc
         names = {spec.name for spec in specs}
         for name in inform:
             if name not in names:
@@ -284,6 +286,9 @@ class Session:
         if not self._opened:
             try:
                 await self.start()
+            except asyncio.CancelledError:
+                await self.close()
+                raise
             except Exception as exc:
                 await self._fail(exc)
                 raise
@@ -312,6 +317,7 @@ class Session:
             source=text,
         )
         if self._muted:
+            await self._release(u)
             await self._finish(u, "", interrupted=True)
             return await done
         if self._connection is not None:
@@ -484,6 +490,8 @@ class Session:
         self._causes.clear()
         self._held.clear()
         self._waiting.clear()
+        for u in queued:
+            self._let_go(u)
         return self._cut_off(dict.fromkeys(queued, ""))
 
     def _unblock(self, u: Utterance) -> None:
@@ -695,10 +703,16 @@ class Session:
         if not self._responding:
             raise ModelError("session: a response ended before it started")
         self._responding = False
-        if self._utterance is not None:
-            self._spawn(self._conclude(self._utterance))
+        u = self._utterance
+        events: list[Event] = []
+        if u is not None and u.spoke:
+            self._spawn(self._conclude(u))
+        elif u is not None:
+            self._utterance = None
+            events = self._over(u, "", interrupted=False)
         self._next()
         self._settle()
+        await self._report_all(events)
 
     def _start(self, u: Utterance) -> None:
         u.number = next(self._numbers)
@@ -918,7 +932,8 @@ class Session:
         if not self._waiting:
             return
         u = self._waiting.popleft()
-        if self._muted:
+        if self._muted or (u.done is not None and u.done.cancelled()):
+            self._let_go(u)
             await self._finish(u, "", interrupted=True)
             return
         self._start(u)
@@ -955,10 +970,21 @@ class Session:
             return
         finally:
             await pieces.aclose()
-            close = getattr(u.source, "aclose", None)
-            if close is not None:
-                await close()
+            await self._release(u)
         await self._conclude(u)
+
+    def _let_go(self, u: Utterance) -> None:
+        if not isinstance(u.source, str):
+            self._spawn(self._release(u))
+
+    async def _release(self, u: Utterance) -> None:
+        source, u.source = u.source, ""
+        close = getattr(source, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception as exc:
+                logger.warning("session: a text stream failed to close: %s", exc)
 
     async def _abandon(self, u: Utterance, error: Exception) -> None:
         if u.finished:
@@ -1020,8 +1046,10 @@ class Session:
         message: str | None,
         cause: Identity | None,
     ) -> None:
-        if self._stopping:
-            _, left = await asyncio.wait(self._stopping, timeout=CLOSE_GRACE)
+        streams = [asyncio.create_task(self._release(u)) for u in self._waiting]
+        stopping = {*self._stopping, *streams}
+        if stopping:
+            _, left = await asyncio.wait(stopping, timeout=CLOSE_GRACE)
             if left:
                 logger.warning(
                     "session: %d tasks did not stop within %g s; the close goes on",

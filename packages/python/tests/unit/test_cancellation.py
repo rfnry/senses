@@ -9,6 +9,7 @@ from rfnry_senses.contracts import (
     AudioFrame,
     LiveAudio,
     LiveDone,
+    LiveFailed,
     LiveInterrupted,
     LiveSaid,
     LiveStarted,
@@ -741,6 +742,47 @@ async def test_a_mute_given_up_while_it_ends_the_queue_still_ends_all_of_it() ->
     assert all(said.interrupted and said.heard == "" for said in ended)
 
 
+class Blocking(ScriptedLive):
+    def __init__(self) -> None:
+        super().__init__()
+        self.opening = asyncio.Event()
+
+    async def open(self, *, tools: list[ToolSpec], instructions: str | None) -> ScriptedConnection:
+        self.opening.set()
+        await asyncio.sleep(30)
+        return self.connection
+
+
+async def test_a_cancelled_start_in_async_with_closes_the_transport() -> None:
+    live, link = Blocking(), Loopback(ANA, "acme")
+    s = Session(link, live=live)
+    seen, recorder = recording(s)
+
+    async def handler() -> None:
+        async with s:
+            raise AssertionError("the body runs only after a start")
+
+    running = asyncio.create_task(handler())
+    await asyncio.wait_for(live.opening.wait(), 1)
+    running.cancel()
+    await asyncio.gather(running, return_exceptions=True)
+    await asyncio.wait_for(recorder, 1)
+    assert running.cancelled() and link.closed
+    assert isinstance(seen[-1], Closed) and seen[-1].reason == "closed"
+    assert event("closed")(link.controls[-1])
+    with pytest.raises(TransportError, match="^session: the session is closed$"):
+        await s.start()
+
+
+async def test_a_deadline_on_a_start_in_async_with_closes_the_transport() -> None:
+    link = Loopback(ANA, "acme")
+    s = Session(link, live=Blocking())
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01), s:
+            raise AssertionError("the body runs only after a start")
+    assert link.closed
+
+
 class StopFails(SlowLoopback):
     async def send_control(self, control: dict[str, Any]) -> None:
         if control["type"] == "stop":
@@ -819,3 +861,16 @@ async def test_a_send_that_ignores_being_cancelled_strands_no_say(
     said = await asyncio.wait_for(asked, 1)
     connection.released.set()
     assert said.interrupted and said.heard == ""
+
+
+async def test_a_silent_response_overtaken_as_the_model_fails_still_ends_its_say() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = Session(link, live=live)
+    await s.start()
+    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    live.connection.emit(
+        LiveStarted(requested=True), LiveDone(), LiveStarted(), LiveFailed(message="gone")
+    )
+    said = await asyncio.wait_for(asked, 1)
+    assert said.heard == "" and not said.interrupted
