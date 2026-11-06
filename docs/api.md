@@ -768,8 +768,9 @@ async def accept_offer(sdp: str, *, identity: IdentityLike, scope: str, sample_r
 ```
 
 Answers the browser's SDP offer for the person and scope you name and returns the transport, with the answer in its `answer`. It lives in `rfnry_senses.webrtc` and needs the `webrtc` extra; `ice_servers` takes STUN and TURN servers in the shape of the browser's `iceServers`.
+The voice is Opus, which browsers offer first: an offer that lists another codec ahead of it is answered with Opus alone, and an offer without it, from a G.711 or G.722 peer, is refused.
 Raises `InputError` when `identity` does not fit or `scope` is empty.
-Raises `TransportError` when the offer cannot be answered.
+Raises `TransportError` when the offer has no Opus or cannot be answered.
 
 ### `WebRTCTransport`
 

@@ -2,6 +2,7 @@ import asyncio
 import fractions
 import itertools
 import json
+import math
 import struct
 import time
 from collections.abc import Callable
@@ -12,11 +13,17 @@ import pytest
 pytest.importorskip("aiortc")
 
 import av
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc import (
+    MediaStreamTrack,
+    RTCPeerConnection,
+    RTCRtpSender,
+    RTCSessionDescription,
+    VideoStreamTrack,
+)
 from aiortc.codecs.opus import OpusEncoder
 
 from rfnry_senses.contracts import AudioFrame
-from rfnry_senses.errors import InputError
+from rfnry_senses.errors import InputError, TransportError
 from rfnry_senses.events import Closed
 from rfnry_senses.models import Image
 from rfnry_senses.session import Session
@@ -47,7 +54,10 @@ class Silence(MediaStreamTrack):
 
 class Client:
     def __init__(
-        self, protocol: int = 1, played: Callable[[dict[str, Any]], int] | None = None
+        self,
+        protocol: int = 1,
+        played: Callable[[dict[str, Any]], int] | None = None,
+        codecs: tuple[str, ...] = (),
     ) -> None:
         self.played = played
         self.stamped: list[tuple[float, dict[str, Any]]] = []
@@ -57,6 +67,11 @@ class Client:
         self.audio: list[Any] = []
         self.pc.addTrack(Silence())
         self.pc.addTrack(VideoStreamTrack())
+        if codecs:
+            offered = RTCRtpSender.getCapabilities("audio").codecs
+            self.pc.getTransceivers()[0].setCodecPreferences(
+                [codec for name in codecs for codec in offered if codec.name.lower() == name]
+            )
         self.channel = self.pc.createDataChannel("senses")
 
         @self.channel.on("open")
@@ -277,6 +292,78 @@ async def test_speaking_and_silent_leave_with_their_audio() -> None:
 def stamp(frame: av.AudioFrame) -> int:
     assert frame.pts is not None
     return frame.pts
+
+
+def sine(ms: int, hz: int, rate: int) -> AudioFrame:
+    count = rate * ms // 1000
+    samples = (int(12000 * math.sin(2 * math.pi * hz * i / rate)) for i in range(count))
+    return AudioFrame(data=struct.pack(f"<{count}h", *samples), sample_rate=rate)
+
+
+def tone_share(frames: list[Any], hz: int) -> float:
+    heard: list[int] = []
+    for frame in frames:
+        channels = len(frame.layout.channels)
+        data = bytes(frame.planes[0])[: frame.samples * channels * 2]
+        heard += struct.unpack(f"<{len(data) // 2}h", data)[::channels]
+    turn = 2 * math.pi * hz / frames[0].sample_rate
+    real = sum(sample * math.cos(turn * i) for i, sample in enumerate(heard))
+    imaginary = sum(sample * math.sin(turn * i) for i, sample in enumerate(heard))
+    return 2 * (real**2 + imaginary**2) / len(heard) / sum(sample**2 for sample in heard)
+
+
+async def tone_heard_by(client: Client, answer_of: Any) -> float:
+    await client.pc.setRemoteDescription(RTCSessionDescription(sdp=answer_of.answer, type="answer"))
+    await until(lambda: client.channel.readyState == "open", timeout=10)
+    answer_of._voice.push(sine(1000, 1000, 48000))
+    answer_of._voice.finish()
+    await until(lambda: len(client.audio) >= 45, timeout=10)
+    return tone_share(client.audio, 1000)
+
+
+async def test_a_peer_offering_opus_first_hears_the_voice_clean() -> None:
+    client = Client()
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    try:
+        assert await tone_heard_by(client, link) > 0.9
+    finally:
+        await client.pc.close()
+        await link.close()
+
+
+async def test_an_offer_with_opus_behind_another_codec_gets_a_clean_opus_voice() -> None:
+    client = Client(codecs=("pcmu", "opus"))
+    link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
+    try:
+        assert await tone_heard_by(client, link) > 0.9
+        assert "opus/48000" in link.answer
+        assert "PCMU" not in link.answer
+    finally:
+        await client.pc.close()
+        await link.close()
+
+
+@pytest.mark.parametrize("codec", ["pcmu", "pcma", "g722"])
+async def test_an_offer_without_opus_is_refused(codec: str) -> None:
+    client = Client(codecs=(codec,))
+    try:
+        with pytest.raises(TransportError) as refused:
+            await accept_offer(await client.offer(), identity=ANA, scope="acme")
+        assert str(refused.value) == "webrtc: the offer has no opus audio"
+    finally:
+        await client.pc.close()
+
+
+async def test_an_offer_with_no_audio_is_refused_the_same_way() -> None:
+    pc = RTCPeerConnection()
+    pc.createDataChannel("senses")
+    await pc.setLocalDescription(await pc.createOffer())
+    try:
+        with pytest.raises(TransportError) as refused:
+            await accept_offer(pc.localDescription.sdp, identity=ANA, scope="acme")
+        assert str(refused.value) == "webrtc: the offer has no opus audio"
+    finally:
+        await pc.close()
 
 
 async def spoken(voice: _Voice, ms: int) -> list[int]:

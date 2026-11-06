@@ -16,6 +16,7 @@ from aiortc import (
     RTCDataChannel,
     RTCIceServer,
     RTCPeerConnection,
+    RTCRtpSender,
     RTCSessionDescription,
 )
 from aiortc.codecs.opus import OpusEncoder
@@ -235,6 +236,9 @@ class WebRTCTransport:
         self._refused = False
         self._cut: set[int] = set()
         self._pc.addTrack(_Encoded(self._voice))
+        self._pc.getTransceivers()[0].setCodecPreferences(
+            [c for c in RTCRtpSender.getCapabilities("audio").codecs if c.name == "opus"]
+        )
         self._inbox: asyncio.Queue[AudioFrame | Image | Played | None] = asyncio.Queue()
         self._channel: RTCDataChannel | None = None
         self._unsent: list[str] = []
@@ -405,6 +409,8 @@ async def accept_offer(
     person = as_identity(identity)
     if not scope:
         raise InputError("transport: scope is empty")
+    if "opus/48000" not in sdp.lower():
+        raise TransportError("webrtc: the offer has no opus audio")
     transport = WebRTCTransport(person, scope, sample_rate=sample_rate, ice_servers=ice_servers)
     try:
         await transport._pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type="offer"))
