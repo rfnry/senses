@@ -30,10 +30,6 @@ def encode_audio(frame: AudioFrame, utterance: int) -> bytes:
     return _AUDIO.pack(AUDIO, frame.channels, frame.sample_rate, utterance) + frame.data
 
 
-def encode_image(jpeg: bytes) -> bytes:
-    return bytes([IMAGE]) + jpeg
-
-
 def decode(data: bytes) -> AudioFrame | Image:
     if not data:
         raise InputError("wire: an empty binary frame")

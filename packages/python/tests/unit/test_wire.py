@@ -21,7 +21,7 @@ from rfnry_senses.events import (
 )
 from rfnry_senses.models import Image
 from rfnry_senses.transport import Played
-from rfnry_senses.wire import decode, encode_audio, encode_image, parse_hello, parse_played
+from rfnry_senses.wire import decode, encode_audio, parse_hello, parse_played
 
 from .fakes import ANA, HOST
 
@@ -70,7 +70,7 @@ def controls() -> dict[str, dict[str, Any]]:
 
 BINARY = {
     "audio": encode_audio(AudioFrame(data=b"\x00\x01\xff\x7f", sample_rate=16000), 3),
-    "image": encode_image(b"\xff\xd8\xff\xd9"),
+    "image": bytes([2]) + b"\xff\xd8\xff\xd9",
 }
 
 

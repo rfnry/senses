@@ -16,7 +16,8 @@ const ANA = { role: 'user', id: 'ana', name: 'Ana', metadata: {} }
 const at = { scope: 'acme', at: '2026-09-24T12:03:04.200000Z' }
 
 function audio(utterance: number, ms = 100): ArrayBuffer {
-  const frame = encodeAudio(new Uint8Array(32 * ms), 16000, 1, utterance)
+  const frame = encodeAudio(new Uint8Array(32 * ms), 16000)
+  new DataView(frame.buffer).setUint32(6, utterance, true)
   return frame.buffer.slice(frame.byteOffset, frame.byteOffset + frame.byteLength) as ArrayBuffer
 }
 

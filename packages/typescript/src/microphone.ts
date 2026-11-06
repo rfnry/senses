@@ -101,11 +101,11 @@ export class Microphone {
   private stopped = false
   private readonly listeners = new Set<(pcm: Uint8Array) => void>()
 
-  async start(sampleRate: number): Promise<MediaStream> {
+  async start(sampleRate: number): Promise<void> {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: MICROPHONE })
     if (this.stopped) {
       for (const track of stream.getTracks()) track.stop()
-      return stream
+      return
     }
     this.stream = stream
     const context = new AudioContext()
@@ -126,16 +126,10 @@ export class Microphone {
     }
     context.createMediaStreamSource(stream).connect(node)
     this.node = node
-    return stream
   }
 
-  onChunk(listener: (pcm: Uint8Array) => void): () => void {
+  onChunk(listener: (pcm: Uint8Array) => void): void {
     this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
-
-  get enabled(): boolean {
-    return this.on
   }
 
   set enabled(on: boolean) {

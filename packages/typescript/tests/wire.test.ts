@@ -10,11 +10,18 @@ const json = (name: string): unknown =>
 const hex = (name: string): Uint8Array =>
   Uint8Array.from(Buffer.from(readFileSync(join(FIXTURES, `${name}.hex`), 'utf8').trim(), 'hex'))
 
+function withUtterance(frame: Uint8Array<ArrayBuffer>, utterance: number): Uint8Array<ArrayBuffer> {
+  new DataView(frame.buffer).setUint32(6, utterance, true)
+  return frame
+}
+
 describe('the wire', () => {
   it('writes the client frames the server expects', () => {
     expect(JSON.parse(hello())).toEqual(json('hello'))
     expect(JSON.parse(played(3, 1200))).toEqual(json('played'))
-    expect(encodeAudio(Uint8Array.of(0x00, 0x01, 0xff, 0x7f), 16000, 1, 3)).toEqual(hex('audio'))
+    expect(withUtterance(encodeAudio(Uint8Array.of(0x00, 0x01, 0xff, 0x7f), 16000), 3)).toEqual(
+      hex('audio')
+    )
     expect(encodeImage(Uint8Array.of(0xff, 0xd8, 0xff, 0xd9))).toEqual(hex('image'))
   })
 

@@ -553,6 +553,10 @@ class Socket:
         return message["text"] if message.get("text") is not None else message["bytes"]
 ```
 
+The server's liveness is the `Connection`'s: senses sends no keepalive of its own, so a client that
+stalls without closing ends the session only when the adapter's ping does (the WebSocket server's
+ping, for one), and `receive()` then raises or returns nothing more.
+
 Media has its own socket, apart from any thread socket. Audio and camera frames are binary, each
 behind a small header; control frames are JSON: `hello` (the protocol version) and `played` from
 the client; `ready`, `speaking`, `silent`, `stop`, `event` and `error` from the server. `silent`
@@ -640,8 +644,9 @@ senses.subscribe((event) => {
 It captures the microphone with echo cancellation and noise suppression and sends PCM at
 `sampleRate` (16 kHz), filtered from the browser's own rate so nothing above it folds back into the
 speech, or an Opus track over WebRTC (`transport: 'webrtc'`, with `url` the offer
-endpoint and optional `iceServers`); `microphone: false` connects to listen only. It authenticates as your endpoint expects: cookies go with the request on their own,
-a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`. With
+endpoint and optional `iceServers`); `microphone: false` connects to listen only. It authenticates as your endpoint expects: same-origin cookies go with the request on their own,
+a WebSocket token rides in `protocols`, and the WebRTC offer's request takes `headers`, which an
+offer endpoint on another origin needs. With
 `camera` it sends frames at `fps` for as long as the camera runs: JPEG at `quality` (0.7) over a
 WebSocket, a video track capped at `fps` over WebRTC. `setFps(fps)` changes the rate while it runs — the sampling
 interval over a WebSocket, the track's frame rate and its cap over WebRTC; without a camera, or for

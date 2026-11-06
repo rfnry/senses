@@ -1196,7 +1196,7 @@ type SensesEvent =
     })
 ```
 
-The session's events as the client receives them: every `Event` but `Informed` and `ToolCalled`, with `at` as an ISO 8601 string.
+The session's events as the client receives them: every `Event` but `Informed`, `ToolCalled` and `Cancelled`, with `at` as an ISO 8601 string.
 
 ### `Identity`
 

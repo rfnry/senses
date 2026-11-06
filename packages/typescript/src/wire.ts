@@ -57,15 +57,14 @@ export function played(utterance: number, ms: number): string {
 export function encodeAudio(
   pcm: Uint8Array,
   sampleRate: number,
-  channels = 1,
-  utterance = 0
+  channels = 1
 ): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(HEADER + pcm.byteLength)
   const view = new DataView(out.buffer)
   view.setUint8(0, AUDIO)
   view.setUint8(1, channels)
   view.setUint32(2, sampleRate, true)
-  view.setUint32(6, utterance, true)
+  view.setUint32(6, 0, true)
   out.set(pcm, HEADER)
   return out
 }
