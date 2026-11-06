@@ -765,8 +765,8 @@ webrtc = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiortc", marker = "extra == 'dev'", specifier = ">=1.15.0" },
-    { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.15.0" },
+    { name = "aiortc", marker = "extra == 'dev'", specifier = ">=1.15.0,<1.17" },
+    { name = "aiortc", marker = "extra == 'webrtc'", specifier = ">=1.15.0,<1.17" },
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.141.1" },
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2.13.1" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3.1" },
