@@ -333,7 +333,8 @@ Raises `TransportError` when the session is not started.
 async def close(self, *, triggered_by: IdentityLike | None = None) -> None: ...
 ```
 
-Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`, naming `triggered_by` when given: who ended it, a person or your own code. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done; from a tool call the close is stopping, `close` returns at once. Closing a closed session does nothing.
+Ends the session: calls still waiting raise `TransportError`, tool calls still running are stopped, including one whose tool called `close`, the model connections and the transport close, and `Closed` is reported with reason `closed`, naming `triggered_by` when given: who ended it, a person or your own code. Calls still waiting fail first; the close then waits at most 2 seconds for the tasks and tool calls it stopped and at most 2 seconds for the `Closed` send, and goes on without what is left, logging it. Once begun, the close runs to the end even when its caller is cancelled, and a `close` while one is in progress returns once that one is done; from a tool call the close is stopping, `close` returns at once. Closing a closed session does nothing.
+Raises `InputError` when `triggered_by` does not fit.
 
 ## Events
 

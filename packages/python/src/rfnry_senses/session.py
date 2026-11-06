@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 
 PLAYED_GRACE = 0.25
 PLAYBACK_SLACK = 1.0
+CLOSE_GRACE = 2.0
 _PARTS: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
 
 
@@ -548,14 +549,24 @@ class Session:
         else:
             await self._end("failed", f"session: {exc}", ModelError(f"session: {exc}"))
 
-    async def _emit(self, event: Event) -> None:
+    def _tell(self, event: Event) -> None:
         for queue in list(self._subscribers):
             queue.put_nowait(event)
+
+    async def _report(self, event: Event) -> None:
         if not isinstance(event, Informed | ToolCalled | Cancelled):
             with contextlib.suppress(Exception):
                 await self._transport.send_control(
                     {"type": "event", "event": event.model_dump(mode="json")}
                 )
+
+    async def _report_all(self, events: list[Event]) -> None:
+        for event in events:
+            await self._report(event)
+
+    async def _emit(self, event: Event) -> None:
+        self._tell(event)
+        await self._report(event)
 
     async def _inbound(self) -> None:
         async for item in self._transport.inbound():
@@ -702,10 +713,13 @@ class Session:
     async def _send(self, u: Utterance, frame: AudioFrame) -> None:
         if not u.spoke:
             u.spoke = True
-            await self._control({"type": "speaking", "utterance": u.number})
-            if not self._out:
-                await self._emit(Speaking(scope=self.scope))
+            speaking = None if self._out else Speaking(scope=self.scope)
             self._out.append(u)
+            if speaking is not None:
+                self._tell(speaking)
+            await self._control({"type": "speaking", "utterance": u.number})
+            if speaking is not None and u in self._out:
+                await self._report(speaking)
         if self._utterance is not u:
             return
         start = max(monotonic(), self._playhead)
@@ -750,11 +764,12 @@ class Session:
                 return await asyncio.wait_for(asyncio.shield(future), timeout)
         return fallback if fallback is not None else u.ledger.estimate(monotonic())
 
-    async def _finish(self, u: Utterance, heard: str, interrupted: bool) -> None:
+    def _over(self, u: Utterance, heard: str, interrupted: bool) -> list[Event]:
         if u.finished:
-            return
+            return []
         u.finished = True
         self._played.pop(u.number, None)
+        events = self._unvoice(u)
         said = Said(
             scope=self.scope,
             text=u.text,
@@ -762,12 +777,16 @@ class Session:
             interrupted=interrupted,
             triggered_by=u.triggered_by,
         )
+        if u.done is not None or u.spoke or u.text:
+            self._tell(said)
+            events.append(said)
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
-        await self._unvoice(u)
-        if u.done is not None or u.spoke or u.text:
-            await self._emit(said)
         self._settle()
+        return events
+
+    async def _finish(self, u: Utterance, heard: str, interrupted: bool) -> None:
+        await self._report_all(self._over(u, heard, interrupted))
 
     async def _ask(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> Said:
         assert u.done is not None
@@ -942,7 +961,8 @@ class Session:
                     return
                 u.ledger.mark(sentence)
         except TransportError as exc:
-            await self._abandon(u, exc)
+            with contextlib.suppress(TransportError):
+                await self._abandon(u, exc)
             raise
         except Exception as exc:
             await self._abandon(u, exc)
@@ -955,23 +975,32 @@ class Session:
         await self._conclude(u)
 
     async def _abandon(self, u: Utterance, error: Exception) -> None:
-        if self._utterance is u:
+        if u.finished:
+            return
+        current = self._utterance is u
+        if current:
             self._utterance = None
-            self._clear_audio()
         u.finished = True
         self._played.pop(u.number, None)
         if u.done is not None and not u.done.done():
             u.done.set_exception(error)
+        silent = self._unvoice(u)
+        self._settle()
+        if current:
+            self._clear_audio()
         if u.spoke:
             await self._control({"type": "silent", "utterance": u.number})
-        await self._unvoice(u)
-        self._settle()
+        await self._report_all(silent)
 
-    async def _unvoice(self, u: Utterance) -> None:
-        if u in self._out:
-            self._out.remove(u)
-            if not self._out:
-                await self._emit(Silent(scope=self.scope))
+    def _unvoice(self, u: Utterance) -> list[Event]:
+        if u not in self._out:
+            return []
+        self._out.remove(u)
+        if self._out:
+            return []
+        silent = Silent(scope=self.scope)
+        self._tell(silent)
+        return [silent]
 
     async def _end(
         self,
@@ -982,12 +1011,21 @@ class Session:
     ) -> None:
         if self._closing is None:
             self._closed = True
-            waiting = self._owed()
             works = [work for _, work, _ in self._running.values()]
             self._stopping = {t for t in (*self._tasks, self._playing, *works) if t is not None}
             for task in self._stopping:
                 task.cancel()
-            self._closing = asyncio.create_task(self._close(reason, message, error, waiting, cause))
+            failure = error or TransportError(
+                "session: the session closed before the reply was spoken"
+            )
+            for u in self._owed():
+                if u is not None and u.done is not None and not u.done.done():
+                    u.done.set_exception(failure)
+            for _, turn in self._held:
+                if not turn.done():
+                    turn.set_result(False)
+            self._settle()
+            self._closing = asyncio.create_task(self._close(reason, message, cause))
         if asyncio.current_task() not in self._stopping:
             await asyncio.shield(self._closing)
 
@@ -995,27 +1033,27 @@ class Session:
         self,
         reason: Literal["closed", "hung_up", "failed"],
         message: str | None,
-        error: SensesException | None,
-        waiting: list[Utterance | None],
         cause: Identity | None,
     ) -> None:
-        await asyncio.gather(*self._stopping, return_exceptions=True)
-        failure = error or TransportError("session: the session closed before the reply was spoken")
-        for u in (*waiting, *self._owed()):
-            if u is not None and u.done is not None and not u.done.done():
-                u.done.set_exception(failure)
-        for _, turn in self._held:
-            if not turn.done():
-                turn.set_result(False)
-        self._settle()
+        if self._stopping:
+            _, left = await asyncio.wait(self._stopping, timeout=CLOSE_GRACE)
+            if left:
+                logger.warning(
+                    "session: %d tasks did not stop within %g s; the close goes on",
+                    len(left),
+                    CLOSE_GRACE,
+                )
         for closing in (self._connection, self._stream):
             if closing is not None:
                 with contextlib.suppress(Exception):
                     await closing.close()
-        await self._emit(
-            Closed(scope=self.scope, reason=reason, message=message, triggered_by=cause)
-        )
-        for queue in list(self._subscribers):
+        closed = Closed(scope=self.scope, reason=reason, message=message, triggered_by=cause)
+        self._tell(closed)
+        for queue in self._subscribers:
             queue.put_nowait(None)
+        self._subscribers.clear()
+        reporting = asyncio.create_task(self._report(closed))
+        await asyncio.wait({reporting}, timeout=CLOSE_GRACE)
+        reporting.cancel()
         with contextlib.suppress(Exception):
             await self._transport.close()

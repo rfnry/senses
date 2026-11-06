@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -15,7 +16,15 @@ from rfnry_senses.contracts import (
     LiveToolCancelled,
 )
 from rfnry_senses.errors import ModelError, TransportError
-from rfnry_senses.events import Closed, Event, Interrupted, Said, Silent, Speaking, ToolCalled
+from rfnry_senses.events import (
+    Closed,
+    Event,
+    Interrupted,
+    Said,
+    Silent,
+    Speaking,
+    ToolCalled,
+)
 from rfnry_senses.models import ToolSpec
 from rfnry_senses.senses_tools import SensesTools
 from rfnry_senses.session import Session
@@ -162,7 +171,8 @@ async def test_a_cancelled_close_still_closes_everything() -> None:
     await asyncio.gather(closing, return_exceptions=True)
     assert closing.cancelled()
     await asyncio.wait_for(recorder, 1)
-    assert live.connection.closed and link.closed
+    await until(lambda: link.closed)
+    assert live.connection.closed
     assert isinstance(seen[-1], Closed) and seen[-1].reason == "closed"
     with pytest.raises(TransportError, match="^session: the session closed before the reply"):
         await asyncio.wait_for(held, 1)
@@ -303,6 +313,7 @@ async def test_a_hang_up_during_a_cut_with_a_closing_tool_resolves_everything() 
     outcomes = await asyncio.wait_for(asyncio.gather(cut, held, return_exceptions=True), 1)
     await asyncio.wait_for(ended.wait(), 1)
     await asyncio.wait_for(recorder, 1)
+    await until(lambda: link.closes == 1)
     assert all(isinstance(outcome, TransportError) for outcome in outcomes)
     assert [type(e) for e in seen].count(Closed) == 1 and isinstance(seen[-1], Closed)
     assert connection.closes == 1 and link.closes == 1
@@ -328,8 +339,9 @@ async def test_a_tool_that_closes_as_the_close_stops_it_does_not_hold_the_close(
     await asyncio.wait_for(running.wait(), 1)
     await link.hang_up()
     await asyncio.wait_for(recorder, 1)
+    await until(lambda: link.closed)
     assert isinstance(seen[-1], Closed) and seen[-1].reason == "hung_up"
-    assert live.connection.closed and link.closed
+    assert live.connection.closed
 
 
 def event(kind: str, **fields: Any) -> Callable[[dict[str, Any]], bool]:
@@ -441,3 +453,243 @@ async def test_a_close_while_a_muted_response_is_cut_fails_its_say() -> None:
     link.gate.set()
     connection.gate.set()
     await asyncio.wait_for(muting, 1)
+
+
+class DeadLine(Loopback):
+    async def send_control(self, control: dict[str, Any]) -> None:
+        if control["type"] == "speaking":
+            raise ConnectionError("line down")
+        await super().send_control(control)
+
+    def clear_audio(self) -> None:
+        raise ConnectionError("line down")
+
+
+async def test_a_say_ends_when_speaking_and_clearing_both_fail() -> None:
+    link = DeadLine(ANA, "acme")
+    s = Session(link, speech=Tone())
+    await s.start()
+    seen, recorder = recording(s)
+    with pytest.raises(TransportError, match="^session: the transport failed: line down$"):
+        await asyncio.wait_for(s.say("Hello there.", triggered_by=HOST), 1)
+    await asyncio.wait_for(recorder, 1)
+    assert isinstance(seen[-1], Closed) and seen[-1].reason == "failed"
+
+
+class TwoFaults(Loopback):
+    async def send_audio(self, frame: AudioFrame, utterance: int) -> None:
+        raise ConnectionError("the audio went first")
+
+    async def send_control(self, control: dict[str, Any]) -> None:
+        if control["type"] == "silent":
+            raise ConnectionError("the control went after")
+        await super().send_control(control)
+
+
+async def test_a_failure_cleaning_up_after_a_transport_failure_keeps_the_first_error() -> None:
+    link = TwoFaults(ANA, "acme")
+    s = Session(link, speech=Tone())
+    await s.start()
+    seen, recorder = recording(s)
+    with pytest.raises(TransportError, match="the audio went first"):
+        await asyncio.wait_for(s.say("Hello there.", triggered_by=HOST), 1)
+    await asyncio.wait_for(recorder, 1)
+    assert isinstance(seen[-1], Closed) and "the audio went first" in (seen[-1].message or "")
+
+
+class Stubborn:
+    def __init__(self, session: Session, way: str) -> None:
+        self.session = session
+        self.way = way
+        self.running = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def body(self, args: dict[str, Any]) -> str:
+        self.running.set()
+        try:
+            await asyncio.sleep(30)
+        finally:
+            if self.way == "shield":
+                await asyncio.shield(self.session.close())
+            elif self.way == "group":
+                async with asyncio.TaskGroup() as group:
+                    group.create_task(self.session.close())
+            else:
+                while not self.released.is_set():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self.released.wait()
+        return "ended"
+
+
+@pytest.mark.parametrize("way", ["shield", "group", "ignores"])
+async def test_a_tool_that_will_not_stop_holds_a_close_only_for_the_grace(
+    monkeypatch: pytest.MonkeyPatch, way: str
+) -> None:
+    monkeypatch.setattr("rfnry_senses.session.CLOSE_GRACE", 0.05)
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = Session(link, live=live)
+    tool = Stubborn(s, way)
+    await s.start(tools=Tools([Tool("stubborn", "Stubborn", body=tool.body)]))
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    live.connection.emit(LiveToolCall(call_id="c1", name="stubborn"))
+    await asyncio.wait_for(tool.running.wait(), 1)
+    await asyncio.wait_for(s.close(), 1)
+    await asyncio.wait_for(recorder, 1)
+    tool.released.set()
+    with pytest.raises(TransportError, match="^session: the session closed before the reply"):
+        await asyncio.wait_for(asked, 1)
+    assert isinstance(seen[-1], Closed) and live.connection.closed and link.closed
+
+
+async def test_a_close_fails_its_waiters_before_it_waits_for_what_it_stopped() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    s = Session(link, live=live)
+    tool = Stubborn(s, "ignores")
+    await s.start(tools=Tools([Tool("stubborn", "Stubborn", body=tool.body)]))
+    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    live.connection.emit(LiveToolCall(call_id="c1", name="stubborn"))
+    await asyncio.wait_for(tool.running.wait(), 1)
+    closing = asyncio.create_task(s.close())
+    await asyncio.wait({asked}, timeout=1)
+    failed_first = asked.done() and not closing.done() and not live.connection.closed
+    tool.released.set()
+    await asyncio.wait_for(closing, 1)
+    with pytest.raises(TransportError, match="^session: the session closed before the reply"):
+        await asked
+    assert failed_first
+
+
+async def test_a_send_that_hangs_on_closed_holds_a_close_only_for_the_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("rfnry_senses.session.CLOSE_GRACE", 0.05)
+    link = GatedLink(event("closed"))
+    s = Session(link, speech=Tone())
+    await s.start()
+    seen, recorder = recording(s)
+    await asyncio.wait_for(s.close(), 1)
+    await asyncio.wait_for(recorder, 1)
+    assert isinstance(seen[-1], Closed) and link.closed
+
+
+async def test_the_events_end_while_the_closed_send_still_hangs() -> None:
+    link = GatedLink(event("closed"))
+    s = Session(link, speech=Tone())
+    await s.start()
+    seen, recorder = recording(s)
+    closing = asyncio.create_task(s.close())
+    await until(lambda: link.at_gate)
+    await asyncio.wait_for(recorder, 1)
+    link.gate.set()
+    await closing
+    assert isinstance(seen[-1], Closed)
+
+
+class HeldInform(ScriptedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+
+    async def send_text(self, text: str, *, respond: bool) -> str | None:
+        if not respond:
+            await self.gate.wait()
+        return await super().send_text(text, respond=respond)
+
+
+async def test_closed_is_the_last_event_a_subscriber_sees() -> None:
+    live, link = ScriptedLive(), GatedLink(event("closed"))
+    live.connection = connection = HeldInform()
+    s = Session(link, live=live)
+    await s.start()
+    seen, recorder = recording(s)
+    informing = asyncio.create_task(s.inform("The terrace is closed.", triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    closing = asyncio.create_task(s.close())
+    await until(lambda: link.at_gate)
+    connection.gate.set()
+    await asyncio.wait_for(informing, 1)
+    link.gate.set()
+    await asyncio.wait_for(closing, 1)
+    await asyncio.wait_for(recorder, 1)
+    assert [type(e) for e in seen] == [Closed]
+
+
+async def test_silent_and_said_reach_subscribers_together_before_the_say_returns() -> None:
+    live, link = ScriptedLive(), GatedLink(event("silent"))
+    s = Session(link, live=live)
+    await s.start()
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("Hi.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    live.connection.emit(*response("Hi. "))
+    said = await asyncio.wait_for(asked, 1)
+    await asyncio.sleep(0)
+    told = [type(e) for e in seen]
+    link.gate.set()
+    await s.close()
+    await recorder
+    assert told == [Speaking, Silent, Said] and said in seen
+
+
+async def test_a_stop_that_overtakes_a_slow_speaking_leaves_nothing_stuck() -> None:
+    live, link = ScriptedLive(), GatedLink(lambda control: control == SPEAKING_FIRST)
+    s = Session(link, live=live)
+    await s.start()
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("Hello there.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    live.connection.emit(*response("Hello there. "))
+    await until(lambda: link.at_gate)
+    await asyncio.wait_for(s.interrupt(triggered_by=HOST), 1)
+    await asyncio.wait_for(asked, 1)
+    link.gate.set()
+    await asyncio.sleep(0.01)
+    await asyncio.wait_for(s.quiet(), 1)
+    before = [type(e) for e in seen if isinstance(e, Speaking | Silent)]
+    again = asyncio.create_task(s.say("Again.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 2)
+    live.connection.emit(*response("Again. "))
+    await asyncio.wait_for(again, 1)
+    await s.close()
+    await recorder
+    assert before == [Speaking, Silent]
+    assert [type(e) for e in seen if isinstance(e, Speaking | Silent)] == [Speaking, Silent] * 2
+
+
+SPEAKING_FIRST = {"type": "speaking", "utterance": 1}
+
+
+async def test_a_slow_speaking_reports_nothing_after_the_silent_the_cut_reported() -> None:
+    live, link = ScriptedLive(), GatedLink(lambda control: control == SPEAKING_FIRST)
+    s = Session(link, live=live)
+    await s.start()
+    asked = asyncio.create_task(s.say("Hello there.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    live.connection.emit(*response("Hello there. "))
+    await until(lambda: link.at_gate)
+    await asyncio.wait_for(s.interrupt(triggered_by=HOST), 1)
+    await asyncio.wait_for(asked, 1)
+    link.gate.set()
+    await asyncio.sleep(0.01)
+    await s.close()
+    kinds = [c["event"]["kind"] for c in link.controls if c["type"] == "event"]
+    assert "speaking" not in kinds[kinds.index("silent") :]
+
+
+async def test_a_cut_during_the_speaking_event_still_ends_in_silent() -> None:
+    link = GatedLink(event("speaking"))
+    s = Session(link, speech=Tone())
+    await s.start()
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("Hello there my friend.", triggered_by=HOST))
+    await until(lambda: link.at_gate)
+    await asyncio.wait_for(s.interrupt(triggered_by=HOST), 1)
+    await asyncio.wait_for(asked, 1)
+    link.gate.set()
+    await asyncio.wait_for(s.quiet(), 1)
+    await s.close()
+    await recorder
+    assert [type(e) for e in seen if isinstance(e, Speaking | Silent)] == [Speaking, Silent]

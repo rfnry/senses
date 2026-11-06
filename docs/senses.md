@@ -373,9 +373,13 @@ that is waiting for that tool: spawn it there instead.
 
 `close(triggered_by=)` names who ended the call on `Closed`; a hang-up names the person, and a failure or the end of `async with` names no one.
 
-`close` runs to the end once it begins. A caller cancelled while it waits — a deadline, a cancel
-scope, a handler torn down — stops waiting, but the model connections and the transport still close
-and `Closed` is still reported; a second `close` returns once the first is done. A tool that ends
+`close` runs to the end once it begins. It fails every call still waiting first, then waits at most
+2 seconds for what it stopped and at most 2 seconds for the final `Closed` send, so a tool that
+ignores being cancelled or a send that hangs delays it and cannot hold it: what has not stopped by
+then is left running and logged, and the model connections and the transport close all the same.
+Subscribers have `Closed` before that send goes. A caller cancelled while it waits — a deadline, a
+cancel scope, a handler torn down — stops waiting, but the model connections and the transport still
+close and `Closed` is still reported; a second `close` returns once the first is done. A tool that ends
 the call by calling `close` is stopped with the other tool calls: its `close` returns at once, as
 does one a tool calls while the close is stopping it, and nothing more goes to the model.
 

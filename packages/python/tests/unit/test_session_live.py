@@ -740,8 +740,9 @@ async def test_a_tool_that_closes_the_session_closes_it() -> None:
     events = s.events()
     live.connection.emit(LiveToolCall(call_id="c1", name="end_call"))
     seen = await asyncio.wait_for(collect_all(events), 1)
+    await until(lambda: link.closed)
     assert isinstance(seen[-1], Closed) and seen[-1].reason == "closed"
-    assert live.connection.closed and link.closed
+    assert live.connection.closed
 
 
 async def collect_all(events: Any) -> list[Any]:
