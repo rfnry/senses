@@ -20,6 +20,7 @@ from rfnry_senses.events import (
     Closed,
     Event,
     Interrupted,
+    Muted,
     Said,
     Silent,
     Speaking,
@@ -310,11 +311,12 @@ async def test_a_hang_up_during_a_cut_with_a_closing_tool_resolves_everything() 
     await until(lambda: {"type": "stop", "utterance": 1} in link.controls)
     gate.set()
     await link.hang_up()
-    outcomes = await asyncio.wait_for(asyncio.gather(cut, held, return_exceptions=True), 1)
+    outcome, queued = await asyncio.wait_for(asyncio.gather(cut, held, return_exceptions=True), 1)
     await asyncio.wait_for(ended.wait(), 1)
     await asyncio.wait_for(recorder, 1)
     await until(lambda: link.closes == 1)
-    assert all(isinstance(outcome, TransportError) for outcome in outcomes)
+    assert isinstance(outcome, TransportError)
+    assert isinstance(queued, Said) and queued.interrupted and queued.heard == ""
     assert [type(e) for e in seen].count(Closed) == 1 and isinstance(seen[-1], Closed)
     assert connection.closes == 1 and link.closes == 1
     assert connection.results == []
@@ -405,7 +407,7 @@ async def test_a_close_while_a_failed_utterance_goes_silent_still_fails_its_say(
     link.gate.set()
 
 
-async def test_a_close_while_a_barge_in_ends_the_requests_fails_the_rest() -> None:
+async def test_a_close_while_a_barge_in_reports_the_requests_it_ended_strands_nothing() -> None:
     live, link = ScriptedLive(), GatedLink(event("said", text="First."))
     s = Session(link, live=live)
     await s.start()
@@ -416,11 +418,9 @@ async def test_a_close_while_a_barge_in_ends_the_requests_fails_the_rest() -> No
     live.connection.emit(LiveInterrupted())
     await until(lambda: link.at_gate)
     await s.close()
-    ended = await asyncio.wait_for(first, 1)
-    with pytest.raises(TransportError, match="^session: the session closed before the reply"):
-        await asyncio.wait_for(second, 1)
+    ended = await asyncio.wait_for(asyncio.gather(first, second), 1)
     link.gate.set()
-    assert ended.interrupted and ended.heard == ""
+    assert all(said.interrupted and said.heard == "" for said in ended)
     assert live.connection.calls == [("say", "First.")]
 
 
@@ -437,22 +437,26 @@ class HeldInterrupt(ScriptedConnection):
 
 
 async def test_a_close_while_a_muted_response_is_cut_fails_its_say() -> None:
-    live, link = ScriptedLive(), GatedLink(event("muted"))
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
     live.connection = connection = HeldInterrupt()
     s = Session(link, live=live)
     await s.start()
-    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    chunks: asyncio.Queue[str] = asyncio.Queue()
+
+    async def reply() -> AsyncIterator[str]:
+        yield await chunks.get()
+
+    asked = asyncio.create_task(s.say(reply(), triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    await s.mute(triggered_by=HOST)
+    chunks.put_nowait("Hello.")
     await until(lambda: len(connection.calls) == 1)
-    muting = asyncio.create_task(s.mute(triggered_by=HOST))
-    await until(lambda: link.at_gate)
     connection.emit(LiveStarted(requested=True))
     await until(lambda: connection.at_gate)
     await s.close()
     with pytest.raises(TransportError, match="^session: the session closed before the reply"):
         await asyncio.wait_for(asked, 1)
-    link.gate.set()
     connection.gate.set()
-    await asyncio.wait_for(muting, 1)
 
 
 class DeadLine(Loopback):
@@ -693,3 +697,125 @@ async def test_a_cut_during_the_speaking_event_still_ends_in_silent() -> None:
     await s.close()
     await recorder
     assert [type(e) for e in seen if isinstance(e, Speaking | Silent)] == [Speaking, Silent]
+
+
+async def test_a_mute_given_up_at_its_event_still_cuts_the_voice() -> None:
+    link, tts = GatedLink(event("muted")), Tone()
+    tts.held = "Three four."
+    s = Session(link, speech=tts)
+    await s.start()
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("One two. Three four.", triggered_by=HOST))
+    await until(lambda: "Three four." in tts.spoken)
+    muting = asyncio.create_task(s.mute(triggered_by=HOST))
+    await until(lambda: link.at_gate)
+    muting.cancel()
+    await asyncio.gather(muting, return_exceptions=True)
+    link.gate.set()
+    said = await asyncio.wait_for(asked, 1)
+    await asyncio.wait_for(s.quiet(), 1)
+    await s.close()
+    await recorder
+    assert muting.cancelled() and said.interrupted
+    assert {"type": "stop", "utterance": 1} in link.controls
+    assert any(isinstance(e, Muted) for e in seen) and any(isinstance(e, Interrupted) for e in seen)
+
+
+async def test_a_mute_given_up_while_it_ends_the_queue_still_ends_all_of_it() -> None:
+    live, link = ScriptedLive(), GatedLink(event("said", text=""))
+    s = Session(link, live=live)
+    await s.start()
+    first = asyncio.create_task(s.say("First.", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 1)
+    second = asyncio.create_task(s.prompt("Second.", triggered_by=HOST))
+    third = asyncio.create_task(s.prompt("Third.", triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    muting = asyncio.create_task(s.mute(triggered_by=HOST))
+    await until(lambda: link.at_gate)
+    muting.cancel()
+    await asyncio.gather(muting, return_exceptions=True)
+    link.gate.set()
+    ended = await asyncio.wait_for(asyncio.gather(first, second, third), 1)
+    await asyncio.wait_for(s.quiet(), 1)
+    await s.close()
+    assert all(said.interrupted and said.heard == "" for said in ended)
+
+
+class StopFails(SlowLoopback):
+    async def send_control(self, control: dict[str, Any]) -> None:
+        if control["type"] == "stop":
+            raise ConnectionError("line down")
+        await super().send_control(control)
+
+
+async def test_a_failed_stop_fails_the_calls_it_cut() -> None:
+    link = StopFails(ANA, "acme", delay=None)
+    s = Session(link, speech=Tone(ms_per_word=200))
+    await s.start()
+    seen, recorder = recording(s)
+    asked = asyncio.create_task(s.say("One two. Three four. Five six.", triggered_by=HOST))
+    await until(lambda: any(c["type"] == "silent" for c in link.controls))
+    with pytest.raises(TransportError, match="^session: the session is closed$"):
+        await s.interrupt(triggered_by=HOST)
+    with pytest.raises(TransportError, match="^session: the transport failed: line down$"):
+        await asyncio.wait_for(asked, 1)
+    await asyncio.wait_for(recorder, 1)
+    assert not any(isinstance(e, Interrupted | Said) for e in seen)
+    assert isinstance(seen[-1], Closed) and seen[-1].reason == "failed"
+
+
+class HungSend(ScriptedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sending = asyncio.Event()
+        self.released = asyncio.Event()
+
+    async def say(self, text: str) -> str | None:
+        self.sending.set()
+        while not self.released.is_set():
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.released.wait()
+        return None
+
+
+class HangingSend(ScriptedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sending = asyncio.Event()
+
+    async def say(self, text: str) -> str | None:
+        self.sending.set()
+        await asyncio.sleep(30)
+        return None
+
+
+async def test_a_close_returns_a_say_a_barge_in_ended_while_its_send_ran() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = HangingSend()
+    s = Session(link, live=live)
+    await s.start()
+    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await asyncio.wait_for(connection.sending.wait(), 1)
+    connection.emit(LiveInterrupted())
+    await until(lambda: any(event("said")(c) for c in link.controls))
+    await s.close()
+    said = await asyncio.wait_for(asked, 1)
+    assert said.interrupted and said.heard == ""
+
+
+async def test_a_send_that_ignores_being_cancelled_strands_no_say(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("rfnry_senses.session.CLOSE_GRACE", 0.05)
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = connection = HungSend()
+    s = Session(link, live=live)
+    await s.start()
+    asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+    await asyncio.wait_for(connection.sending.wait(), 1)
+    connection.emit(LiveInterrupted())
+    await until(lambda: any(event("said")(c) for c in link.controls))
+    await asyncio.wait_for(s.close(), 1)
+    said = await asyncio.wait_for(asked, 1)
+    connection.released.set()
+    assert said.interrupted and said.heard == ""

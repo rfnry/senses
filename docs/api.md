@@ -27,7 +27,7 @@ class LiveConnection(Protocol):
     async def close(self) -> None: ...
 ```
 
-One open live model. A `send_image` that raises is logged once and frames stop going to the model; the window and `look` go on, and so does the session. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`. Both may return a tag for the response they asked for — the vendor's id for the request, or the adapter's own — which the adapter then puts on that response's `LiveStarted(requested=tag)`, reported only once the call has returned it; an adapter that cannot tag returns `None`, and `respond=False` always does. The session sends one at a time and never cancels a `send_text` or `say` whose caller gave up: it runs to its end, so one that never returns holds every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
+One open live model. A `send_image` that raises is logged once and frames stop going to the model; the window and `look` go on, and so does the session. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`. Both may return a tag for the response they asked for — the vendor's id for the request, or the adapter's own — which the adapter then puts on that response's `LiveStarted(requested=tag)`, reported only once the call has returned it; an adapter that cannot tag returns `None`, and `respond=False` always does. The session sends one at a time and never cancels the `say` or `send_text(respond=True)` of a call whose caller gave up: it runs to its end, so one that never returns holds every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. `send_text(respond=False)` runs in the task of the `inform` that called it, and is cancelled with it. `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller.
 
 ### `LiveEvent`
 
@@ -265,7 +265,7 @@ async def interrupt(self, *, triggered_by: IdentityLike) -> Interrupted | None: 
 Stops the voice, cuts what is playing to what the person heard, and has a live model cut its context to the same point. Returns the `Interrupted` it reports, or `None` when nothing was being said; calls queued behind the cut still play. The cut finishes even when its caller gives up.
 Raises `InputError` when `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
-Raises `TransportError` when the session is not started or is closed, or closes before the cut ends.
+Raises `TransportError` when the session is not started or is closed, or closes before the cut ends. A `stop` the transport fails closes the session with reason `failed`, and the calls it cut raise that error, with no `Interrupted` reported.
 
 ### `Session.cancel`
 
@@ -284,9 +284,9 @@ Raises `TransportError` when the session is not started or is closed.
 async def mute(self, *, triggered_by: IdentityLike) -> None: ...
 ```
 
-Closes the output gate: queued calls end with nothing heard, what is playing is cut as by `interrupt`, and no audio reaches the person until `unmute`. Reports `Muted`; the session still hears and sees, and muting a muted session does nothing.
+Closes the output gate: queued calls end with nothing heard, what is playing is cut as by `interrupt`, and no audio reaches the person until `unmute`. Reports `Muted`; the session still hears and sees, and muting a muted session does nothing. The gate closes and the cut finishes even when its caller gives up.
 Raises `InputError` when `triggered_by` does not fit.
-Raises `TransportError` when the session is not started or is closed, or closes before the cut ends.
+Raises `TransportError` when the session is not started or is closed, or closes before the cut ends. A `stop` the transport fails closes the session with reason `failed`.
 
 ### `Session.unmute`
 

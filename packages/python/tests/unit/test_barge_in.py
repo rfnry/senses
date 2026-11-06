@@ -102,3 +102,19 @@ async def test_a_barge_in_drops_the_queue_before_the_cut_waits(delay: float | No
     assert said_queued.heard == "" and said_queued.interrupted
     assert "Five." not in tts.spoken
     assert [c["utterance"] for c in link.controls if c["type"] == "speaking"] == [1]
+
+
+async def test_the_queue_ends_before_the_interruption_is_reported() -> None:
+    link, stt, tts = Loopback(ANA, "acme"), ScriptedTranscription(), Tone()
+    tts.held = "Three four."
+    async with Session(link, transcription=stt, speech=tts) as s:
+        events = s.events()
+        first = asyncio.create_task(s.say("One two. Three four.", triggered_by=HOST))
+        queued = asyncio.create_task(s.say("Five.", triggered_by=HOST))
+        await until(lambda: len(link.audio) == 2 and "Three four." in tts.spoken)
+        stt.hear("wait", final=False, end=False)
+        await next_of(events, Interrupted)
+        await asyncio.gather(first, queued)
+    told = [c["event"] for c in link.controls if c["type"] == "event"]
+    ended = [e["kind"] if e["kind"] != "said" else e["text"] for e in told]
+    assert ended.index("Five.") < ended.index("interrupted") < ended.index("One two. Three four.")

@@ -43,6 +43,7 @@ from .fakes import (
     ScriptedConnection,
     ScriptedLive,
     ScriptedTranscription,
+    SlowLoopback,
     Tone,
     next_of,
     pcm,
@@ -1256,3 +1257,215 @@ async def test_a_transport_that_fails_to_clear_audio_closes_the_session_as_faile
             await s.interrupt(triggered_by=ANA)
         closed = await next_of(events, Closed)
     assert closed.reason == "failed"
+
+
+async def test_a_say_granted_as_the_person_cuts_in_is_never_sent() -> None:
+    live, link = ScriptedLive(), SlowLoopback(ANA, "acme", delay=None)
+    connection = live.connection
+    async with session(link, live) as s:
+        first = asyncio.create_task(s.say("First.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        connection.emit(
+            LiveStarted(requested=True), LiveSaid(text="First."), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: any(c["type"] == "speaking" for c in link.controls))
+        second = asyncio.create_task(s.say("Second.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        connection.emit(LiveDone(), LiveInterrupted())
+        said = await asyncio.wait_for(second, 1)
+        await asyncio.wait_for(first, 1)
+        await asyncio.sleep(0.01)
+    assert said.heard == "" and said.interrupted
+    assert connection.calls == [("say", "First.")]
+
+
+class HeldInform(ScriptedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.informing = False
+
+    async def send_text(self, text: str, *, respond: bool) -> str | None:
+        if not respond:
+            self.informing = True
+            await self.gate.wait()
+        return await super().send_text(text, respond=respond)
+
+
+async def playing_with_a_say_behind_an_inform(
+    s: Session, link: SlowLoopback, connection: HeldInform
+) -> tuple[asyncio.Task[Said], asyncio.Task[None], asyncio.Task[Said]]:
+    first = asyncio.create_task(s.say("First.", triggered_by=HOST))
+    await until(lambda: len(connection.calls) == 1)
+    connection.emit(
+        LiveStarted(requested=True),
+        LiveSaid(text="First."),
+        LiveAudio(frame=pcm(1000, 24000)),
+        LiveDone(),
+    )
+    await until(lambda: any(c["type"] == "silent" for c in link.controls))
+    informing = asyncio.create_task(s.inform("A fact.", triggered_by=HOST))
+    await until(lambda: connection.informing)
+    second = asyncio.create_task(s.say("Second.", triggered_by=HOST))
+    await asyncio.sleep(0.01)
+    return first, informing, second
+
+
+async def test_a_say_behind_an_inform_is_not_sent_when_the_person_cuts_in() -> None:
+    live, link = ScriptedLive(), SlowLoopback(ANA, "acme", delay=None)
+    live.connection = connection = HeldInform()
+    async with session(link, live) as s:
+        first, informing, second = await playing_with_a_say_behind_an_inform(s, link, connection)
+        connection.emit(LiveInterrupted())
+        await until(lambda: any(c["type"] == "stop" for c in link.controls))
+        connection.gate.set()
+        await informing
+        said = await asyncio.wait_for(second, 1)
+        await asyncio.wait_for(first, 1)
+        await asyncio.sleep(0.01)
+    assert said.heard == "" and said.interrupted
+    assert [call[0] for call in connection.calls] == ["say", "text"]
+
+
+async def test_a_say_ended_while_it_waits_behind_an_inform_returns_at_once() -> None:
+    live, link = ScriptedLive(), SlowLoopback(ANA, "acme", delay=None)
+    live.connection = connection = HeldInform()
+    async with session(link, live) as s:
+        first, informing, second = await playing_with_a_say_behind_an_inform(s, link, connection)
+        connection.emit(LiveInterrupted())
+        said = await asyncio.wait_for(second, 1)
+        connection.gate.set()
+        await informing
+        await asyncio.wait_for(first, 1)
+    assert said.heard == "" and said.interrupted
+
+
+async def test_a_say_behind_an_inform_waits_out_a_cut_it_was_not_ended_by() -> None:
+    live, link = ScriptedLive(), SlowLoopback(ANA, "acme", delay=None)
+    live.connection = connection = HeldInform()
+    async with session(link, live) as s:
+        first, informing, second = await playing_with_a_say_behind_an_inform(s, link, connection)
+        cutting = asyncio.create_task(s.interrupt(triggered_by=HOST))
+        await until(lambda: any(c["type"] == "stop" for c in link.controls))
+        connection.gate.set()
+        await informing
+        await asyncio.sleep(0.01)
+        during = list(connection.calls)
+        await asyncio.wait_for(cutting, 1)
+        await until(lambda: len(connection.calls) == 3)
+        connection.emit(*response("Second."))
+        said = await asyncio.wait_for(second, 3)
+        await asyncio.wait_for(first, 1)
+    assert [call[0] for call in during] == ["say", "text"]
+    assert said.heard == "Second." and not said.interrupted
+
+
+async def test_a_say_due_as_the_model_starts_its_own_reply_waits_for_that_reply() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    connection = live.connection
+    async with session(link, live) as s:
+        first = asyncio.create_task(s.say("First.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        connection.emit(
+            LiveStarted(requested=True), LiveSaid(text="First."), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 1)
+        second = asyncio.create_task(s.say("Second.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        connection.emit(
+            LiveDone(),
+            LiveStarted(requested=False),
+            LiveSaid(text="By the way. "),
+            LiveAudio(frame=pcm(100, 24000)),
+        )
+        await until(lambda: len(link.audio) == 2)
+        await asyncio.sleep(0.01)
+        while_open = list(connection.calls)
+        connection.emit(LiveDone())
+        await until(lambda: len(connection.calls) == 2)
+        connection.emit(*response("Second."))
+        said = await asyncio.wait_for(second, 1)
+        await asyncio.wait_for(first, 1)
+    assert while_open == [("say", "First.")]
+    assert said.heard == "Second." and said.triggered_by == HOST
+
+
+async def test_a_say_issued_while_a_barge_in_reports_its_queue_is_ended_with_it() -> None:
+    live, link = ScriptedLive(), SlowEvents(ANA, "acme")
+    connection = live.connection
+    async with session(link, live) as s:
+        connection.emit(LiveStarted(), LiveSaid(text="Hi. "), LiveAudio(frame=pcm(100, 24000)))
+        await until(lambda: len(link.audio) == 1)
+        queued = asyncio.create_task(s.say("Queued.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        connection.emit(LiveInterrupted())
+        await until(lambda: link.at_gate)
+        late = asyncio.create_task(s.say("Late.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        link.gate.set()
+        connection.emit(LiveDone())
+        said = await asyncio.wait_for(late, 2)
+        await asyncio.wait_for(queued, 1)
+    assert said.heard == "" and said.interrupted
+    assert connection.calls == []
+
+
+class SlowEvents(Loopback):
+    def __init__(self, identity: Any, scope: str) -> None:
+        super().__init__(identity, scope)
+        self.gate = asyncio.Event()
+        self.at_gate = False
+
+    async def send_control(self, control: dict[str, Any]) -> None:
+        if control["type"] == "event" and control["event"]["kind"] == "said":
+            self.at_gate = True
+            await self.gate.wait()
+        await super().send_control(control)
+
+
+async def test_the_queue_a_live_barge_in_ends_is_reported_before_the_interruption() -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    connection = live.connection
+    async with session(link, live) as s:
+        events = s.events()
+        first = asyncio.create_task(s.say("First.", triggered_by=HOST))
+        await until(lambda: len(connection.calls) == 1)
+        connection.emit(
+            LiveStarted(requested=True), LiveSaid(text="First."), LiveAudio(frame=pcm(100, 24000))
+        )
+        await until(lambda: len(link.audio) == 1)
+        second = asyncio.create_task(s.say("Second.", triggered_by=HOST))
+        await asyncio.sleep(0.01)
+        connection.emit(LiveInterrupted())
+        await asyncio.wait_for(asyncio.gather(first, second), 1)
+    told = [
+        f"said:{e.text}" if isinstance(e, Said) else type(e).__name__
+        async for e in events
+        if isinstance(e, Said | Interrupted)
+    ]
+    assert told == ["said:Second.", "Interrupted", "said:First."]
+
+
+class EarlyTag(ScriptedConnection):
+    async def say(self, text: str) -> str | None:
+        self.calls.append(("say", text))
+        self.emit(LiveStarted(id="r1", requested="early"))
+        await asyncio.sleep(0.01)
+        return "early"
+
+
+async def test_a_tag_that_lands_before_its_send_returns_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    live.connection = EarlyTag()
+    async with session(link, live) as s:
+        asked = asyncio.create_task(s.say("Hello.", triggered_by=HOST))
+        await until(lambda: any("early" in m for m in caplog.messages))
+        live.connection.emit(LiveDone())
+        await s.mute(triggered_by=HOST)
+        await asyncio.wait_for(asked, 1)
+    assert [m for m in caplog.messages if "early" in m] == [
+        "session: a response named tag 'early' before its send returned; "
+        "a tag goes on its response only after that"
+    ]

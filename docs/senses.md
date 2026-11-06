@@ -103,9 +103,10 @@ adds context without a reply, and `submit_result` takes the same switch for a to
 `say(text)` speaks exactly those words. The text `send_text` and `say` carry is your code addressing
 the model — an instruction, a fact, a line to speak — whoever caused it: `triggered_by` names the
 cause, never a speaker, and the person reaches the model only as audio. An adapter sends it on the
-vendor's operator channel where there is one. Senses sends one at a time and never cancels a send
-whose caller gave up: it runs to its end, so one that never returns holds every later `say`,
-`prompt` and `inform` until `close`, and an adapter bounds its own send.
+vendor's operator channel where there is one. Senses sends one at a time and never cancels the send
+of a `say` or `prompt` whose caller gave up: it runs to its end, so one that never returns holds
+every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. An
+`inform` is sent in its caller's own task, so its send goes when the caller does.
 
 `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to
 what the person heard: the response the cut landed in keeps `heard`, the first `played_ms` of its
@@ -121,7 +122,10 @@ and `say` — the vendor's id for the request, or one of its own — and puts it
 slips when the vendor answers a request senses ended after its send began — by `mute`, the person
 cutting in, or a caller that gave up while it was being sent: the vendor's late answer is credited
 to the next request. A tag removes that limit: the late answer is cut before a word of it plays,
-and the next request keeps its own.
+and the next request keeps its own. A tag goes on its response only once the call that returned it
+has returned: a `LiveStarted` that carries it sooner reads as the vendor's own, senses logs a
+warning, and the request waits for an answer that already came until the person cuts in, `mute` or
+`close`.
 
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
@@ -242,10 +246,12 @@ is `start(tools=)` — without a live model, tools belong to your own loop.
 A live model gives one response at a time, so `say` and `prompt` take turns: each goes to the model
 once no response is open and none is still owed to the last one sent — after the model's own reply,
 and after the response to the request before. The person cutting in, or `mute`, ends them, sent or
-not; `interrupt` leaves them, and they go once the cut response ends. A `say` or `prompt` given up
-on before its send is done ends there, and a send under way still runs to its end before the next
-goes; one given up on after that is still answered. A request ended after its send began may still
-be answered by the vendor; how senses tells that answer from the next request's is in
+not; `interrupt` leaves them, and they go once the cut response ends. One still waiting ends at
+once; one whose send is under way returns when its send does, so a vendor's refusal still reaches
+its caller. A `say` or `prompt` given up on before its send returns ends there, and a send under way
+still runs to its end before the next goes; one given up on after that is still answered. A request
+ended after its send began may still be answered by the vendor; how senses tells that answer from
+the next request's is in
 [Models](#models). A vendor that never answers a request holds the ones behind it until the person
 cuts in, `mute` or `close`. `inform` waits for no response, only for a send under way.
 A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
@@ -322,8 +328,9 @@ that point — whole sentences in a cascaded session, the model's own transcript
 `Interrupted`, and, in a live session, calls `interrupt` once so the model's context holds only
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
-in the client. Queued `say` and `prompt` calls end too, before `Interrupted` is reported: the person
-is talking, and they return `Said(heard="", interrupted=True)`.
+in the client. Queued `say` and `prompt` calls end too, as the person cuts in and before `Interrupted`
+is reported: the person is talking, and they return `Said(heard="", interrupted=True)`. A call that
+arrives during the cut ends the same way, and none of them reaches the model.
 
 A live model can start its next response while the last one is still playing. The client plays them
 back to back, one stretch of voice: `Speaking` when it starts after quiet, `Silent` when all of it
@@ -358,7 +365,9 @@ gate is built on these two verbs.
 A cut finishes whatever happens to the code that asked for it. An `interrupt` or `mute` given up on
 — a timeout, a cancelled task, a tool call the model withdrew — still waits for the client's report,
 tells the model what was heard, and ends each utterance it cut. If the session closes during a cut,
-the calls it cut raise `TransportError`, as every call still waiting does.
+the calls it cut raise `TransportError`, as every call still waiting does. That includes a `stop`
+the transport fails: the session closes as `failed`, and no `Interrupted` is reported, since nothing
+says what the person heard.
 
 `quiet` waits until the voice has nothing left to say — no response open, no `say` or `prompt`
 waiting, every utterance played or cut — so a call can end after its last words were heard:
