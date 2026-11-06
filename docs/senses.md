@@ -698,6 +698,17 @@ source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,
 visualizers and framework bindings are yours.
 
+A connection has one stop. `close()` runs it, and so does every end from the far side: the session's
+`closed` event, the socket or data channel closing, the peer failing. It runs once, so the person's
+microphone and camera never outlive the call, and `close()` after that, or twice, does nothing more.
+The order is fixed. A `closed` event reaches subscribers first, with the devices still live; then
+the microphone, the camera, the voice and the connection are released, all in that same turn; then
+`status` turns `'closed'` and subscribers are told. A subscriber that throws on the `closed` event
+stops none of it. Voice still playing stops with the rest, so a call that should end on its last
+words waits on `quiet` before it closes. A peer that is only `disconnected` is no end, since it can
+recover. A `connect` that loses the connection partway rejects at once, even with a permission
+prompt still open, and a device the person grants after that is stopped as it arrives.
+
 ## Tools
 
 A **tool** is a name, a description, an input schema and a body; a **`Tools`** is a set of them —

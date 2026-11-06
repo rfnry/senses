@@ -94,7 +94,8 @@ async function talk(server: Server, send: (link: WebSocketLink) => Promise<void>
       },
       closed() {},
     }
-    void WebSocketLink.open(`ws://127.0.0.1:${server.port}`, undefined, handlers).then((opened) => {
+    const opened = new WebSocketLink(`ws://127.0.0.1:${server.port}`, undefined, handlers)
+    void opened.ready.then(() => {
       link = opened
       void send(opened)
     })

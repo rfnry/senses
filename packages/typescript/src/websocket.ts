@@ -17,35 +17,23 @@ export type LinkHandlers = {
 }
 
 export class WebSocketLink {
-  private constructor(private readonly socket: WebSocket) {}
+  readonly ready: Promise<void>
+  private readonly socket: WebSocket
 
-  static open(
-    url: string,
-    protocols: string | string[] | undefined,
-    handlers: LinkHandlers
-  ): Promise<WebSocketLink> {
-    return new Promise((resolve, reject) => {
-      const socket = new WebSocket(url, protocols)
-      socket.binaryType = 'arraybuffer'
-      let ready = false
+  constructor(url: string, protocols: string | string[] | undefined, handlers: LinkHandlers) {
+    const socket = new WebSocket(url, protocols)
+    socket.binaryType = 'arraybuffer'
+    this.socket = socket
+    this.ready = new Promise((resolve, reject) => {
       socket.onopen = () => socket.send(hello())
       socket.onmessage = (message: MessageEvent) => {
         if (message.data instanceof ArrayBuffer) return handlers.audio(decodeAudio(message.data))
         const frame = parseControl(String(message.data))
-        if (!ready && frame.type === 'ready') {
-          ready = true
-          resolve(new WebSocketLink(socket))
-        } else if (!ready && frame.type === 'error') {
-          reject(new SensesException(frame.message))
-        } else {
-          handlers.control(frame)
-        }
+        if (frame.type === 'ready') resolve()
+        else if (frame.type === 'error') reject(new SensesException(frame.message))
+        else handlers.control(frame)
       }
-      socket.onclose = () => {
-        if (!ready)
-          reject(new SensesException('transport: the connection closed before it was ready'))
-        handlers.closed()
-      }
+      socket.onclose = () => handlers.closed()
     })
   }
 

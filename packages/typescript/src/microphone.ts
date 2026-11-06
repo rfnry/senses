@@ -98,10 +98,15 @@ export class Microphone {
   private stream: MediaStream | null = null
   private node: AudioWorkletNode | null = null
   private on = true
+  private stopped = false
   private readonly listeners = new Set<(pcm: Uint8Array) => void>()
 
   async start(sampleRate: number): Promise<MediaStream> {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: MICROPHONE })
+    if (this.stopped) {
+      for (const track of stream.getTracks()) track.stop()
+      return stream
+    }
     this.stream = stream
     const context = new AudioContext()
     this.context = context
@@ -139,6 +144,7 @@ export class Microphone {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true
     this.node?.disconnect()
     this.node = null
     for (const track of this.stream?.getTracks() ?? []) track.stop()

@@ -34,6 +34,7 @@ export class Camera {
   paused = false
   private choice: CameraChoice
   private stream: MediaStream | null = null
+  private readonly held = new Set<MediaStream>()
   private back: VideoSource | null = null
   private stopped = false
 
@@ -53,10 +54,8 @@ export class Camera {
   async use(source: VideoSource, choice = this.choice): Promise<void> {
     if (this.stopped) return
     const stream = await capture(source, this.options.width, this.fps, choice)
-    if (this.stopped) {
-      for (const track of stream.getTracks()) track.stop()
-      return
-    }
+    this.held.add(stream)
+    if (this.stopped) return this.drop(stream)
     for (const track of stream.getVideoTracks()) {
       track.enabled = !this.paused
       if (source === 'screen') track.contentHint = 'text'
@@ -68,7 +67,8 @@ export class Camera {
     this.stream = stream
     this.source = source
     await this.show(stream)
-    for (const track of previous?.getTracks() ?? []) track.stop()
+    if (this.stopped) return
+    if (previous !== null) this.drop(previous)
     this.told(source)
   }
 
@@ -90,9 +90,14 @@ export class Camera {
 
   stop(): void {
     this.stopped = true
-    for (const track of this.stream?.getTracks() ?? []) track.stop()
+    for (const stream of this.held) this.drop(stream)
     this.stream = null
     this.source = null
+  }
+
+  private drop(stream: MediaStream): void {
+    for (const track of stream.getTracks()) track.stop()
+    this.held.delete(stream)
   }
 
   private async ended(stream: MediaStream): Promise<void> {
@@ -105,7 +110,7 @@ export class Camera {
       if (returned) return
     }
     if (stream !== this.stream) return
-    for (const track of stream.getTracks()) track.stop()
+    this.drop(stream)
     this.stream = null
     this.source = null
     await this.show(null)

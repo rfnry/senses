@@ -1,4 +1,4 @@
-import type { CameraChoice, CameraOptions, VideoSource } from './camera.js'
+import type { Camera, CameraChoice, CameraOptions, VideoSource } from './camera.js'
 import { SensesException } from './errors.js'
 import type { SensesEvent } from './wire.js'
 
@@ -49,13 +49,13 @@ export function cameraOptions(
   }
 }
 
-export function checkChoice(choice: CameraChoice): CameraChoice {
+function checkChoice(choice: CameraChoice): CameraChoice {
   if (choice.facing !== undefined && choice.deviceId !== undefined)
     throw new SensesException('senses: the camera takes facing or deviceId, not both')
   return choice
 }
 
-export function checkCamera<T>(camera: T | null, verb: string): T {
+function checkCamera<T>(camera: T | null, verb: string): T {
   if (camera === null) throw new SensesException(`senses: ${verb} needs the camera option`)
   return camera
 }
@@ -83,5 +83,67 @@ export class Listeners {
     if (this.status === 'closed') return
     this.status = 'closed'
     this.tell({ kind: 'status', status: 'closed' })
+  }
+}
+
+export class Ending {
+  private stopping = false
+  private released: Promise<unknown> = Promise.resolve()
+  private refuse: (reason: SensesException) => void = () => {}
+  private readonly gone = new Promise<never>((_, reject) => {
+    this.refuse = reject
+  })
+
+  constructor(
+    private readonly room: Listeners,
+    private readonly release: () => Promise<unknown>
+  ) {}
+
+  async stop(): Promise<void> {
+    if (!this.stopping) {
+      this.stopping = true
+      this.released = this.release()
+      this.room.end()
+    }
+    await this.released
+  }
+
+  lost(message = 'transport: the connection closed before it was ready'): void {
+    this.refuse(new SensesException(message))
+    void this.stop()
+  }
+
+  tell(event: SensesEvent): void {
+    try {
+      this.room.tell(event)
+    } finally {
+      if (event.kind === 'closed') this.lost()
+    }
+  }
+
+  until<T>(connecting: Promise<T>): Promise<T> {
+    return Promise.race([connecting, this.gone])
+  }
+}
+
+export function handle(
+  room: Listeners,
+  ending: Ending,
+  camera: Camera | null,
+  controls: Pick<Senses, 'mute' | 'unmute' | 'pauseCamera' | 'resumeCamera' | 'setFps'>
+): Senses {
+  return {
+    get status() {
+      return room.status
+    },
+    subscribe: (listener) => room.subscribe(listener),
+    async shareScreen() {
+      await checkCamera(camera, 'shareScreen').use('screen')
+    },
+    async useCamera(choice) {
+      await checkCamera(camera, 'useCamera').use('camera', choice && checkChoice(choice))
+    },
+    close: () => ending.stop(),
+    ...controls,
   }
 }

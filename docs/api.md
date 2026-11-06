@@ -1014,7 +1014,7 @@ function connect(options: ConnectOptions): Promise<Senses>
 ```
 
 Connects to your senses endpoint, starts the microphone and, with `camera`, the video, and resolves with the `Senses` once the server is ready.
-Rejects with `SensesException` when the server refuses the hello, the connection closes before it is ready, the WebRTC offer is refused, or `camera` names both `facing` and `deviceId`.
+Rejects with `SensesException` when the server refuses the hello, the connection closes or fails before the microphone and the video have started, the WebRTC offer is refused, or `camera` names both `facing` and `deviceId`. A connection that ends during a permission prompt rejects at once. Whatever `connect` took is released when it rejects, and a device granted after that is stopped as it arrives.
 
 ### `ConnectOptions`
 
@@ -1143,7 +1143,9 @@ Throws `SensesException` when `fps` is not positive or there is no camera.
 close(): Promise<void>
 ```
 
-Stops the microphone, the video and playback, closes the connection, and sets `status` to `'closed'`.
+Stops the microphone, the video and playback, closes the connection, and sets `status` to `'closed'`. Resolves once all of it is released.
+
+Every end from the far side runs this same stop on its own: the server's `closed` event, the socket or data channel closing, or the peer going `failed`. It runs at most once, so `close` after that, or a second `close`, resolves and does nothing, and no verb reopens a device. A `closed` event reaches subscribers first, then everything is released, then `status` changes and subscribers are told.
 
 ### `SensesStatus`
 
@@ -1151,7 +1153,7 @@ Stops the microphone, the video and playback, closes the connection, and sets `s
 type SensesStatus = 'open' | 'closed'
 ```
 
-`'open'` until the connection ends.
+`'open'` until the connection ends, by `close()` or from the far side. When it turns `'closed'` the microphone and the video have stopped.
 
 ### `SensesListener`
 

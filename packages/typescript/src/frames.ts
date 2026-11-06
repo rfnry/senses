@@ -20,7 +20,7 @@ export class Frames {
     }
     this.video.srcObject = stream
     if (stream !== null) await this.video.play()
-    if (this.timer === null) this.schedule()
+    if (this.timer === null && this.stream === stream) this.schedule()
   }
 
   setFps(fps: number): void {

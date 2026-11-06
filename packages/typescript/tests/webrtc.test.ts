@@ -22,13 +22,19 @@ class Channel {
   deliver(frame: unknown): void {
     this.onmessage?.({ data: JSON.stringify(frame) })
   }
+  close(): void {
+    this.readyState = 'closed'
+    this.onclose?.()
+  }
 }
 
 class Sender {
   replaced: Array<Track | null> = []
   parameters: { encodings: RTCRtpEncodingParameters[] } = { encodings: [] }
   closed = false
+  replacing: Promise<void> | null = null
   async replaceTrack(track: Track | null): Promise<void> {
+    if (this.replacing !== null) await this.replacing
     if (this.closed) throw new Error('InvalidStateError')
     this.replaced.push(track)
   }
@@ -43,15 +49,18 @@ class Sender {
 
 class Peer {
   static made: Peer[] = []
+  static answering: Promise<void> | null = null
   iceGatheringState = 'complete'
   connectionState = 'new'
   localDescription: { sdp: string } | null = null
   remote: unknown = null
+  applying = false
   channel: Channel | null = null
   added: Array<{ track: Track; init?: RTCRtpTransceiverInit }> = []
   sender = new Sender()
   transceivers: unknown[] = []
   closed = false
+  closes = 0
   ontrack: ((event: unknown) => void) | null = null
   onconnectionstatechange: (() => void) | null = null
   constructor(readonly config: RTCConfiguration) {
@@ -79,12 +88,19 @@ class Peer {
     this.localDescription = offer
   }
   async setRemoteDescription(answer: unknown): Promise<void> {
+    this.applying = true
+    if (Peer.answering !== null) await Peer.answering
     this.remote = answer
   }
   addEventListener(): void {}
   close(): void {
+    this.closes += 1
     this.closed = true
     this.sender.closed = true
+  }
+  become(state: string): void {
+    this.connectionState = state
+    this.onconnectionstatechange?.()
   }
 }
 
@@ -111,6 +127,7 @@ async function connected(options: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   Peer.made = []
+  Peer.answering = null
   vi.stubGlobal('RTCPeerConnection', Peer)
   vi.stubGlobal('navigator', media().navigator)
 })
@@ -336,6 +353,225 @@ describe('connect over WebRTC', () => {
     const { senses, peer } = await connected({ microphone: false })
     expect(peer.transceivers).toEqual([{ kind: 'audio', init: { direction: 'recvonly' } }])
     expect(() => senses.setFps(2)).toThrow(new SensesException('senses: setFps needs a camera'))
+  })
+})
+
+describe('when the connection ends over WebRTC', () => {
+  const closed = { kind: 'closed', reason: 'closed', message: null, triggered_by: null }
+  const event = { type: 'event', event: { scope: 'acme', at: 'now', ...closed } }
+
+  function equipped() {
+    vi.stubGlobal('fetch', server().fetch)
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    return devices
+  }
+
+  function expectReleased(devices: ReturnType<typeof media>, peer: Peer) {
+    expect(devices.tracks().length).toBeGreaterThan(0)
+    expect(devices.tracks().filter((track) => !track.stopped)).toEqual([])
+    expect(peer.closed).toBe(true)
+  }
+
+  async function dialing(options: Record<string, unknown> = {}) {
+    const connecting = connect({ url: '/senses/offer', transport: 'webrtc', ...options })
+    connecting.catch(() => {})
+    await vi.waitFor(() => expect(Peer.made[0]?.remote).not.toBeNull())
+    const peer = Peer.made[0] as Peer
+    return { connecting, peer, channel: peer.channel as Channel }
+  }
+
+  it('releases everything on the server closed event', async () => {
+    const devices = equipped()
+    const { senses, peer, channel } = await connected({ camera: { fps: 1 } })
+    channel.deliver(event)
+    expectReleased(devices, peer)
+    expect(senses.status).toBe('closed')
+  })
+
+  it('releases everything when the data channel closes', async () => {
+    const devices = equipped()
+    const { senses, peer, channel } = await connected({ camera: { fps: 1 } })
+    channel.close()
+    expectReleased(devices, peer)
+    expect(senses.status).toBe('closed')
+  })
+
+  it('releases everything when the peer fails after connecting', async () => {
+    const devices = equipped()
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    peer.become('failed')
+    expectReleased(devices, peer)
+    expect(senses.status).toBe('closed')
+  })
+
+  it('stays connected through a peer that is only disconnected', async () => {
+    const devices = equipped()
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    peer.become('disconnected')
+    expect(senses.status).toBe('open')
+    expect(peer.closed).toBe(false)
+    expect(devices.tracks().filter((track) => track.stopped)).toEqual([])
+  })
+
+  it('rejects and releases everything when the peer fails before the data channel opens', async () => {
+    const devices = equipped()
+    const { connecting, peer } = await dialing()
+    peer.become('failed')
+    await expect(connecting).rejects.toEqual(
+      new SensesException('webrtc: the connection failed before it was ready')
+    )
+    expectReleased(devices, peer)
+  })
+
+  it('rejects and releases everything when the peer closes before the data channel opens', async () => {
+    const devices = equipped()
+    const { connecting, peer } = await dialing()
+    peer.become('closed')
+    await expect(connecting).rejects.toEqual(
+      new SensesException('transport: the connection closed before it was ready')
+    )
+    expectReleased(devices, peer)
+  })
+
+  it('rejects at once when the peer fails with its answer never applied', async () => {
+    const devices = equipped()
+    Peer.answering = new Promise<void>(() => {})
+    const connecting = connect({ url: '/senses/offer', transport: 'webrtc' })
+    connecting.catch(() => {})
+    await vi.waitFor(() => expect(Peer.made[0]?.applying).toBe(true))
+    const peer = Peer.made[0] as Peer
+    peer.become('failed')
+    await expect(connecting).rejects.toBeInstanceOf(SensesException)
+    expectReleased(devices, peer)
+  })
+
+  it('rejects with the server message on an error before ready', async () => {
+    const devices = equipped()
+    const { connecting, peer, channel } = await dialing()
+    channel.open()
+    channel.deliver({ type: 'error', message: 'transport: protocol 1 is not supported' })
+    await expect(connecting).rejects.toEqual(
+      new SensesException('transport: protocol 1 is not supported')
+    )
+    expectReleased(devices, peer)
+  })
+
+  it('rejects on a closed event before ready, without waiting for the peer to fail', async () => {
+    const devices = equipped()
+    const { connecting, peer, channel } = await dialing()
+    channel.open()
+    channel.deliver(event)
+    await expect(connecting).rejects.toEqual(
+      new SensesException('transport: the connection closed before it was ready')
+    )
+    expectReleased(devices, peer)
+  })
+
+  it('resolves a second close, and a close after the far end', async () => {
+    const devices = equipped()
+    const first = await connected({ camera: { fps: 1 } })
+    await first.senses.close()
+    await expect(first.senses.close()).resolves.toBeUndefined()
+    expectReleased(devices, first.peer)
+    expect(first.peer.closes).toBe(1)
+
+    Peer.made = []
+    const second = await connected()
+    second.channel.close()
+    await expect(second.senses.close()).resolves.toBeUndefined()
+    await expect(second.senses.close()).resolves.toBeUndefined()
+    expect(second.peer.closes).toBe(1)
+  })
+
+  it('tells the closed event with the devices live, and the status once they are released', async () => {
+    const devices = equipped()
+    const { senses, channel } = await connected({ camera: { fps: 1 } })
+    const live = () => devices.tracks().filter((track) => !track.stopped).length
+    const seen: Array<[string, number]> = []
+    senses.subscribe((frame) => {
+      if (frame.kind === 'closed') seen.push(['closed event', live()])
+      if (frame.kind === 'status') seen.push([frame.status, live()])
+    })
+    channel.deliver(event)
+    expect(seen).toEqual([
+      ['open', 2],
+      ['closed event', 2],
+      ['closed', 0],
+    ])
+  })
+
+  it('releases everything when a subscriber throws on the closed event', async () => {
+    const devices = equipped()
+    const { senses, peer, channel } = await connected({ camera: { fps: 1 } })
+    senses.subscribe((frame) => {
+      if (frame.kind === 'closed') throw new Error('an app bug')
+    })
+    expect(() => channel.deliver(event)).toThrow('an app bug')
+    expectReleased(devices, peer)
+  })
+
+  it('reopens no device after the far end, and touches no closed sender', async () => {
+    const devices = equipped()
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    peer.become('failed')
+    const asked = devices.asked.length
+    await senses.useCamera({ facing: 'user' })
+    await senses.shareScreen()
+    senses.pauseCamera()
+    senses.resumeCamera()
+    senses.setFps(4)
+    expect(devices.asked).toHaveLength(asked)
+    expect(peer.sender.replaced).toEqual([])
+    expect(peer.sender.parameters.encodings).toEqual([{ maxFramerate: 1 }])
+  })
+
+  it('lets go of the old camera when the connection ends during a switch that never settles', async () => {
+    const devices = equipped()
+    const { senses, peer } = await connected({ camera: { fps: 1 } })
+    peer.sender.replacing = new Promise<void>(() => {})
+    void senses.useCamera({ facing: 'user' })
+    await vi.waitFor(() => expect(devices.video()).toHaveLength(2))
+    peer.become('failed')
+    expect(devices.video().filter((track) => !track.stopped)).toEqual([])
+  })
+
+  async function playing() {
+    vi.useFakeTimers({ now: 0 })
+    vi.stubGlobal('Audio', Element)
+    const reader = receiver({ emitted: 0, packets: 0, concealed: 0 })
+    const read = vi.spyOn(reader, 'getStats')
+    const devices = equipped()
+    const { peer, channel } = await connected()
+    peer.ontrack?.({ streams: [{}], receiver: reader, track: {} })
+    return { devices, peer, channel, read }
+  }
+
+  it('reads no stats and reports nothing once the connection has ended during a poll', async () => {
+    const { devices, peer, channel, read } = await playing()
+    channel.deliver({ type: 'speaking', utterance: 1 })
+    channel.deliver({ type: 'silent', utterance: 1 })
+    await vi.advanceTimersByTimeAsync(150)
+    expect(vi.getTimerCount()).toBe(1)
+    const sent = channel.sent.length
+    const reads = read.mock.calls.length
+    channel.readyState = 'closed'
+    channel.deliver(event)
+    expectReleased(devices, peer)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(read.mock.calls).toHaveLength(reads)
+    expect(channel.sent).toHaveLength(sent)
+  })
+
+  it('leaves no fade running once the connection has ended', async () => {
+    const { channel } = await playing()
+    channel.deliver({ type: 'speaking', utterance: 1 })
+    channel.deliver({ type: 'stop', utterance: 1 })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(vi.getTimerCount()).toBe(1)
+    channel.deliver(event)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

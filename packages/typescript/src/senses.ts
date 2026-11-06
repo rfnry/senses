@@ -5,9 +5,9 @@ import { Playback } from './playback.js'
 import {
   type ConnectOptions,
   cameraOptions,
-  checkCamera,
-  checkChoice,
   checkFps,
+  Ending,
+  handle,
   Listeners,
   type Senses,
 } from './room.js'
@@ -35,53 +35,41 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
           (source) => room.tell({ kind: 'video', source })
         )
       : null
-  const stop = async () => {
+  const ending = new Ending(room, async () => {
     camera?.stop()
     frames?.stop()
-    await microphone?.stop()
     link?.close()
-    await playback.close()
-    room.end()
+    await Promise.allSettled([microphone?.stop(), playback.close()])
+  })
+  const start = async () => {
+    await link?.ready
+    await microphone?.start(rate)
+    if (camera !== null && settings !== null) await camera.use(settings.source)
   }
   try {
-    link = await WebSocketLink.open(options.url, options.protocols, {
+    link = new WebSocketLink(options.url, options.protocols, {
       control(frame) {
         if (frame.type === 'speaking') playback.speaking(frame.utterance)
         else if (frame.type === 'silent') playback.silent(frame.utterance)
         else if (frame.type === 'stop') playback.stop(frame.utterance)
-        else if (frame.type === 'event') {
-          room.tell(frame.event)
-          if (frame.event.kind === 'closed') room.end()
-        }
+        else if (frame.type === 'event') ending.tell(frame.event)
       },
       audio(frame) {
         playback.push(frame)
       },
-      closed: () => room.end(),
+      closed: () => ending.lost(),
     })
-    await microphone?.start(rate)
-    if (camera !== null && settings !== null) await camera.use(settings.source)
+    await ending.until(start())
   } catch (error) {
-    await stop()
+    await ending.stop()
     throw error
   }
-  return {
-    get status() {
-      return room.status
-    },
-    subscribe: (listener) => room.subscribe(listener),
-    mute() {
-      if (microphone !== null) microphone.enabled = false
-    },
-    unmute() {
-      if (microphone !== null) microphone.enabled = true
-    },
-    async shareScreen() {
-      await checkCamera(camera, 'shareScreen').use('screen')
-    },
-    async useCamera(choice) {
-      await checkCamera(camera, 'useCamera').use('camera', choice && checkChoice(choice))
-    },
+  const enable = (on: boolean) => {
+    if (microphone !== null) microphone.enabled = on
+  }
+  return handle(room, ending, camera, {
+    mute: () => enable(false),
+    unmute: () => enable(true),
     pauseCamera: () => camera?.pause(),
     resumeCamera: () => camera?.resume(),
     setFps(fps) {
@@ -89,6 +77,5 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
       camera?.setFps(fps)
       frames?.setFps(fps)
     },
-    close: stop,
-  }
+  })
 }

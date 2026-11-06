@@ -5,9 +5,9 @@ import { RemotePlayback } from './remote-playback.js'
 import {
   type ConnectOptions,
   cameraOptions,
-  checkCamera,
-  checkChoice,
   checkFps,
+  Ending,
+  handle,
   Listeners,
   type Senses,
 } from './room.js'
@@ -42,40 +42,32 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
         (source) => room.tell({ kind: 'video', source })
       )
     : null
-  const ready = new Promise<void>((resolve, reject) => {
-    let open = false
-    channel.onopen = () => channel.send(hello())
-    channel.onmessage = (message: MessageEvent) => {
-      const frame = parseControl(String(message.data))
-      if (!open) {
-        if (frame.type === 'ready') {
-          open = true
-          resolve()
-        } else if (frame.type === 'error') reject(new SensesException(frame.message))
-        return
-      }
-      if (frame.type === 'speaking') remote.speaking(frame.utterance)
-      else if (frame.type === 'silent') void remote.silent(frame.utterance)
-      else if (frame.type === 'stop') void remote.stop(frame.utterance)
-      else if (frame.type === 'event') {
-        room.tell(frame.event)
-        if (frame.event.kind === 'closed') room.end()
-      }
-    }
-    channel.onclose = () => {
-      if (!open) reject(new SensesException('transport: the connection closed before it was ready'))
-      room.end()
-    }
-  })
-  ready.catch(() => {})
-  const stop = () => {
+  const ending = new Ending(room, async () => {
     for (const stream of streams) for (const track of stream.getTracks()) track.stop()
     camera?.stop()
     remote.close()
     pc.close()
-    room.end()
+  })
+  const ready = new Promise<void>((resolve, reject) => {
+    channel.onopen = () => channel.send(hello())
+    channel.onmessage = (message: MessageEvent) => {
+      const frame = parseControl(String(message.data))
+      if (frame.type === 'ready') resolve()
+      else if (frame.type === 'error') reject(new SensesException(frame.message))
+      else if (frame.type === 'speaking') remote.speaking(frame.utterance)
+      else if (frame.type === 'silent') void remote.silent(frame.utterance)
+      else if (frame.type === 'stop') void remote.stop(frame.utterance)
+      else if (frame.type === 'event') ending.tell(frame.event)
+    }
+  })
+  ready.catch(() => {})
+  channel.onclose = () => ending.lost()
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === 'failed')
+      ending.lost('webrtc: the connection failed before it was ready')
+    else if (pc.connectionState === 'closed') ending.lost()
   }
-  try {
+  const negotiate = async () => {
     if (options.microphone === false) pc.addTransceiver('audio', { direction: 'recvonly' })
     else {
       const microphone = await navigator.mediaDevices.getUserMedia({ audio: MICROPHONE })
@@ -104,29 +96,19 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
     const answer = (await response.json()) as { sdp: string }
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp })
     await ready
-  } catch (error) {
-    stop()
-    throw error
   }
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'failed' || pc.connectionState === 'closed') room.end()
+  try {
+    await ending.until(negotiate())
+  } catch (error) {
+    await ending.stop()
+    throw error
   }
   const enable = (on: boolean) => {
     for (const track of microphone()) track.enabled = on
   }
-  return {
-    get status() {
-      return room.status
-    },
-    subscribe: (listener) => room.subscribe(listener),
+  return handle(room, ending, camera, {
     mute: () => enable(false),
     unmute: () => enable(true),
-    async shareScreen() {
-      await checkCamera(camera, 'shareScreen').use('screen')
-    },
-    async useCamera(choice) {
-      await checkCamera(camera, 'useCamera').use('camera', choice && checkChoice(choice))
-    },
     pauseCamera() {
       camera?.pause()
       if (room.status === 'open') void sender?.replaceTrack(null)
@@ -143,8 +125,5 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       for (const encoding of parameters.encodings) encoding.maxFramerate = fps
       void sender.setParameters(parameters)
     },
-    async close() {
-      stop()
-    },
-  }
+  })
 }

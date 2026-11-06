@@ -33,6 +33,7 @@ export class Context {
   nodes: Node[] = []
   gains: Gain[] = []
   closed = false
+  closes = 0
   audioWorklet = { addModule: async (_url: string) => {} }
   constructor() {
     Context.made.push(this)
@@ -57,6 +58,8 @@ export class Context {
     return { connect() {} }
   }
   async close(): Promise<void> {
+    this.closes += 1
+    if (this.closed) throw new Error('InvalidStateError: Cannot close a closed AudioContext.')
     this.closed = true
   }
 }
@@ -165,6 +168,7 @@ export function media() {
     constraints: MediaStreamConstraints
   }> = []
   const refused = { screen: false, camera: false }
+  const prompt = { answered: Promise.resolve() }
   const made = (track: Track) => {
     const stream = new Stream([track])
     streams.push(stream)
@@ -172,6 +176,7 @@ export function media() {
   }
   const getUserMedia = async (constraints: MediaStreamConstraints) => {
     asked.push({ source: constraints.video ? 'camera' : 'microphone', constraints })
+    await prompt.answered
     if (constraints.video && refused.camera) throw new Error('NotAllowedError')
     return made(constraints.video ? new Track('video') : new Track('audio'))
   }
@@ -181,11 +186,14 @@ export function media() {
     return made(new Track('video', 'screen'))
   }
   const video = () => streams.flatMap((stream) => stream.getVideoTracks())
+  const tracks = () => streams.flatMap((stream) => stream.getTracks())
   return {
     streams,
     asked,
     refused,
+    prompt,
     video,
+    tracks,
     navigator: { mediaDevices: { getUserMedia, getDisplayMedia } },
   }
 }

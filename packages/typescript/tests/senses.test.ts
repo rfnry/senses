@@ -375,3 +375,260 @@ describe('connect over a WebSocket', () => {
     expect(third.senses.status).toBe('closed')
   })
 })
+
+describe('when the connection ends over a WebSocket', () => {
+  const closed = { ...at, kind: 'closed', reason: 'closed', message: null, triggered_by: null }
+  const early = new SensesException('transport: the connection closed before it was ready')
+
+  function equipped() {
+    vi.useFakeTimers()
+    const devices = media()
+    const page = documentWithCanvas()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', page)
+    return { devices, page }
+  }
+
+  function expectReleased(devices: ReturnType<typeof media>, socket: Socket) {
+    expect(devices.tracks().length).toBeGreaterThan(0)
+    expect(devices.tracks().filter((track) => !track.stopped)).toEqual([])
+    expect(Context.made.length).toBeGreaterThan(0)
+    expect(Context.made.filter((context) => !context.closed)).toEqual([])
+    expect(socket.readyState).toBe(3)
+    expect(vi.getTimerCount()).toBe(0)
+  }
+
+  async function dialing(options: Partial<Parameters<typeof connect>[0]> = {}) {
+    const connecting = connect({
+      url: 'wss://example.com/senses',
+      transport: 'websocket',
+      ...options,
+    })
+    connecting.catch(() => {})
+    await vi.waitFor(() => expect(Socket.made).toHaveLength(1))
+    const socket = Socket.made[0] as Socket
+    socket.open()
+    return { connecting, socket }
+  }
+
+  function promptHeld(devices: ReturnType<typeof media>) {
+    let answer = () => {}
+    let refuse = () => {}
+    devices.prompt.answered = new Promise<void>((resolve, reject) => {
+      answer = resolve
+      refuse = () => reject(new Error('NotAllowedError'))
+    })
+    return { answer: () => answer(), refuse: () => refuse() }
+  }
+
+  it('releases everything on the server closed event', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    socket.deliver({ type: 'event', event: closed })
+    expectReleased(devices, socket)
+    expect(senses.status).toBe('closed')
+  })
+
+  it('releases everything when the socket closes', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    socket.close()
+    expectReleased(devices, socket)
+    expect(senses.status).toBe('closed')
+  })
+
+  it('rejects at once and lets go of the microphone when the socket closes during its prompt', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const held = promptHeld(devices)
+    const { connecting, socket } = await dialing()
+    socket.deliver({ type: 'ready' })
+    await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+    socket.close()
+    await expect(connecting).rejects.toEqual(early)
+    expect(Context.made.map((context) => context.closed)).toEqual([true])
+    held.answer()
+    await vi.waitFor(() => expect(devices.tracks()).toHaveLength(1))
+    await vi.waitFor(() => expect(devices.tracks()[0]?.stopped).toBe(true))
+    expect(Context.made).toHaveLength(1)
+    expect(WorkletNode.made).toHaveLength(0)
+  })
+
+  it('rejects when the server closes the session during the prompt', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    promptHeld(devices)
+    const { connecting, socket } = await dialing()
+    socket.deliver({ type: 'ready' })
+    await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+    socket.deliver({ type: 'event', event: closed })
+    await expect(connecting).rejects.toEqual(early)
+    expect(socket.readyState).toBe(3)
+    expect(Context.made.map((context) => context.closed)).toEqual([true])
+  })
+
+  it('raises nothing more when the person refuses a prompt the connection outlived', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    const held = promptHeld(devices)
+    const rejected: unknown[] = []
+    const record = (reason: unknown) => rejected.push(reason)
+    process.on('unhandledRejection', record)
+    try {
+      const { connecting, socket } = await dialing()
+      socket.deliver({ type: 'ready' })
+      await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+      socket.close()
+      await expect(connecting).rejects.toEqual(early)
+      held.refuse()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(rejected).toEqual([])
+    } finally {
+      process.off('unhandledRejection', record)
+    }
+  })
+
+  it('rejects and lets go of the camera it was still asking for', async () => {
+    const devices = media()
+    vi.stubGlobal('navigator', devices.navigator)
+    vi.stubGlobal('document', documentWithCanvas())
+    const held = promptHeld(devices)
+    const { connecting, socket } = await dialing({ microphone: false, camera: {} })
+    socket.deliver({ type: 'ready' })
+    await vi.waitFor(() => expect(devices.asked).toHaveLength(1))
+    socket.close()
+    await expect(connecting).rejects.toEqual(early)
+    held.answer()
+    await vi.waitFor(() => expect(devices.video()).toHaveLength(1))
+    await vi.waitFor(() => expect(devices.video()[0]?.stopped).toBe(true))
+    expect(Context.made.filter((context) => !context.closed)).toEqual([])
+  })
+
+  it('closes the socket and rejects on a closed event before ready', async () => {
+    const { connecting, socket } = await dialing({ microphone: false })
+    socket.deliver({ type: 'event', event: closed })
+    await expect(connecting).rejects.toEqual(early)
+    expect(socket.readyState).toBe(3)
+    expect((Context.made[0] as Context).closed).toBe(true)
+  })
+
+  it('closes the socket after a refused hello, whether or not the server does', async () => {
+    const { connecting, socket } = await dialing({ microphone: false })
+    socket.deliver({ type: 'error', message: 'transport: protocol 2 is not supported' })
+    await expect(connecting).rejects.toEqual(
+      new SensesException('transport: protocol 2 is not supported')
+    )
+    expect(socket.readyState).toBe(3)
+  })
+
+  it('resolves a second close, and a close after the far end, with nothing more to do', async () => {
+    vi.stubGlobal('navigator', media().navigator)
+    const twice = await opened({ microphone: true })
+    await twice.senses.close()
+    await expect(twice.senses.close()).resolves.toBeUndefined()
+    expect(Context.made.map((context) => context.closes)).toEqual([1, 1])
+
+    Socket.made = []
+    Context.made = []
+    const remote = await opened({ microphone: true })
+    remote.socket.close()
+    await expect(remote.senses.close()).resolves.toBeUndefined()
+    await expect(remote.senses.close()).resolves.toBeUndefined()
+    expect(Context.made.map((context) => context.closes)).toEqual([1, 1])
+  })
+
+  it('tells the closed event with the devices live, and the status once they are released', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    const live = () => devices.tracks().filter((track) => !track.stopped).length
+    const seen: Array<[string, number]> = []
+    senses.subscribe((event) => {
+      if (event.kind === 'closed') seen.push(['closed event', live()])
+      if (event.kind === 'status') seen.push([event.status, live()])
+    })
+    socket.deliver({ type: 'event', event: closed })
+    expect(seen).toEqual([
+      ['open', 2],
+      ['closed event', 2],
+      ['closed', 0],
+    ])
+  })
+
+  it('releases everything when a subscriber throws on the closed event', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    senses.subscribe((event) => {
+      if (event.kind === 'closed') throw new Error('an app bug')
+    })
+    expect(() => socket.deliver({ type: 'event', event: closed })).toThrow('an app bug')
+    expectReleased(devices, socket)
+    expect(senses.status).toBe('closed')
+  })
+
+  it('runs the stop once when a subscriber closes from inside the ending', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    const closes: Array<Promise<void>> = []
+    senses.subscribe((event) => {
+      if (event.kind === 'closed') closes.push(senses.close())
+      if (event.kind === 'status' && event.status === 'closed') closes.push(senses.close())
+    })
+    socket.deliver({ type: 'event', event: closed })
+    await expect(Promise.all(closes)).resolves.toHaveLength(2)
+    expectReleased(devices, socket)
+    expect(Context.made.map((context) => context.closes)).toEqual([1, 1])
+  })
+
+  it('reopens no device and sets no timer after the far end', async () => {
+    const { devices } = equipped()
+    const { senses, socket } = await opened({ microphone: true, camera: { fps: 1 } })
+    socket.close()
+    const asked = devices.asked.length
+    await senses.useCamera({ facing: 'user' })
+    await senses.shareScreen()
+    senses.setFps(4)
+    senses.resumeCamera()
+    senses.unmute()
+    expect(devices.asked).toHaveLength(asked)
+    expectReleased(devices, socket)
+  })
+
+  it('lets go of the old camera and sends no source when the connection ends during a switch', async () => {
+    const { devices, page } = equipped()
+    const { senses, socket } = await opened({ camera: { fps: 1 } })
+    const sources: unknown[] = []
+    senses.subscribe((event) => event.kind === 'video' && sources.push(event.source))
+    let playing = () => {}
+    const video = page.createElement('video') as { play: () => Promise<void> }
+    video.play = () =>
+      new Promise<void>((resolve) => {
+        playing = resolve
+      })
+    const switching = senses.useCamera({ facing: 'user' })
+    await vi.waitFor(() => expect(devices.video()).toHaveLength(2))
+    socket.close()
+    expect(devices.video().filter((track) => !track.stopped)).toEqual([])
+    playing()
+    await switching
+    expect(sources).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('leaves no capture timer when the connection ends before the first frame plays', async () => {
+    const { devices, page } = equipped()
+    let playing = () => {}
+    const video = page.createElement('video') as { play: () => Promise<void> }
+    video.play = () =>
+      new Promise<void>((resolve) => {
+        playing = resolve
+      })
+    const { connecting, socket } = await dialing({ microphone: false, camera: { fps: 1 } })
+    socket.deliver({ type: 'ready' })
+    await vi.waitFor(() => expect(devices.video()).toHaveLength(1))
+    socket.close()
+    await expect(connecting).rejects.toEqual(early)
+    playing()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
