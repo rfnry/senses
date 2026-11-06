@@ -9,6 +9,9 @@ const POLL_MS = 100
 const FADE_MS = 60
 const FADE_STEPS = 6
 const PACKET_MS = 20
+const STALL_POLLS = 20
+
+const counted = (packets: unknown) => (typeof packets === 'number' ? Math.max(0, packets) : 0)
 
 export class RemotePlayback {
   private element: HTMLAudioElement | null = null
@@ -61,13 +64,15 @@ export class RemotePlayback {
 
   async silent(utterance: number): Promise<void> {
     let last: number | null = null
+    let idle = 0
     while (this.spoken.has(utterance)) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS))
       const [now, end] = await Promise.all([this.counts(), this.spoken.get(utterance)?.end])
       const spoken = this.spoken.get(utterance)
       if (spoken === undefined) return
       if (now === null) return this.finish(utterance)
-      const stalled = now.emitted === last
+      idle = now.emitted === last ? idle + 1 : 0
+      const stalled = idle > 0 && (now.emitted >= this.position(now) || idle >= STALL_POLLS)
       if (stalled) {
         this.rest = now
         this.quiet = this.spoken.size === 1
@@ -104,9 +109,13 @@ export class RemotePlayback {
     this.fading = null
   }
 
+  private position(now: Counts): number {
+    return this.rest.emitted + now.arrived - this.rest.arrived
+  }
+
   private async edge(): Promise<number | null> {
     const now = await this.counts()
-    return now && this.rest.emitted + now.arrived - this.rest.arrived
+    return now && this.position(now)
   }
 
   private async finish(utterance: number, slack = 0): Promise<void> {
@@ -130,6 +139,11 @@ export class RemotePlayback {
     if (typeof emitted !== 'number' || typeof packets !== 'number') return null
     const codec = entries.find((entry) => entry.id === codecId)
     const rate = typeof codec?.clockRate === 'number' ? codec.clockRate : 48000
-    return { emitted: (emitted / rate) * 1000, arrived: packets * PACKET_MS }
+    const lost = counted(inbound.packetsLost)
+    const concealed = lost + counted(inbound.packetsDiscarded)
+    return {
+      emitted: (emitted * 1000) / rate + concealed * PACKET_MS,
+      arrived: (packets + lost) * PACKET_MS,
+    }
   }
 }

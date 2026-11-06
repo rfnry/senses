@@ -348,7 +348,15 @@ class Element {
   pause(): void {}
 }
 
-function receiver(counts: { emitted: number; packets: number; concealed: number }) {
+type Stats = {
+  emitted: number
+  packets: number
+  concealed: number
+  lost?: number
+  discarded?: number
+}
+
+function receiver(counts: Stats) {
   return {
     getStats: async () =>
       new Map<string, Record<string, unknown>>([
@@ -358,6 +366,8 @@ function receiver(counts: { emitted: number; packets: number; concealed: number 
             type: 'inbound-rtp',
             jitterBufferEmittedCount: counts.emitted,
             packetsReceived: counts.packets,
+            packetsLost: counts.lost ?? 0,
+            packetsDiscarded: counts.discarded ?? 0,
             concealedSamples: counts.concealed,
             codecId: 'c',
           },
@@ -367,28 +377,43 @@ function receiver(counts: { emitted: number; packets: number; concealed: number 
   } as unknown as RTCRtpReceiver
 }
 
-type Stretch = { at: number; ms: number; discarded?: number }
+type Stretch = {
+  at: number
+  ms: number
+  starts?: number
+  lost?: number
+  discarded?: number
+  unplayed?: number
+}
 
 function bufferedReceiver(audio: Stretch[]) {
   const counts = (t: number) => {
     let packets = 0
     let played = 0
+    let lost = 0
+    let discarded = 0
     let free = 0
-    for (const { at, ms, discarded = 0 } of audio) {
-      const from = Math.max(at + 20, free)
+    for (const stretch of audio) {
+      const { at, ms, starts = 20, unplayed = 0 } = stretch
+      const from = Math.max(at + starts, free)
       free = from + ms
       if (t <= at) continue
-      packets += Math.min(ms / 20, Math.ceil((t - at + 120) / 20)) + discarded
-      played += Math.floor(Math.min(Math.max(t - from, 0), ms) / 20) * 20
+      const past = t > at + ms / 2
+      const missing = past ? (stretch.lost ?? 0) : 0
+      const dropped = past ? (stretch.discarded ?? 0) : 0
+      packets += Math.min(ms / 20, Math.ceil((t - at + 120) / 20)) - missing + unplayed
+      played += Math.floor(Math.min(Math.max(t - from, 0), ms - (missing + dropped) * 20) / 20) * 20
+      lost += missing
+      discarded += dropped
     }
-    return { packets, played }
+    return { packets, played, lost, discarded }
   }
   return {
     getStats: async () => {
       const t = Date.now()
       const first = audio[0]?.at ?? 0
       if (t <= first) return new Map()
-      const { packets, played } = counts(t)
+      const { packets, played, lost, discarded } = counts(t)
       return new Map<string, Record<string, unknown>>([
         [
           'in',
@@ -396,6 +421,8 @@ function bufferedReceiver(audio: Stretch[]) {
             type: 'inbound-rtp',
             jitterBufferEmittedCount: played * 48,
             packetsReceived: packets,
+            packetsLost: lost,
+            packetsDiscarded: discarded,
             concealedSamples: (t - first - played) * 48,
             codecId: 'c',
           },
@@ -549,6 +576,138 @@ describe('remote playback', () => {
       9000
     )
     expect(reports.get(2)).toBe(100)
+  })
+
+  it('a short reply whose audio starts late reports its length, and the next reply its own', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 300 },
+        { at: 5000, ms: 400, starts: 850 },
+        { at: 7000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1)],
+        [160, (p) => p.silent(1)],
+        [5000, (p) => p.speaking(2)],
+        [5260, (p) => p.silent(2)],
+        [7000, (p) => p.speaking(3)],
+        [8660, (p) => p.silent(3)],
+      ],
+      10000
+    )
+    expect(reports.get(2)).toBe(400)
+    expect(reports.get(3)).toBe(1800)
+  })
+
+  it('reports at once at a count that does not divide evenly into milliseconds', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 4020 }],
+      [
+        [0, (p) => p.speaking(1)],
+        [3880, (p) => p.silent(1)],
+      ],
+      4500
+    )
+    expect(reports.get(1)).toBe(4020)
+  })
+
+  it('a report does not wait for ever on packets that arrived and never play', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 300, unplayed: 3 }],
+      [
+        [0, (p) => p.speaking(1)],
+        [160, (p) => p.silent(1)],
+      ],
+      1900
+    )
+    expect(reports.has(1)).toBe(false)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(reports.get(1)).toBe(300)
+  })
+
+  it('a played utterance with lost packets reads whole', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 300 },
+        { at: 5000, ms: 1800, lost: 2 },
+      ],
+      [
+        [0, (p) => p.speaking(1)],
+        [160, (p) => p.silent(1)],
+        [5000, (p) => p.speaking(2)],
+        [6660, (p) => p.silent(2)],
+      ],
+      9000
+    )
+    expect(reports.get(2)).toBe(1800)
+  })
+
+  it('a lost packet does not move the edge between back-to-back responses', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 6000, lost: 2 }],
+      [
+        [0, (p) => p.speaking(1)],
+        [3860, (p) => p.silent(1)],
+        [3880, (p) => p.speaking(2)],
+        [5860, (p) => p.silent(2)],
+      ],
+      8000
+    )
+    expect(reports.get(1)).toBe(4000)
+    expect(reports.get(2)).toBeGreaterThanOrEqual(2000)
+  })
+
+  it('a played utterance with packets too late to play reads whole', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 300 },
+        { at: 5000, ms: 1800, discarded: 2 },
+      ],
+      [
+        [0, (p) => p.speaking(1)],
+        [160, (p) => p.silent(1)],
+        [5000, (p) => p.speaking(2)],
+        [6660, (p) => p.silent(2)],
+      ],
+      9000
+    )
+    expect(reports.get(2)).toBe(1800)
+  })
+
+  it('a packet that turns from lost to too late never moves the count back', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('Audio', Element)
+    const counts: Stats = { emitted: 0, packets: 0, concealed: 0 }
+    const reports: Array<[number, number]> = []
+    const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
+    playback.start({} as MediaStream, receiver(counts))
+    playback.speaking(1)
+    counts.emitted = 9600
+    counts.packets = 10
+    counts.lost = 1
+    const ending = playback.silent(1)
+    await vi.advanceTimersByTimeAsync(100)
+    counts.packets = 11
+    counts.lost = 0
+    counts.discarded = 1
+    await vi.advanceTimersByTimeAsync(100)
+    await ending
+    expect(reports).toEqual([[1, 220]])
+  })
+
+  it('a negative packetsLost, from duplicates, adds nothing', async () => {
+    vi.stubGlobal('Audio', Element)
+    const counts: Stats = { emitted: 0, packets: 0, concealed: 0 }
+    const reports: Array<[number, number]> = []
+    const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
+    playback.start({} as MediaStream, receiver(counts))
+    playback.speaking(1)
+    await Promise.resolve()
+    counts.emitted = 9600
+    counts.packets = 11
+    counts.lost = -1
+    await playback.stop(1)
+    expect(reports).toEqual([[1, 200]])
   })
 
   it('a cut in the second of two responses reports what played of each', async () => {
@@ -717,7 +876,7 @@ describe('remote playback', () => {
   it('packets the jitter buffer never played do not shift the next utterance', async () => {
     const reports = await play(
       [
-        { at: 0, ms: 300, discarded: 3 },
+        { at: 0, ms: 300, unplayed: 3 },
         { at: 5000, ms: 4000 },
       ],
       [

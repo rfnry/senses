@@ -679,12 +679,18 @@ with a `SensesException`.
 
 It plays the voice, counts what it played, and answers `stop` with it on its own. Each stretch of
 voice starts 120 ms after its first audio arrives, over a WebSocket in the client and over WebRTC on
-the server, so uneven first chunks play without a hole. Only audio that has played is counted. Over
-a WebSocket a stop counts up to `currentTime` less the context's `outputLatency`, what has reached
-the speakers. Over WebRTC the count is the receiver's `jitterBufferEmittedCount`, which leaves out
-the concealment it plays while no audio comes, and the line between utterances played back to back
-is what had arrived when the second's `speaking` did, known to a 20 ms packet. A natural end gives
-that packet to the utterance, so a full play reads as whole; a cut does not.
+the server, so uneven first chunks play without a hole. Only audio that has played is counted, as
+far as the browser can tell. Over a WebSocket a stop counts up to `currentTime` less the context's
+`outputLatency`, what has reached the speakers. Over WebRTC the count is the receiver's
+`jitterBufferEmittedCount`, which leaves out the concealment it plays while no audio comes. It stops
+short of the speakers, so a cut there does not subtract the output latency, and it cannot see a
+muted output or an element the browser would not play: those count as played. A packet lost or too
+late to play also counts, because the person heard it concealed and one lost packet should not cost
+a sentence; only a lost final packet still does, about 1 loss in 90 on a 1.8-second utterance, since
+nothing shows it was lost until the next packet comes. The line between utterances played back to
+back is what had arrived when the page handled the second's `speaking`: within a 20 ms packet on an
+idle page, and 100 ms or more off on a busy one. A natural end gives one packet to the utterance, so
+a full play on an idle page reads as whole; a cut does not.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,

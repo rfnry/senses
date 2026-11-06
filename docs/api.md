@@ -670,7 +670,7 @@ class Played(BaseModel):
     ms: int
 ```
 
-The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance. A transport that learns how much played as it goes keeps the count and answers with it at once. A full play over WebRTC can report a little more than was sent: the last frame is padded to 20 ms, and the edge between utterances played back to back is known to a frame.
+The client's report of how many milliseconds of an utterance it played, yielded by `Transport.inbound()`: one per utterance, once it has played all of it after a `silent`, or when a `stop` names it or a later utterance. A transport that learns how much played as it goes keeps the count and answers with it at once. A full play over WebRTC can report a little more than was sent: the last frame is padded to 20 ms, and the edge between utterances played back to back is only as exact as the page is idle. A packet lost or too late to play counts as played, so loss alone does not shorten a full play; a lost final packet does, because nothing shows it until the next packet comes.
 
 ### `Loopback`
 
