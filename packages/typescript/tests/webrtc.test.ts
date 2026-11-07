@@ -768,8 +768,10 @@ describe('when the connection ends over WebRTC', () => {
     channel.deliver({ type: 'speaking', utterance: 1, sent_ms: 0 })
     channel.deliver({ type: 'stop', utterance: 1 })
     await vi.advanceTimersByTimeAsync(10)
-    expect(vi.getTimerCount()).toBe(1)
+    expect(vi.getTimerCount()).toBe(2)
     channel.deliver(event)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(100)
     expect(vi.getTimerCount()).toBe(0)
   })
 })
@@ -818,7 +820,7 @@ type Stretch = {
   discarded?: number
 }
 
-function bufferedReceiver(audio: Stretch[]) {
+function bufferedReceiver(audio: Stretch[], outputMs = 0) {
   const counts = (t: number) => {
     let played = 0
     let lost = 0
@@ -854,9 +856,11 @@ function bufferedReceiver(audio: Stretch[]) {
             packetsDiscarded: discarded,
             concealedSamples: (t - first - played) * 48,
             codecId: 'c',
+            playoutId: 'p',
           },
         ],
         ['c', { id: 'c', clockRate: 48000 }],
+        ['p', { id: 'p', totalPlayoutDelay: outputMs, totalSamplesCount: 1000 }],
       ])
     },
   } as unknown as RTCRtpReceiver
@@ -865,13 +869,14 @@ function bufferedReceiver(audio: Stretch[]) {
 async function play(
   audio: Stretch[],
   script: Array<[number, (playback: RemotePlayback) => unknown]>,
-  until: number
+  until: number,
+  outputMs = 0
 ) {
   vi.useFakeTimers({ now: 0 })
   vi.stubGlobal('Audio', Element)
   const reports = new Map<number, number>()
   const playback = new RemotePlayback((u, ms) => reports.set(u, ms))
-  playback.start({} as MediaStream, bufferedReceiver(audio))
+  playback.start({} as MediaStream, bufferedReceiver(audio, outputMs))
   let at = 0
   for (const [when, step] of script) {
     await vi.advanceTimersByTimeAsync(when - at)
@@ -1007,7 +1012,7 @@ describe('remote playback', () => {
     const reports = await play(
       [
         { at: 0, ms: 300 },
-        { at: 5000, ms: 400, starts: 850 },
+        { at: 5000, ms: 400, starts: 500 },
         { at: 7000, ms: 1800 },
       ],
       [
@@ -1370,36 +1375,188 @@ describe('remote playback', () => {
     expect(both.get(2)).toBe(1800)
   })
 
-  it('a count stalled far from the end waits the stall out and reads what it reached', async () => {
+  it('a count stalled far from the end reads what it reached, inside the server wait', async () => {
     const reports = await play(
       [{ at: 0, ms: 900 }],
       [
         [0, (p) => p.speaking(1, 0)],
         [760, (p) => p.silent(1, 1800)],
       ],
-      920 + 1900
+      920 + 700
     )
-    expect(reports.has(1)).toBe(false)
-    await vi.advanceTimersByTimeAsync(400)
     expect(reports.get(1)).toBe(900)
   })
 
-  it('a count stalled far from the end reads whole once the next voice carries it past', async () => {
+  it('a count stalled far from the end reads what it reached when more voice follows', async () => {
     const reports = await play(
       [
-        { at: 0, ms: 1700 },
+        { at: 0, ms: 1600 },
         { at: 3000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1440, (p) => p.silent(1, 1800)],
+        [3000, (p) => p.speaking(2, 1800)],
+        [4640, (p) => p.silent(2, 3600)],
+      ],
+      5300
+    )
+    expect(reports.get(1)).toBe(1600)
+    expect(reports.get(2)).toBe(1800)
+  })
+
+  it('a short reply right after a quiet stretch does not read as stalled', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 300 },
+        { at: 1000, ms: 100, starts: 60 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [160, (p) => p.silent(1, 300)],
+        [1000, (p) => p.speaking(2, 300)],
+        [1010, (p) => p.silent(2, 400)],
+      ],
+      1600
+    )
+    expect(reports.get(2)).toBe(100)
+  })
+
+  it('audio that lands after a stall does not poison the next stamp', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1600 },
+        { at: 2300, ms: 200 },
+        { at: 5000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1440, (p) => p.silent(1, 1800)],
+        [5000, (p) => p.speaking(2, 1800)],
+        [6640, (p) => p.silent(2, 3600)],
+      ],
+      7300
+    )
+    expect(reports.get(1)).toBe(1600)
+    expect(reports.get(2)).toBe(1800)
+  })
+
+  it('a hole the browser never counted reads short, and the next utterance reads exact', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 3000 },
+        { at: 8000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5900, (p) => p.silent(1, 6000)],
+        [8000, (p) => p.speaking(2, 6000)],
+        [9640, (p) => p.silent(2, 7800)],
+      ],
+      10300
+    )
+    expect(reports.get(1)).toBe(3000)
+    expect(reports.get(2)).toBe(1800)
+  })
+
+  it('a cut after such a hole reads from the next stamp', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 3000 },
+        { at: 8000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5900, (p) => p.silent(1, 6000)],
+        [8000, (p) => p.speaking(2, 6000)],
+        [9000, (p) => p.stop(2)],
+      ],
+      9500
+    )
+    expect(reports.get(2)).toBe(980)
+  })
+
+  it('a hole the browser counted as lost was not heard', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 6000, lost: 25 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5840, (p) => p.silent(1, 6000)],
+      ],
+      6800
+    )
+    expect(reports.get(1)).toBe(5500)
+  })
+
+  it('a loss of up to 100 ms at once was concealed, and reads whole', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 6000, lost: 5 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5840, (p) => p.silent(1, 6000)],
+      ],
+      6300
+    )
+    expect(reports.get(1)).toBe(6000)
+  })
+
+  it('packets lost before the first one read short once, and never again', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1600 },
+        { at: 5000, ms: 1800 },
+        { at: 10000, ms: 1800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1440, (p) => p.silent(1, 1800)],
+        [5000, (p) => p.speaking(2, 1800)],
+        [6640, (p) => p.silent(2, 3600)],
+        [10000, (p) => p.speaking(3, 3600)],
+        [11000, (p) => p.stop(3)],
+      ],
+      11500
+    )
+    expect(reports.get(1)).toBe(1600)
+    expect(reports.get(2)).toBe(1800)
+    expect(reports.get(3)).toBe(980)
+  })
+
+  it('a cut stops at what reached the speakers, and a natural end is not shortened', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1800 },
+        { at: 3000, ms: 3000 },
       ],
       [
         [0, (p) => p.speaking(1, 0)],
         [1640, (p) => p.silent(1, 1800)],
         [3000, (p) => p.speaking(2, 1800)],
+        [4000, (p) => p.stop(2)],
       ],
-      3000
+      4500,
+      30
     )
-    expect(reports.has(1)).toBe(false)
-    await vi.advanceTimersByTimeAsync(300)
     expect(reports.get(1)).toBe(1800)
+    expect(reports.get(2)).toBe(950)
+  })
+
+  it('counts nothing from an element the browser would not play', async () => {
+    vi.useFakeTimers({ now: 0 })
+    vi.stubGlobal(
+      'Audio',
+      class extends Element {
+        paused = true
+      }
+    )
+    const reports: Array<[number, number]> = []
+    const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
+    playback.start({} as MediaStream, bufferedReceiver([{ at: 0, ms: 1800 }]))
+    playback.speaking(1, 0)
+    await vi.advanceTimersByTimeAsync(1640)
+    void playback.silent(1, 1800)
+    await vi.advanceTimersByTimeAsync(800)
+    expect(reports).toEqual([[1, 0]])
   })
 
   it('a late silent for an utterance a cut took changes nothing', async () => {

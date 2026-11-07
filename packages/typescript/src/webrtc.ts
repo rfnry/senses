@@ -55,7 +55,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       if (frame.type === 'ready') resolve()
       else if (frame.type === 'error') reject(new SensesException(frame.message))
       else if (frame.type === 'speaking') remote.speaking(frame.utterance, sentMs(frame))
-      else if (frame.type === 'silent') void remote.silent(frame.utterance, sentMs(frame))
+      else if (frame.type === 'silent') remote.silent(frame.utterance, sentMs(frame))
       else if (frame.type === 'stop') void remote.stop(frame.utterance)
       else if (frame.type === 'event') ending.tell(frame.event)
     }

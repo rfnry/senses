@@ -372,10 +372,8 @@ that point — whole sentences in a cascaded session, the model's own transcript
 what was heard. Every utterance is numbered, and audio from an interrupted one — a sentence that
 finished synthesizing a moment too late, a frame already on the wire — is dropped, on the server and
 in the client. Queued `say` and `prompt` calls end too, as the person cuts in and before `Interrupted`
-is reported: the person is talking, and they return `Said(heard="", interrupted=True)`. On a live
-model a call that arrives during the cut ends the same way, and none of them reaches the model. A
-cascaded `say` that arrives then speaks if it reaches the voice before the cut ends, and ends the
-same way if it is still queued.
+is reported: the person is talking, and they return `Said(heard="", interrupted=True)`. A call that
+arrives during the cut ends the same way, and none of them reaches the model or the voice.
 
 A live model can start its next response while the last one is still playing. The client plays them
 back to back, one stretch of voice: `Speaking` when it starts after quiet, `Silent` when all of it
@@ -801,16 +799,16 @@ first 120 ms of it at once, ahead of the clock. Either way uneven first chunks p
 Only audio that has played is counted, as
 far as the browser can tell. Over a WebSocket a stop counts up to `currentTime` less the context's
 `outputLatency`, what has reached the speakers. Over WebRTC the count is the receiver's
-`jitterBufferEmittedCount`, which leaves out the concealment it plays while no audio comes. It stops
-short of the speakers, so a cut there does not subtract the output latency, and it cannot see a
-muted output or an element the browser would not play: those count as played. A packet lost or too
-late to play also counts, because the person heard it concealed and one lost packet should not cost
-a sentence. Concealment only covers short losses: a long outage counts the same way, so the reply
-reads whole and `heard` claims words the person never got. The line between utterances is the
-server's stamp, exact on a busy page. A count that stops within 60 ms of the end reads whole, so a
-lost final packet does not shorten a play. Packets lost at the very start of a session are never
-counted: each cut in that session reads short by them, and more than three of them also delay each
-natural end by up to two seconds, after which it reads short by them unless more voice came first.
+`jitterBufferEmittedCount`, which leaves out the concealment it plays while no audio comes, and a stop
+subtracts the mean delay of the receiver's `media-playout` stats, in a browser that has them. An
+element the browser would not play counts nothing; no browser can see a muted output, so that counts
+as played. A loss of up to 100 ms at once is concealed, so it counts as played, and one lost packet
+does not cost a sentence. A longer hole was not heard: the utterance reads short by what it lost, and
+`heard` is as long as what played, though it cannot say where in the reply the hole fell. The line
+between utterances is the server's stamp, exact on a busy page, and the first voice after a second of
+quiet starts from its stamp, so a hole, or packets lost before the first one arrived, never reach the
+next stretch of voice. A count that stops within 100 ms of the end reads whole; one that stops further
+off reports what it reached after 600 ms, inside the second the server waits.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,
