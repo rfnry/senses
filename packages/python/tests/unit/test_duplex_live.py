@@ -219,7 +219,13 @@ async def test_a_connection_that_does_not_declare_duplex_does_not_start() -> Non
 
 
 def voice(ms: int) -> AudioFrame:
-    return pcm(ms)
+    return AudioFrame(data=b"\x01\x00" * (16 * ms), sample_rate=16000)
+
+
+async def silence(live: DuplexLive) -> None:
+    while True:
+        live.connection.emit(LiveAudio(frame=pcm(20)))
+        await asyncio.sleep(0.02)
 
 
 def duplex(link: Loopback, live: DuplexLive, **kwargs: Any) -> Session:
@@ -256,6 +262,74 @@ async def test_a_turn_based_model_still_drops_audio_with_no_response() -> None:
     async with Session(link, live=live, voice_gap=0.05):
         live.connection.emit(LiveAudio(frame=voice(20)), LiveSaid(text="hi "))
         await asyncio.sleep(0.1)
+    assert link.audio == [] and edges(link, "speaking") == []
+
+
+async def test_pure_silence_starts_no_stretch() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    s = duplex(link, live)
+    await s.start()
+    events = s.events()
+    before = list(link.controls)
+    live.connection.emit(*[LiveAudio(frame=pcm(20)) for _ in range(5)])
+    await asyncio.sleep(0.1)
+    assert link.audio == [] and link.controls == before
+    await s.close()
+    assert [type(e) async for e in events] == [Closed]
+
+
+async def test_silence_inside_a_stretch_reaches_the_person() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    pause = pcm(20)
+    async with duplex(link, live):
+        live.connection.emit(
+            LiveAudio(frame=voice(20)), LiveAudio(frame=pause), LiveAudio(frame=voice(20))
+        )
+        await until(lambda: bool(edges(link, "silent")))
+    assert len(link.audio) == 3 and link.audio[1] == pause
+    assert edges(link, "speaking") == [1]
+
+
+async def test_a_continuous_stream_ends_its_stretch_when_the_voice_stops() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live) as s:
+        events = s.events()
+        live.connection.emit(LiveSaid(text="hello "), LiveAudio(frame=voice(20)))
+        stream = asyncio.create_task(silence(live))
+        said = await next_of(events, Said)
+        await asyncio.wait_for(s.quiet(), 1)
+        assert not stream.done() and edges(link, "silent") == [1]
+        sent = len(link.audio)
+        await asyncio.sleep(0.06)
+        stream.cancel()
+    assert said.text == "hello " and said.heard == "hello "
+    assert len(link.audio) == sent and edges(link, "speaking") == [1]
+
+
+async def test_voice_after_silence_longer_than_the_gap_starts_a_new_stretch() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live) as s:
+        events = s.events()
+        stream = asyncio.create_task(silence(live))
+        live.connection.emit(LiveSaid(text="one "), LiveAudio(frame=voice(20)))
+        first = await next_of(events, Said)
+        await asyncio.sleep(0.1)
+        live.connection.emit(LiveSaid(text="two "), LiveAudio(frame=voice(20)))
+        second = await next_of(events, Said)
+        stream.cancel()
+    assert [first.text, second.text] == ["one ", "two "]
+    assert edges(link, "speaking") == [1, 2]
+
+
+async def test_words_with_only_silence_after_them_are_not_voice() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live) as s:
+        events = s.events()
+        stream = asyncio.create_task(silence(live))
+        live.connection.emit(LiveSaid(text="hi "))
+        said = await next_of(events, Said)
+        stream.cancel()
+    assert said.text == "hi " and said.heard == ""
     assert link.audio == [] and edges(link, "speaking") == []
 
 

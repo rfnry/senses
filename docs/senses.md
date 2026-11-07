@@ -143,10 +143,13 @@ once it is sent, and senses reports `Informed`, so the action still leaves an ev
 
 On a duplex connection an adapter sends the voice as it comes, and the session makes an utterance
 from each stretch of voice. `LiveAudio` with no response open starts one, with `triggered_by=None`.
-It ends when everything sent has played and nothing has come for `voice_gap` seconds, a `Session`
-argument, 0.5 by default. Audio arrives ahead of playback, so only the session can tell: it reads its
-own count of what has played, not when the frames arrived. Each stretch reports `Speaking`, `Silent`
-and `Said` as a response does, and `quiet` returns between stretches. A `LiveSaid` that comes after
+It ends `voice_gap` seconds after its last voice has played; `voice_gap` is a `Session` argument, 1.0
+by default. Audio can arrive ahead of playback, and a model may stream continuously, sending silence
+as zeros, so audio arriving says nothing about whether it is speaking. Only the session can tell: it
+reads voice from the samples, and what has played from its own count. A frame of pure silence is not
+voice: it starts no stretch and does not extend one, though once a stretch has voice its silence is
+still sent, to keep the timing of its pauses. Each stretch reports `Speaking`, `Silent` and `Said` as
+a response does, and `quiet` returns between stretches. A `LiveSaid` that comes after
 its stretch went quiet but before its `Said` still joins it, at its end, and one with no utterance
 open starts a stretch, so a model's words are never lost.
 
@@ -155,7 +158,7 @@ as usual, and audio belongs to that response until `LiveDone`, cut or not. A `Li
 stretch ends the stretch, and one with nothing open is ignored, so a model that marks only where
 speech ends fits too. This is how `say` works, how a model with its own markers fits, and how a tag
 claims a `prompt`. A boundary is knowledge about the model, so an adapter that knows better than
-a gap in the audio brackets the speech, and whatever it sends outside a bracket is voice.
+a gap in the voice brackets the speech. Silence inside a response is sent as any frame is.
 
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
@@ -392,7 +395,7 @@ called with `response=None`. Stopping the model is `connection.interrupt`'s job,
 knows how its vendor behaves, so after a cut an adapter silences what its model still sends until the
 model has stopped. Audio that arrives during an `interrupt` or `mute` is dropped. An adapter that sends
 `LiveInterrupted` silences its model from that moment: senses reads no event until that cut ends, so
-what queued behind it would be new voice. Any audio after a cut is a new stretch, so the answer to a
+what queued behind it would be new voice. Any voice after a cut is a new stretch, so the answer to a
 barge-in or a `prompt` is never swallowed, and while muted audio starts no stretch.
 
 A model that gives no barge-in event leaves the session nothing to do: the voice plays on, and the

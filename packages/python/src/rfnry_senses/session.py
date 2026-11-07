@@ -110,6 +110,7 @@ class Utterance:
     source: str | AsyncIterator[str] = ""
     response: str | None = None
     request: str | None = None
+    voiced_until: float = 0.0
     send: Callable[[], Awaitable[str | None]] | None = None
     sent: asyncio.Future[None] | None = None
 
@@ -147,7 +148,7 @@ class Session:
         window: float = 10.0,
         window_bytes: int = 8 * 1024 * 1024,
         tool_timeout: float | None = 30.0,
-        voice_gap: float = 0.5,
+        voice_gap: float = 1.0,
     ) -> None:
         if live is not None and (transcription is not None or speech is not None):
             raise ConfigurationError(
@@ -650,11 +651,18 @@ class Session:
         assert self._connection is not None
         async for event in self._connection.events():
             if isinstance(event, LiveAudio):
-                if self._stretch_free:
+                voiced = bool(event.frame.data.strip(b"\0"))
+                if voiced and self._stretch_free:
                     self._open_stretch()
                 u = self._utterance
-                if u is not None and self._responding:
+                if (
+                    u is not None
+                    and self._responding
+                    and (voiced or u.spoke or u is not self._stretch)
+                ):
                     await self._send(u, event.frame)
+                    if voiced:
+                        u.voiced_until = self._playhead
             elif isinstance(event, LiveSaid):
                 if self._stretch_free and self._utterance is None:
                     self._open_stretch()
@@ -699,7 +707,7 @@ class Session:
 
     async def _watch(self, u: Utterance, opened: float) -> None:
         while self._stretch is u:
-            left = max(self._playhead, opened) + self._voice_gap - monotonic()
+            left = max(u.voiced_until, opened) + self._voice_gap - monotonic()
             if left > 0:
                 await asyncio.sleep(left)
             else:
