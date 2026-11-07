@@ -147,6 +147,7 @@ class Session:
         window: float = 10.0,
         window_bytes: int = 8 * 1024 * 1024,
         tool_timeout: float | None = 30.0,
+        voice_gap: float = 0.5,
     ) -> None:
         if live is not None and (transcription is not None or speech is not None):
             raise ConfigurationError(
@@ -157,6 +158,7 @@ class Session:
         for name, value in (
             ("window", window),
             ("window_bytes", window_bytes),
+            ("voice_gap", voice_gap),
         ):
             if value <= 0:
                 raise ConfigurationError(f"session: {name} must be positive")
@@ -175,6 +177,7 @@ class Session:
         self._speech = speech
         self._window = FrameWindow(window, window_bytes) if video else None
         self._tool_timeout = tool_timeout
+        self._voice_gap = voice_gap
         self._connection: LiveConnection | None = None
         self._duplex = False
         self._stream: Transcription | None = None
@@ -189,6 +192,7 @@ class Session:
         self._muted = False
         self._numbers = count(1)
         self._utterance: Utterance | None = None
+        self._stretch: Utterance | None = None
         self._out: list[Utterance] = []
         self._ending: list[Utterance] = []
         self._playhead = 0.0
@@ -236,6 +240,10 @@ class Session:
         if self._duplex:
             return not (self._closed or self._cutting)
         return not (self._closed or self._cutting or self._causes or self._responding)
+
+    @property
+    def _stretch_free(self) -> bool:
+        return self._duplex and not (self._responding or self._muted or self._cutting)
 
     def _settle(self) -> None:
         settled, self._settled = self._settled, asyncio.Event()
@@ -454,6 +462,9 @@ class Session:
         for v in taken:
             v.cut = True
         self._cutting += 1
+        if self._stretch is not None:
+            self._stretch = None
+            self._responding = False
         if self._playing is not None:
             self._playing.cancel()
         try:
@@ -642,13 +653,17 @@ class Session:
         assert self._connection is not None
         async for event in self._connection.events():
             if isinstance(event, LiveAudio):
+                if self._stretch_free:
+                    self._open_stretch()
                 u = self._utterance
                 if u is not None and self._responding:
                     await self._send(u, event.frame)
             elif isinstance(event, LiveSaid):
+                if self._stretch_free and self._utterance is None:
+                    self._open_stretch()
                 u = self._utterance
-                if u is not None and self._responding:
-                    u.ledger.mark(event.text, ahead=True)
+                if u is not None and (self._responding or self._duplex):
+                    u.ledger.mark(event.text, ahead=self._responding)
                     if not u.verbatim:
                         u.text += event.text
             elif isinstance(event, LiveHeard):
@@ -679,7 +694,23 @@ class Session:
                 raise ModelError(f"session: the live model failed: {event.message}")
         raise ModelError("session: the live connection ended")
 
+    def _open_stretch(self) -> None:
+        u = self._stretch = Utterance(None)
+        self._responding = True
+        self._start(u)
+        self._spawn(self._watch(u, monotonic()))
+
+    async def _watch(self, u: Utterance, opened: float) -> None:
+        while self._stretch is u:
+            left = max(self._playhead, opened) + self._voice_gap - monotonic()
+            if left > 0:
+                await asyncio.sleep(left)
+            else:
+                await self._response_done()
+
     async def _response_started(self, event: LiveStarted) -> None:
+        if self._stretch is not None:
+            await self._response_done()
         if self._responding:
             raise ModelError("session: a response started before the last one was done")
         self._responding = True
@@ -717,8 +748,11 @@ class Session:
 
     async def _response_done(self) -> None:
         if not self._responding:
+            if self._duplex:
+                return
             raise ModelError("session: a response ended before it started")
         self._responding = False
+        self._stretch = None
         u = self._utterance
         events: list[Event] = []
         if u is not None and u.spoke:

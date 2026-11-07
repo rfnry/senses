@@ -47,7 +47,7 @@ LiveEvent = (
 )
 ```
 
-What `LiveConnection.events()` yields. Every response is bracketed by `LiveStarted` and `LiveDone`.
+What `LiveConnection.events()` yields. On a turn-based connection every response is bracketed by `LiveStarted` and `LiveDone`; on a duplex connection an adapter can leave them out, and the session makes an utterance from each stretch of voice.
 
 ### `LiveAudio`
 
@@ -56,7 +56,7 @@ class LiveAudio(BaseModel):
     frame: AudioFrame
 ```
 
-A piece of the model's voice. It plays only inside a response.
+A piece of the model's voice. On a turn-based connection it plays only inside a response. On a duplex connection one with no response open starts a stretch of voice, with `triggered_by=None`, unless the session is muted or a cut has not finished, when it is dropped.
 
 ### `LiveHeard`
 
@@ -75,7 +75,7 @@ class LiveSaid(BaseModel):
     text: str
 ```
 
-The model's own words as it speaks them, marked against its audio so a cut knows what was heard. A `prompt`'s `Said.text` is these words, joined.
+The model's own words as it speaks them, marked against its audio so a cut knows what was heard. A `prompt`'s `Said.text` is these words, joined. On a duplex connection one that comes after its utterance went quiet but before its `Said` still joins it, at its end, and one with no utterance open starts a stretch of voice.
 
 ### `LiveStarted`
 
@@ -85,7 +85,7 @@ class LiveStarted(BaseModel):
     requested: bool | str | None = None
 ```
 
-One response begins. A `str` is the tag `send_text` or `say` returned for the request it answers, and the response takes that request's cause. A response that carries the tag of a request the session already ended — by `mute`, the person cutting in, or a caller that gave up while it was being sent — is cut at once, as one started while muted is: `interrupt(0, heard="", response=id)`, and no `Said`. One whose tag the session never handed out is the vendor's own, and takes no cause. `requested=False` says it answers no `say` or `prompt` — the vendor started it on its own, or it answers a tool result or the person — and it takes no cause; `True` and `None` take the oldest `say` or `prompt` waiting for a response, or none. `None` is for an adapter that cannot tell. Without a tag, a request the session ended after its send began shifts that order when the vendor still answers it: the answer takes the next request's cause. `id` is the vendor's id for the response, handed back to `interrupt`. The session fails with `ModelError` when a response starts before the last one is done.
+One response begins. A `str` is the tag `send_text` or `say` returned for the request it answers, and the response takes that request's cause. A response that carries the tag of a request the session already ended — by `mute`, the person cutting in, or a caller that gave up while it was being sent — is cut at once, as one started while muted is: `interrupt(0, heard="", response=id)`, and no `Said`. One whose tag the session never handed out is the vendor's own, and takes no cause. `requested=False` says it answers no `say` or `prompt` — the vendor started it on its own, or it answers a tool result or the person — and it takes no cause; `True` and `None` take the oldest `say` or `prompt` waiting for a response, or none. `None` is for an adapter that cannot tell. Without a tag, a request the session ended after its send began shifts that order when the vendor still answers it: the answer takes the next request's cause. `id` is the vendor's id for the response, handed back to `interrupt`. The session fails with `ModelError` when a response starts before the last one is done. On a duplex connection an open stretch of voice ends first, with what played, and no error: audio then belongs to this response until `LiveDone`.
 
 ### `LiveDone`
 
@@ -94,7 +94,7 @@ class LiveDone(BaseModel):
     pass
 ```
 
-One response is over; its utterance ends when the client reports how much of it played. The session fails with `ModelError` when a response ends before it starts.
+One response is over; its utterance ends when the client reports how much of it played. On a duplex connection it also ends an open stretch of voice, and with nothing open it is ignored, so a model that marks only where speech ends fits too. On a turn-based connection the session fails with `ModelError` when a response ends before it starts.
 
 ### `LiveToolCall`
 
@@ -123,7 +123,7 @@ class LiveInterrupted(BaseModel):
     pass
 ```
 
-The model heard the person cut in. The session stops the voice, cuts the utterance to what was heard, and ends the `say` and `prompt` calls still queued with nothing heard.
+The model heard the person cut in. The session stops the voice, cuts the utterance to what was heard, and ends the `say` and `prompt` calls still queued with nothing heard. An adapter on a duplex connection sends it only on a clear signal, never on a backchannel; audio after the cut starts a new stretch of voice.
 
 ### `LiveFailed`
 
@@ -203,13 +203,14 @@ class Session:
         window: float = 10.0,
         window_bytes: int = 8 * 1024 * 1024,
         tool_timeout: float | None = 30.0,
+        voice_gap: float = 0.5,
     ) -> None: ...
     async def __aenter__(self) -> Session: ...
     async def __aexit__(self, *exc: object) -> None: ...
 ```
 
-One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error, and when that start is cancelled, it closes the session with reason `closed`.
-Raises `ConfigurationError` when a live model is given with transcription or speech models, `instructions` without a live model, or a `window`, `window_bytes` or `tool_timeout` that is not positive.
+One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. On a duplex connection a stretch of voice ends when everything sent has played and nothing has come for `voice_gap` seconds. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error, and when that start is cancelled, it closes the session with reason `closed`.
+Raises `ConfigurationError` when a live model is given with transcription or speech models, `instructions` without a live model, or a `window`, `window_bytes`, `tool_timeout` or `voice_gap` that is not positive: `session: voice_gap must be positive`.
 Raises `InputError` when the transport's scope is empty or its identity does not fit.
 
 ### `Session.start`
@@ -326,7 +327,7 @@ Returns a new async iterator of every `Event` the session reports from now on. E
 async def quiet(self) -> None: ...
 ```
 
-Returns once the voice has nothing left to say: no response is open, no `say` or `prompt` is waiting, and every utterance has played or been cut. It also returns when the session closes, or has closed. A tool still running is not waited for; its result may start another response.
+Returns once the voice has nothing left to say: no response is open, no `say` or `prompt` is waiting, and every utterance has played or been cut. On a duplex connection it returns between stretches of voice, so a model that never marks its speech still goes quiet. It also returns when the session closes, or has closed. A tool still running is not waited for; its result may start another response.
 Raises `TransportError` when the session is not started.
 
 ### `Session.close`

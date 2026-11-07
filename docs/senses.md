@@ -86,8 +86,9 @@ Audio is `AudioFrame(data, sample_rate, channels)`: 16-bit little-endian PCM, on
 another rate converts in the adapter.
 Images are the family's `Image` part — frames travel as JPEG.
 
-A live connection reports what happens as `LiveEvent`s. Every response the model gives is
-bracketed by `LiveStarted` and `LiveDone`; an adapter whose vendor has no such markers makes them:
+A live connection reports what happens as `LiveEvent`s. On a turn-based connection every response
+the model gives is bracketed by `LiveStarted` and `LiveDone`, and an adapter whose vendor has no such
+markers makes them; a duplex connection can leave them out:
 
 ```python
 LiveAudio(frame=frame)                                   # the model's voice
@@ -137,8 +138,24 @@ returns a tag is paired with the response carrying it, as above. One that return
 paired, because the model's reply cannot be told from the rest of its speech: `prompt` returns `None`
 once it is sent, and senses reports `Informed`, so the action still leaves an event naming its cause.
 `say` must return a tag, and the adapter brackets the speech with `LiveStarted(requested=tag)` and
-`LiveDone`, so `Said` is exact: a `say` that returns `None` raises `ModelError`, and an adapter with
-no way to speak exact words raises from `say`.
+`LiveDone` and reports its words as `LiveSaid`, so `Said` is exact: a `say` that returns `None` raises
+`ModelError`, and an adapter with no way to speak exact words raises from `say`.
+
+On a duplex connection an adapter sends the voice as it comes, and the session makes an utterance
+from each stretch of voice. `LiveAudio` with no response open starts one, with `triggered_by=None`.
+It ends when everything sent has played and nothing has come for `voice_gap` seconds, a `Session`
+argument, 0.5 by default. Audio arrives ahead of playback, so only the session can tell: it reads its
+own count of what has played, not when the frames arrived. Each stretch reports `Speaking`, `Silent`
+and `Said` as a response does, and `quiet` returns between stretches. A `LiveSaid` that comes after
+its stretch went quiet but before its `Said` still joins it, at its end, and one with no utterance
+open starts a stretch, so a model's words are never lost.
+
+An adapter can still bracket speech itself. `LiveStarted` ends any open stretch and opens a response
+as usual, and audio belongs to that response until `LiveDone`, cut or not. A `LiveDone` during a
+stretch ends the stretch, and one with nothing open is ignored, so a model that marks only where
+speech ends fits too. This is how `say` works, how a model with its own markers fits, and how a tag
+claims a `prompt`. A boundary is knowledge about the model, so an adapter that knows better than
+a gap in the audio brackets the speech, and whatever it sends outside a bracket is voice.
 
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
@@ -368,6 +385,20 @@ If the client never reports, senses estimates from its own clock — the audio s
 time since it began to play, after anything queued ahead of it — after a quarter of a second, so an
 interruption never waits on a silent client. A live model whose vendor cannot cut its context raises from `interrupt`; senses logs that
 as a warning and goes on — the voice is already stopped.
+
+On a duplex connection a cut ends a stretch of voice as it ends a response: `interrupt`, `mute` and
+`LiveInterrupted` drop what is queued and cut the utterance to what was heard, and `interrupt` is
+called with `response=None`. Stopping the model is `connection.interrupt`'s job, and only the adapter
+knows how its vendor behaves, so after a cut an adapter silences what its model still sends until the
+model has stopped. Audio that arrives during an `interrupt` or `mute` is dropped. An adapter that sends
+`LiveInterrupted` silences its model from that moment: senses reads no event until that cut ends, so
+what queued behind it would be new voice. Any audio after a cut is a new stretch, so the answer to a
+barge-in or a `prompt` is never swallowed, and while muted audio starts no stretch.
+
+A model that gives no barge-in event leaves the session nothing to do: the voice plays on, and the
+transport still counts what played. An adapter sends `LiveInterrupted` only on a clear signal, never
+on a backchannel such as "mm-hm". How much queued audio plays over the person is the model's to
+offer.
 
 Your code can cut the voice too, or close the gate on it:
 
@@ -886,7 +917,7 @@ camera's `facing` or `deviceId`; the `Senses` it returns, with `SensesStatus`; `
 `ConfigurationError` for a session that cannot do what is asked: a live model given with
 transcription or speech models; `instructions=` or `start(tools=)` without a live model; `start`
 on a session already started; `say` or `interrupt` without a voice, `prompt` or `inform` without a
-live model, `look` without `video=True`; a `window`, `window_bytes` or `tool_timeout` that is not
+live model, `look` without `video=True`; a `window`, `window_bytes`, `tool_timeout` or `voice_gap` that is not
 positive. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
 audio frame whose sample rate is not positive, whose channels are not one or two, or whose bytes
@@ -894,7 +925,7 @@ do not fill its samples, a tool called with bad arguments, an
 identity whose fields do not fit, an empty scope given to `serve` or `accept_offer`, or a transport
 with an empty scope given to `Session`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
-that ends before it starts, or starts before the last one is done — and the session closes; a
+that ends before it starts on a turn-based connection, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A `say` on a duplex connection that returns no tag raises
 `ModelError` from that one `say`, and the session goes on. A speech model that fails raises `ModelError` from the
 one `say` that needed it; a tool definition that is not valid raises `InputError` from `start`. `TransportError`
