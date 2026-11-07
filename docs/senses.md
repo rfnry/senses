@@ -802,13 +802,15 @@ far as the browser can tell. Over a WebSocket a stop counts up to `currentTime` 
 `jitterBufferEmittedCount`, which leaves out the concealment it plays while no audio comes, and a stop
 subtracts the mean delay of the receiver's `media-playout` stats, in a browser that has them. An
 element the browser would not play counts nothing; no browser can see a muted output, so that counts
-as played. A loss of up to 100 ms at once is concealed, so it counts as played, and one lost packet
-does not cost a sentence. A longer hole was not heard: the utterance reads short by what it lost, and
-`heard` is as long as what played, though it cannot say where in the reply the hole fell. The line
-between utterances is the server's stamp, exact on a busy page, and the first voice after a second of
-quiet starts from its stamp, so a hole, or packets lost before the first one arrived, never reach the
-next stretch of voice. A count that stops within 100 ms of the end reads whole; one that stops further
-off reports what it reached after 600 ms, inside the second the server waits.
+as played. A loss too short to swallow a word, up to 300 ms at once, counts as
+played, so a lost packet does not cost a sentence. A longer hole ends `heard` where it began: `heard`
+is the start of what was said, so it never claims a word the person missed, though they may have heard
+some of what came after. A cut cannot tell a pause of a second or more from a hole, so it ends there
+too. The line between utterances is the server's stamp, exact on a busy page, and the first voice
+after a second of quiet starts from its stamp, so a hole, or packets lost before the first one
+arrived, never reach the next stretch of voice. A count that stops within 100 ms of the end reads
+whole; one that stops further off reports what it reached after 600 ms, inside the second the server
+waits.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
 `{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,

@@ -1476,7 +1476,37 @@ describe('remote playback', () => {
     expect(reports.get(2)).toBe(980)
   })
 
-  it('a hole the browser counted as lost was not heard', async () => {
+  it('heard ends where a hole the browser never counted began', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1000 },
+        { at: 4000, ms: 2000 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5840, (p) => p.silent(1, 6000)],
+      ],
+      6800
+    )
+    expect(reports.get(1)).toBe(1000)
+  })
+
+  it('a cut after such a hole stops where the hole began', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1000 },
+        { at: 4000, ms: 2000 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5000, (p) => p.stop(1)],
+      ],
+      5500
+    )
+    expect(reports.get(1)).toBe(1000)
+  })
+
+  it('heard ends where a hole the browser counted as lost began', async () => {
     const reports = await play(
       [{ at: 0, ms: 6000, lost: 25 }],
       [
@@ -1485,12 +1515,24 @@ describe('remote playback', () => {
       ],
       6800
     )
-    expect(reports.get(1)).toBe(5500)
+    expect(reports.get(1)).toBe(2980)
   })
 
-  it('a loss of up to 100 ms at once was concealed, and reads whole', async () => {
+  it('a cut after a counted hole stops where the hole began', async () => {
     const reports = await play(
-      [{ at: 0, ms: 6000, lost: 5 }],
+      [{ at: 0, ms: 6000, lost: 25 }],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [5000, (p) => p.stop(1)],
+      ],
+      5500
+    )
+    expect(reports.get(1)).toBe(2980)
+  })
+
+  it('a loss too short to swallow a word reads whole', async () => {
+    const reports = await play(
+      [{ at: 0, ms: 6000, lost: 15 }],
       [
         [0, (p) => p.speaking(1, 0)],
         [5840, (p) => p.silent(1, 6000)],
@@ -1498,6 +1540,38 @@ describe('remote playback', () => {
       6300
     )
     expect(reports.get(1)).toBe(6000)
+  })
+
+  it('a pause in a healthy reply is no hole: it reaches its stamp and reads whole', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1000 },
+        { at: 3000, ms: 800 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [3640, (p) => p.silent(1, 1800)],
+      ],
+      4300
+    )
+    expect(reports.get(1)).toBe(1800)
+  })
+
+  it('a hole found at the start of the next reply is not held against it', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1800 },
+        { at: 5000, ms: 3000, lost: 25 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [1640, (p) => p.silent(1, 1800)],
+        [5000, (p) => p.speaking(2, 1800)],
+        [6000, (p) => p.stop(2)],
+      ],
+      6500
+    )
+    expect(reports.get(2)).toBe(980)
   })
 
   it('packets lost before the first one read short once, and never again', async () => {

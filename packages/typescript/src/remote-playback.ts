@@ -1,13 +1,13 @@
-type Spoken = { start: number; end: number | null }
+type Spoken = { start: number; end: number | null; hole: number | null; stalled: number | null }
 
 const POLL_MS = 100
 const FADE_MS = 60
 const FADE_STEPS = 6
 const PACKET_MS = 20
 const STALL_POLLS = 6
-const REST_POLLS = 10
-const CONCEALED_PACKETS = 5
-const CONCEALED_MS = CONCEALED_PACKETS * PACKET_MS
+const STILL_POLLS = 10
+const HOLE_PACKETS = 15
+const TAIL_MS = 100
 
 const counted = (packets: unknown) => (typeof packets === 'number' ? Math.max(0, packets) : 0)
 
@@ -30,6 +30,7 @@ export class RemotePlayback {
   private shift = 0
   private rest: number | null = null
   private idle = 0
+  private last: number | null = null
   private output = 0
   private readonly spoken = new Map<number, Spoken>()
   private readonly reported = new Set<number>()
@@ -46,7 +47,10 @@ export class RemotePlayback {
   }
 
   speaking(utterance: number, sentMs: number): void {
-    if (this.rest !== null) this.shift = sentMs - this.rest
+    if (this.rest !== null) {
+      this.shift = sentMs - this.rest
+      this.last = null
+    }
     this.rest = null
     this.idle = 0
     if (utterance <= this.fenced || this.spoken.has(utterance) || this.reported.has(utterance))
@@ -57,7 +61,7 @@ export class RemotePlayback {
       this.element.muted = false
     }
     for (const earlier of this.spoken.values()) earlier.end ??= sentMs
-    this.spoken.set(utterance, { start: sentMs, end: null })
+    this.spoken.set(utterance, { start: sentMs, end: null, hole: null, stalled: null })
     void this.watch()
   }
 
@@ -75,7 +79,7 @@ export class RemotePlayback {
       .sort((a, b) => a - b)
     if (ending.length === 0) return
     const now = await this.position()
-    for (const number of ending) this.finish(number, now === null ? null : now - this.output)
+    for (const number of ending) this.finish(number, now === null ? null : now - this.output, true)
   }
 
   silent(utterance: number, sentMs: number): void {
@@ -119,36 +123,47 @@ export class RemotePlayback {
   }
 
   private async poll(): Promise<void> {
-    let last: number | null = null
+    this.last = null
     this.idle = 0
     for (;;) {
       await new Promise((resolve) => setTimeout(resolve, POLL_MS))
       const now = await this.position()
-      this.idle = now === last ? this.idle + 1 : 0
-      last = now
+      if (now !== this.last && this.idle >= STILL_POLLS) {
+        const spoken = this.holding(this.last)
+        if (spoken !== undefined) spoken.stalled ??= this.last
+      }
+      this.idle = now === this.last ? this.idle + 1 : 0
+      this.last = now
       for (const [utterance, { end }] of this.spoken) {
         if (end === null) break
         if (now === null) this.finish(utterance, null)
-        else if (now >= end || (this.idle > 0 && end - now <= CONCEALED_MS))
-          this.finish(utterance, end)
-        else if (this.idle >= STALL_POLLS) this.finish(utterance, now)
+        else if (now >= end || (this.idle > 0 && end - now <= TAIL_MS)) this.finish(utterance, end)
+        else if (this.idle >= STALL_POLLS) this.finish(utterance, now, true)
         else break
       }
       if (now === null) return
-      if (this.idle >= REST_POLLS && this.spoken.size === 0) {
+      if (this.idle >= STILL_POLLS && this.spoken.size === 0) {
         this.rest = now - this.shift
         return
       }
     }
   }
 
-  private finish(utterance: number, at: number | null): void {
+  private holding(ms: number | null): Spoken | undefined {
+    if (ms === null) return undefined
+    return [...this.spoken.values()].find(
+      ({ start, end }) => ms > start && (end === null || ms < end)
+    )
+  }
+
+  private finish(utterance: number, at: number | null, short = false): void {
     const spoken = this.spoken.get(utterance)
     if (spoken === undefined) return
     this.spoken.delete(utterance)
     this.reported.add(utterance)
-    const { start, end } = spoken
-    const reached = at === null ? start : Math.min(at, end ?? at)
+    const { start, end, hole, stalled } = spoken
+    const stops = [at ?? start, end, hole, short ? stalled : null]
+    const reached = Math.min(...stops.filter((ms) => ms !== null))
     this.report(utterance, Math.max(0, Math.round(reached - start)))
   }
 
@@ -164,7 +179,11 @@ export class RemotePlayback {
     const codec = entries.find((entry) => entry.id === codecId)
     const rate = typeof codec?.clockRate === 'number' ? codec.clockRate : 48000
     const lost = counted(inbound.packetsLost) + counted(inbound.packetsDiscarded)
-    if (lost - this.lost > CONCEALED_PACKETS) this.holes += lost - this.lost
+    if (lost - this.lost > HOLE_PACKETS) {
+      this.holes += lost - this.lost
+      const spoken = this.holding(this.last)
+      if (spoken !== undefined) spoken.hole ??= this.last
+    }
     this.lost = Math.max(this.lost, lost)
     this.output = outputMs(entries.find((entry) => entry.id === playoutId))
     return (emitted * 1000) / rate + (lost - this.holes) * PACKET_MS + this.shift
