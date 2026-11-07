@@ -247,7 +247,7 @@ Asks the live model to speak now, in its own words, and returns the `Said`: `tex
 Raises `InputError` when `text` is empty or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has no live model.
 Raises `TransportError` when the session is not started or is closed, or closes before the words are spoken.
-Raises `ModelError` when the live model fails while the call waits.
+Raises `ModelError` when the live model fails while the call waits, or ends its response with no words.
 
 ### `Session.inform`
 
@@ -404,7 +404,7 @@ class Said(BaseModel):
     triggered_by: Identity | None
 ```
 
-An utterance ended, once each, when what was heard of it is final. `text` is what the voice was given and `heard` what the person heard; `triggered_by` is `None` when a live model spoke on its own or answered what it heard. An utterance with no words reports no `Said`: a `say` or `prompt` waiting on one still returns an empty `Said`, and senses logs a warning.
+An utterance ended, once each, when what was heard of it is final. `text` is what the voice was given and `heard` what the person heard; `triggered_by` is `None` when a live model spoke on its own or answered what it heard. An utterance with no words reports no `Said`: a `prompt` cut before any words returns an empty one with `interrupted` true, a response that ends with no words raises `ModelError` from its `prompt`, and voice that played with no words logs a warning.
 
 ### `Interrupted`
 

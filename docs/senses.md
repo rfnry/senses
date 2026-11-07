@@ -938,7 +938,7 @@ with an empty scope given to `Session`. `NotFoundError` when `look` finds no fra
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts on a turn-based connection, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A `say` on a duplex connection that returns no tag raises
-`ModelError` from that one `say`, and the session goes on. A speech model that fails raises `ModelError` from the
+`ModelError` from that one `say`, and a response that ends a `prompt` with no words raises it from that one `prompt`; the session goes on. A speech model that fails raises `ModelError` from the
 one `say` that needed it; a tool definition that is not valid raises `InputError` from `start`. `TransportError`
 for a send the transport failed (the session closes as `failed`), a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after

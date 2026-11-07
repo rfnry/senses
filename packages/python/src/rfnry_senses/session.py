@@ -376,7 +376,10 @@ class Session:
         if self._muted:
             await self._finish(u, "", interrupted=True)
             return await done
-        return await self._ask(u, lambda: connection.send_text(text, respond=True))
+        said = await self._ask(u, lambda: connection.send_text(text, respond=True))
+        if said is not None and not said.text and not said.interrupted:
+            raise ModelError("session: the model ended a prompt with no words")
+        return said
 
     async def inform(self, text: str, *, triggered_by: IdentityLike) -> None:
         cause = as_identity(triggered_by)
@@ -864,8 +867,8 @@ class Session:
         if u.text or heard:
             self._tell(said)
             events.append(said)
-        elif u.done is not None:
-            logger.warning("session: an utterance ended with no words, so it reports no Said")
+        elif u.spoke:
+            logger.warning("session: the voice played with no words, so it reports no Said")
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
         self._settle()

@@ -263,7 +263,9 @@ async def test_a_connection_that_does_not_declare_duplex_does_not_start() -> Non
     await s.close()
 
 
-async def test_voice_with_no_words_reports_no_said() -> None:
+async def test_voice_with_no_words_reports_no_said_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     link, live = Loopback(ANA, "acme"), DuplexLive()
     s = duplex(link, live)
     await s.start()
@@ -273,6 +275,7 @@ async def test_voice_with_no_words_reports_no_said() -> None:
     await asyncio.wait_for(s.quiet(), 1)
     await s.close()
     assert [type(e) async for e in events] == [Speaking, Silent, Closed]
+    assert "session: the voice played with no words, so it reports no Said" in caplog.text
 
 
 async def test_a_response_with_no_words_reports_no_said() -> None:
@@ -287,7 +290,7 @@ async def test_a_response_with_no_words_reports_no_said() -> None:
     assert [type(e) async for e in events] == [Speaking, Silent, Closed]
 
 
-async def test_a_prompt_that_ended_before_any_words_says_so_without_a_blank_line(
+async def test_a_prompt_cut_before_any_words_returns_the_cut_without_a_blank_line(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     link, live = Loopback(ANA, "acme"), ScriptedLive()
@@ -301,7 +304,26 @@ async def test_a_prompt_that_ended_before_any_words_says_so_without_a_blank_line
     await s.close()
     assert said is not None and said.interrupted and said.heard == ""
     assert Said not in [type(e) async for e in events]
-    assert "session: an utterance ended with no words, so it reports no Said" in caplog.text
+    assert "no words" not in caplog.text
+
+
+async def test_a_response_with_no_words_fails_its_prompt_and_the_session_goes_on() -> None:
+    link, live = Loopback(ANA, "acme"), ScriptedLive()
+    s = Session(link, live=live)
+    await s.start()
+    events = s.events()
+    asking = asyncio.create_task(s.prompt("the news", triggered_by=HOST))
+    await until(lambda: bool(live.connection.calls))
+    live.connection.emit(LiveStarted(requested=True), LiveDone())
+    with pytest.raises(ModelError, match="^session: the model ended a prompt with no words$"):
+        await asyncio.wait_for(asking, 1)
+    again = asyncio.create_task(s.prompt("the weather", triggered_by=HOST))
+    await until(lambda: len(live.connection.calls) == 2)
+    live.connection.emit(LiveStarted(requested=True), LiveSaid(text="Sunny. "), LiveDone())
+    said = await asyncio.wait_for(again, 1)
+    await s.close()
+    assert said is not None and said.text == "Sunny. "
+    assert [e.text for e in [e async for e in events] if isinstance(e, Said)] == ["Sunny. "]
 
 
 async def test_a_blank_said_never_reaches_the_client() -> None:
