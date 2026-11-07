@@ -45,9 +45,11 @@ async def speaking(link: Loopback, live: ScriptedLive) -> None:
 class HeldSend(DuplexConnection):
     def __init__(self) -> None:
         super().__init__()
+        self.sending = asyncio.Event()
         self.release = asyncio.Event()
 
     async def send_text(self, text: str, *, respond: bool) -> str | None:
+        self.sending.set()
         await self.release.wait()
         return await super().send_text(text, respond=respond)
 
@@ -78,6 +80,38 @@ async def test_a_prompt_with_no_pair_reports_informed() -> None:
         await asyncio.wait_for(s.prompt("the news", triggered_by=HOST), 1)
         informed = await next_of(events, Informed)
     assert informed.text == "the news" and informed.triggered_by == HOST
+
+
+async def test_a_prompt_given_up_during_its_send_still_reports_informed() -> None:
+    live = DuplexLive()
+    held = live.connection = HeldSend()
+    async with Session(Loopback(ANA, "acme"), live=live) as s:
+        events = s.events()
+        asking = asyncio.create_task(s.prompt("the news", triggered_by=HOST))
+        await asyncio.wait_for(held.sending.wait(), 1)
+        asking.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+        held.release.set()
+        informed = await asyncio.wait_for(next_of(events, Informed), 1)
+    assert informed.text == "the news" and informed.triggered_by == HOST
+    assert ("text", "the news", True) in held.calls
+
+
+async def test_a_prompt_a_cut_ended_during_its_send_reports_no_informed() -> None:
+    live = DuplexLive()
+    held = live.connection = HeldSend()
+    async with Session(Loopback(ANA, "acme"), live=live) as s:
+        events = s.events()
+        asking = asyncio.create_task(s.prompt("the news", triggered_by=HOST))
+        await asyncio.wait_for(held.sending.wait(), 1)
+        live.connection.emit(LiveInterrupted())
+        await asyncio.sleep(0.02)
+        held.release.set()
+        said = await asyncio.wait_for(asking, 1)
+        await asyncio.sleep(0.02)
+    assert said is not None and said.interrupted
+    assert Informed not in [type(e) async for e in events]
 
 
 async def test_nothing_waits_behind_a_prompt_with_no_pair() -> None:
@@ -596,34 +630,20 @@ async def test_a_mute_cuts_a_stretch_and_unmuting_lets_audio_start_one() -> None
     assert edges(link, "speaking") == [1, 2]
 
 
-async def test_words_after_a_stretch_went_quiet_join_it() -> None:
+async def test_words_after_a_stretch_went_quiet_start_the_next_one() -> None:
     link, live = Loopback(ANA, "acme", answer=False), DuplexLive()
     async with duplex(link, live) as s:
         events = s.events()
         live.connection.emit(LiveSaid(text="hello "), LiveAudio(frame=voice(20)))
         await until(lambda: bool(edges(link, "silent")))
-        live.connection.emit(LiveSaid(text="tail "))
-        await asyncio.sleep(0.01)
+        live.connection.emit(LiveSaid(text="next "), LiveAudio(frame=voice(20)))
+        await until(lambda: edges(link, "silent") == [1, 2])
         await link._inbox.put(Played(utterance=1, ms=20))
-        said = await next_of(events, Said)
-    assert said.text == "hello tail " and said.heard == "hello tail "
-
-
-@pytest.mark.parametrize(("played", "heard"), [(20, "hello tail "), (10, "")])
-async def test_late_words_land_at_the_end_of_the_stretch_they_join(played: int, heard: str) -> None:
-    link, live = Loopback(ANA, "acme", answer=False), DuplexLive()
-    async with duplex(link, live) as s:
-        events = s.events()
-        live.connection.emit(LiveSaid(text="hello "), LiveAudio(frame=voice(20)))
-        await until(lambda: bool(edges(link, "silent")))
-        live.connection.emit(LiveSaid(text="tail "))
-        await asyncio.sleep(0.01)
-        cutting = asyncio.create_task(s.interrupt(triggered_by=HOST))
-        await until(lambda: bool(edges(link, "stop")))
-        await link._inbox.put(Played(utterance=1, ms=played))
-        await cutting
-        said = await next_of(events, Said)
-    assert said.heard == heard and said.interrupted
+        first = await next_of(events, Said)
+        await link._inbox.put(Played(utterance=2, ms=20))
+        second = await next_of(events, Said)
+    assert (first.text, first.heard) == ("hello ", "hello ")
+    assert (second.text, second.heard) == ("next ", "next ")
 
 
 async def test_words_with_no_stretch_open_start_one() -> None:

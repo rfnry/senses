@@ -152,9 +152,8 @@ whose loudest sample is at or below `voice_floor`, a `Session` argument of 128 b
 such a frame is still sent, to keep the timing of its pauses. A model whose silence sits above the
 floor needs a higher one, or its stretches never end: `quiet` waits, and senses logs a warning
 naming `voice_floor` once a stretch has run for 60 seconds. Each stretch reports `Speaking`, `Silent` and `Said` as
-a response does, and `quiet` returns between stretches. A `LiveSaid` that comes after
-its stretch went quiet but before its `Said` still joins it, at its end, and one with no utterance
-open starts a stretch, so a model's words are never lost.
+a response does, and `quiet` returns between stretches. A `LiveSaid` with no response open starts a stretch,
+so a model's words stay with its voice even when they come just before it.
 
 An adapter can still bracket speech itself. `LiveStarted` ends any open stretch and opens a response
 as usual, and audio belongs to that response until `LiveDone`, cut or not. A `LiveDone` during a

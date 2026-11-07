@@ -75,7 +75,7 @@ class LiveSaid(BaseModel):
     text: str
 ```
 
-The model's own words as it speaks them, marked against its audio so a cut knows what was heard. A `prompt`'s `Said.text` is these words, joined. On a duplex connection one that comes after its utterance went quiet but before its `Said` still joins it, at its end, and one with no utterance open starts a stretch of voice.
+The model's own words as it speaks them, marked against its audio so a cut knows what was heard. A `prompt`'s `Said.text` is these words, joined. On a duplex connection one with no response open starts a stretch of voice, so words that come just before their voice stay with it.
 
 ### `LiveStarted`
 

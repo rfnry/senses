@@ -101,6 +101,7 @@ def spoken(said: Said | None) -> Said:
 class Utterance:
     triggered_by: Identity | None
     text: str = ""
+    asked: str = ""
     verbatim: bool = False
     done: asyncio.Future[Said | None] | None = None
     number: int = 0
@@ -364,14 +365,11 @@ class Session:
         self._ready(text)
         connection = self._need_live("prompt")
         done: asyncio.Future[Said | None] = asyncio.get_running_loop().create_future()
-        u = Utterance(cause, done=done)
+        u = Utterance(cause, asked=text, done=done)
         if self._muted:
             await self._finish(u, "", interrupted=True)
             return await done
-        said = await self._ask(u, lambda: connection.send_text(text, respond=True))
-        if said is None:
-            await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
-        return said
+        return await self._ask(u, lambda: connection.send_text(text, respond=True))
 
     async def inform(self, text: str, *, triggered_by: IdentityLike) -> None:
         cause = as_identity(triggered_by)
@@ -670,11 +668,11 @@ class Session:
                     if voiced:
                         u.voiced_until = self._playhead
             elif isinstance(event, LiveSaid):
-                if self._stretch_free and self._utterance is None:
+                if self._stretch_free:
                     self._open_stretch()
                 u = self._utterance
-                if u is not None and (self._responding or self._duplex):
-                    u.ledger.mark(event.text, ahead=self._responding)
+                if u is not None and self._responding:
+                    u.ledger.mark(event.text, ahead=True)
                     if not u.verbatim:
                         u.text += event.text
             elif isinstance(event, LiveHeard):
@@ -905,7 +903,7 @@ class Session:
             if u.request is not None and u.done.done():
                 self._ended_tags.add(u.request)
             elif u.request is None and self._duplex:
-                self._unpaired(u)
+                await self._unpaired(u)
         except Exception as exc:
             if u.sent.done():
                 logger.warning("session: a request given up on failed to send: %s", exc)
@@ -915,12 +913,16 @@ class Session:
             self._sending = None
             self._unblock(u)
 
-    def _unpaired(self, u: Utterance) -> None:
-        assert u.done is not None
+    async def _unpaired(self, u: Utterance) -> None:
+        assert u.done is not None and u.triggered_by is not None
         if u.verbatim:
             raise ModelError("session: a say on a duplex model needs a tag")
-        if u in self._causes and not u.done.done():
+        waiting = u in self._causes and not u.done.done()
+        if waiting:
             self._causes.remove(u)
+        if waiting or u.done.cancelled():
+            await self._emit(Informed(scope=self.scope, text=u.asked, triggered_by=u.triggered_by))
+        if waiting:
             u.done.set_result(None)
             self._settle()
 
