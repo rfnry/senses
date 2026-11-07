@@ -12,7 +12,7 @@ from rfnry_senses.contracts import (
     LiveStarted,
     LiveToolCall,
 )
-from rfnry_senses.errors import ConfigurationError, ModelError, TransportError
+from rfnry_senses.errors import ConfigurationError, ModelError
 from rfnry_senses.events import Closed, Informed, Interrupted, Said, Silent, Speaking
 from rfnry_senses.senses_tools import SensesTools
 from rfnry_senses.session import Session
@@ -168,37 +168,16 @@ async def test_input_waits_for_a_cut_to_finish() -> None:
     assert live.connection.calls == [("text", "the news", True)]
 
 
-async def test_an_inform_waits_for_a_cut_to_finish() -> None:
+async def test_a_duplex_inform_goes_during_a_cut() -> None:
     link, live = Loopback(ANA, "acme", answer=False), DuplexLive()
     async with Session(link, live=live) as s:
         await speaking(link, live)
-        events = s.events()
         cutting = asyncio.create_task(s.interrupt(triggered_by=HOST))
         await until(lambda: stopped(link))
-        informing = asyncio.create_task(s.inform("the news", triggered_by=HOST))
-        await asyncio.sleep(0.05)
-        assert live.connection.calls == []
-        await next_of(events, Interrupted)
-        await asyncio.wait_for(informing, 1)
+        await asyncio.wait_for(s.inform("the news", triggered_by=HOST), 0.1)
+        assert not cutting.done()
         await cutting
     assert live.connection.calls == [("text", "the news", False)]
-
-
-async def test_an_inform_waiting_for_a_cut_raises_when_the_session_closes() -> None:
-    link, live = Loopback(ANA, "acme", answer=False), DuplexLive()
-    s = Session(link, live=live)
-    await s.start()
-    await speaking(link, live)
-    cutting = asyncio.create_task(s.interrupt(triggered_by=HOST))
-    await until(lambda: stopped(link))
-    informing = asyncio.create_task(s.inform("the news", triggered_by=HOST))
-    await asyncio.sleep(0.01)
-    await s.close()
-    with pytest.raises(TransportError, match="^session: the session is closed$"):
-        await asyncio.wait_for(informing, 1)
-    with pytest.raises(TransportError):
-        await cutting
-    assert live.connection.calls == []
 
 
 async def test_the_prompt_tool_says_prompted_with_no_pair() -> None:

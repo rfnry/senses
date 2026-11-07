@@ -133,8 +133,8 @@ warning, and the request waits for an answer that already came until the person 
 A connection declares `duplex`, which says how its model converses: `False` for a model that takes
 turns, `True` for one that listens while it speaks and decides when to talk. It has no default, and
 `start` reads it once. A duplex connection takes input at any time: `say`, `prompt` and `inform` go
-at once, one at a time, held only by a cut that has not finished. A `send_text(respond=True)` that
-returns a tag is paired with the response carrying it, as above. One that returns `None` cannot be
+at once, one at a time. `say` and `prompt` wait for a cut to finish; `inform` waits for nothing, as on
+a turn-based connection. A `send_text(respond=True)` that returns a tag is paired with the response carrying it, as above. One that returns `None` cannot be
 paired, because the model's reply cannot be told from the rest of its speech: `prompt` returns `None`
 once it is sent, and senses reports `Informed`, so the action still leaves an event naming its cause.
 `say` must return a tag, and the adapter brackets the speech with `LiveStarted(requested=tag)` and
@@ -290,9 +290,9 @@ cuts in, `mute` or `close`. `inform` waits for no response, only for a send unde
 A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
 vendor that holds that response open until the result, the tool times out first: spawn it there.
 
-On a `duplex` connection none of this waiting applies. `say`, `prompt` and `inform` are held behind
-no speech and no answer, only behind a cut that has not finished, `inform` included, and they still
-go one at a time. A `prompt` the adapter cannot pair returns `None` once it is sent ([Models](#models)).
+On a `duplex` connection `say` and `prompt` are held behind no speech and no answer, only behind a
+cut that has not finished, and they still go one at a time. `inform` is as it is on any connection. A
+`prompt` the adapter cannot pair returns `None` once it is sent ([Models](#models)).
 
 ### Cascaded sessions
 

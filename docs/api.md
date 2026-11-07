@@ -254,10 +254,10 @@ Raises `ModelError` when the live model fails while the call waits.
 async def inform(self, text: str, *, triggered_by: IdentityLike) -> None: ...
 ```
 
-Gives the live model `text` to know, without a reply, and reports `Informed`. On a duplex connection it waits for a cut that has not finished, as `say` and `prompt` do.
+Gives the live model `text` to know, without a reply, and reports `Informed`.
 Raises `InputError` when `text` is empty or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has no live model.
-Raises `TransportError` when the session is not started or is closed, or closes while it waits for a cut.
+Raises `TransportError` when the session is not started or is closed.
 
 ### `Session.interrupt`
 

@@ -370,9 +370,6 @@ class Session:
         cause = as_identity(triggered_by)
         self._ready(text)
         connection = self._need_live("inform")
-        while self._duplex and self._cutting and not self._closed:
-            await self._settled.wait()
-        self._check_open()
         async with self._lock:
             await connection.send_text(text, respond=False)
         await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
