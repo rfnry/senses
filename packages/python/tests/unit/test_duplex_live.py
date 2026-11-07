@@ -59,11 +59,6 @@ class NoTagOnSay(DuplexConnection):
         return await ScriptedConnection.say(self, text)
 
 
-class Undeclared:
-    async def open(self, *, tools: Any, instructions: str | None) -> Any:
-        return object()
-
-
 async def test_a_prompt_goes_while_a_response_is_open() -> None:
     link, live = Loopback(ANA, "acme"), DuplexLive()
     async with Session(link, live=live) as s:
@@ -306,7 +301,7 @@ async def test_a_prompt_that_ended_before_any_words_says_so_without_a_blank_line
     await s.close()
     assert said is not None and said.interrupted and said.heard == ""
     assert Said not in [type(e) async for e in events]
-    assert "session: a prompt ended before the model said anything" in caplog.text
+    assert "session: an utterance ended with no words, so it reports no Said" in caplog.text
 
 
 async def test_a_blank_said_never_reaches_the_client() -> None:
@@ -500,13 +495,18 @@ async def test_a_response_ends_the_open_stretch() -> None:
     s = duplex(link, live)
     await s.start()
     events = s.events()
-    live.connection.emit(LiveAudio(frame=voice(20)))
+    live.connection.emit(LiveSaid(text="One. "), LiveAudio(frame=voice(20)))
     await until(lambda: bool(link.audio))
-    live.connection.emit(LiveStarted(requested=False), LiveAudio(frame=voice(20)), LiveDone())
+    live.connection.emit(
+        LiveStarted(requested=False),
+        LiveSaid(text="Two. "),
+        LiveAudio(frame=voice(20)),
+        LiveDone(),
+    )
     await asyncio.wait_for(s.quiet(), 1)
     await s.close()
     told = [e async for e in events]
-    assert len([e for e in told if isinstance(e, Said)]) == 2
+    assert [e.text for e in told if isinstance(e, Said)] == ["One. ", "Two. "]
     assert isinstance(told[-1], Closed) and told[-1].reason == "closed"
     assert edges(link, "speaking") == [1, 2]
 
@@ -516,7 +516,7 @@ async def test_a_done_ends_the_open_stretch() -> None:
     s = duplex(link, live)
     await s.start()
     events = s.events()
-    live.connection.emit(LiveAudio(frame=voice(20)), LiveDone())
+    live.connection.emit(LiveSaid(text="Hello. "), LiveAudio(frame=voice(20)), LiveDone())
     await asyncio.wait_for(s.quiet(), 1)
     await asyncio.sleep(0.1)
     await s.close()
@@ -642,7 +642,9 @@ async def test_words_of_a_cut_response_start_no_stretch() -> None:
     s = duplex(link, live)
     await s.start()
     events = s.events()
-    live.connection.emit(LiveStarted(requested=False), LiveAudio(frame=voice(100)))
+    live.connection.emit(
+        LiveStarted(requested=False), LiveSaid(text="Hello. "), LiveAudio(frame=voice(100))
+    )
     await until(lambda: bool(link.audio))
     await s.interrupt(triggered_by=HOST)
     live.connection.emit(LiveSaid(text="tail "), LiveDone())
@@ -650,7 +652,7 @@ async def test_words_of_a_cut_response_start_no_stretch() -> None:
     await asyncio.sleep(0.1)
     await s.close()
     told = [e async for e in events]
-    assert len([e for e in told if isinstance(e, Said)]) == 1
+    assert [e.text for e in told if isinstance(e, Said)] == ["Hello. "]
     assert isinstance(told[-1], Closed) and told[-1].reason == "closed"
 
 

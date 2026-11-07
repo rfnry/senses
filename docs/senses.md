@@ -151,7 +151,7 @@ whose loudest sample is at or below `voice_floor`, a `Session` argument of 128 b
 32767, is not voice: it starts no stretch and does not extend one, though once a stretch has voice
 such a frame is still sent, to keep the timing of its pauses. A model whose silence sits above the
 floor needs a higher one, or its stretches never end: `quiet` waits, and senses logs a warning
-naming `voice_floor` once a stretch has run for 60 seconds. Each stretch reports `Speaking`, `Silent` and `Said` as
+naming `voice_floor` once a stretch has run for 60 seconds. Each stretch reports `Speaking`, `Silent` and, if it had words, `Said` as
 a response does, and `quiet` returns between stretches. A `LiveSaid` with no response open starts a stretch,
 so a model's words stay with its voice even when they come just before it.
 
@@ -351,7 +351,7 @@ said = await session.say(reply("Is the terrace open?", session.scope), triggered
 ```
 
 `Said.text` is what the voice was given and `Said.heard` what the person heard, as with a string. A
-stream that yields no text speaks nothing and returns an empty `Said`.
+stream that yields no text speaks nothing, returns an empty `Said` and reports none.
 
 ### Speaking and being interrupted
 
@@ -504,7 +504,7 @@ session's `scope` and the time `at`:
 | --- | --- | --- |
 | `Heard` | `text, final, speaker` | the person's words, partial and final |
 | `TurnEnded` | `text, speaker` | a cascaded turn ended |
-| `Said` | `text, heard, interrupted, triggered_by` | an utterance ended: once each, when what was heard of it is final |
+| `Said` | `text, heard, interrupted, triggered_by` | an utterance ended: once each, when what was heard of it is final; one with no words reports none |
 | `Interrupted` | `heard, triggered_by` | the voice was cut |
 | `Speaking` / `Silent` | — | the voice started after quiet / went quiet: all of it played, or was cut |
 | `Looked` | `frames, triggered_by` | someone looked through the camera |

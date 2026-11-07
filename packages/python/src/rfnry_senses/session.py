@@ -865,7 +865,7 @@ class Session:
             self._tell(said)
             events.append(said)
         elif u.done is not None:
-            logger.warning("session: a prompt ended before the model said anything")
+            logger.warning("session: an utterance ended with no words, so it reports no Said")
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
         self._settle()

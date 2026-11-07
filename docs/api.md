@@ -404,7 +404,7 @@ class Said(BaseModel):
     triggered_by: Identity | None
 ```
 
-An utterance ended, once each, when what was heard of it is final. `text` is what the voice was given and `heard` what the person heard; `triggered_by` is `None` when a live model spoke on its own or answered what it heard.
+An utterance ended, once each, when what was heard of it is final. `text` is what the voice was given and `heard` what the person heard; `triggered_by` is `None` when a live model spoke on its own or answered what it heard. An utterance with no words reports no `Said`: a `say` or `prompt` waiting on one still returns an empty `Said`, and senses logs a warning.
 
 ### `Interrupted`
 

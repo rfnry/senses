@@ -752,7 +752,7 @@ async def test_a_mute_given_up_at_its_event_still_cuts_the_voice() -> None:
 
 
 async def test_a_mute_given_up_while_it_ends_the_queue_still_ends_all_of_it() -> None:
-    live, link = ScriptedLive(), GatedLink(event("said", text=""))
+    live, link = ScriptedLive(), GatedLink(event("said", text="First."))
     s = Session(link, live=live)
     await s.start()
     first = asyncio.create_task(s.say("First.", triggered_by=HOST))
