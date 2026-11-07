@@ -150,7 +150,8 @@ session can tell: it reads voice from the samples, and what has played from its 
 whose loudest sample is at or below `voice_floor`, a `Session` argument of 128 by default out of
 32767, is not voice: it starts no stretch and does not extend one, though once a stretch has voice
 such a frame is still sent, to keep the timing of its pauses. A model whose silence sits above the
-floor needs a higher one, or its stretches never end. Each stretch reports `Speaking`, `Silent` and `Said` as
+floor needs a higher one, or its stretches never end: `quiet` waits, and senses logs a warning
+naming `voice_floor` once a stretch has run for 60 seconds. Each stretch reports `Speaking`, `Silent` and `Said` as
 a response does, and `quiet` returns between stretches. A `LiveSaid` that comes after
 its stretch went quiet but before its `Said` still joins it, at its end, and one with no utterance
 open starts a stretch, so a model's words are never lost.
@@ -390,6 +391,12 @@ If the client never reports, senses estimates from its own clock — the audio s
 time since it began to play, after anything queued ahead of it — after a quarter of a second, so an
 interruption never waits on a silent client. A live model whose vendor cannot cut its context raises from `interrupt`; senses logs that
 as a warning and goes on — the voice is already stopped.
+
+When a session closes with a voice still going, or still waiting for the client's report, each
+utterance nobody is waiting on reports its `Said` before `Closed`, and `Silent` comes first, so what
+was said stays on the record when the person hangs up mid-sentence. The client's report may never
+come, so `heard` here is what the session's own clock says played, and `interrupted` is true unless
+all of it had. A `say` or `prompt` still waiting raises instead, as it always has.
 
 On a duplex connection a cut ends a stretch of voice as it ends a response: `interrupt`, `mute` and
 `LiveInterrupted` drop what is queued and cut the utterance to what was heard, and `interrupt` is

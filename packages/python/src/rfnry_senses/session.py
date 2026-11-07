@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 PLAYED_GRACE = 0.25
 PLAYBACK_SLACK = 1.0
 CLOSE_GRACE = 2.0
+LONG_STRETCH = 60.0
 _PARTS: TypeAdapter[list[Part]] = TypeAdapter(list[Part])
 
 
@@ -198,6 +199,7 @@ class Session:
         self._numbers = count(1)
         self._utterance: Utterance | None = None
         self._stretch: Utterance | None = None
+        self._warned_long = False
         self._out: list[Utterance] = []
         self._ending: list[Utterance] = []
         self._playhead = 0.0
@@ -711,6 +713,13 @@ class Session:
 
     async def _watch(self, u: Utterance, opened: float) -> None:
         while self._stretch is u:
+            if monotonic() - opened > LONG_STRETCH and not self._warned_long:
+                self._warned_long = True
+                logger.warning(
+                    "session: a stretch of voice has run for %g s; "
+                    "if the model's silence is louder than voice_floor, raise it",
+                    LONG_STRETCH,
+                )
             left = max(u.voiced_until, opened) + self._voice_gap - monotonic()
             if left > 0:
                 await asyncio.sleep(left)
@@ -1107,16 +1116,32 @@ class Session:
                     if u.done is not None and not u.done.done():
                         u.done.set_exception(failure)
                     self._unblock(u)
+            voices = self._end_voices()
             self._settle()
-            self._closing = asyncio.create_task(self._close(reason, message, cause))
+            self._closing = asyncio.create_task(self._close(reason, message, cause, voices))
         if asyncio.current_task() not in self._stopping:
             await asyncio.shield(self._closing)
+
+    def _end_voices(self) -> list[Event]:
+        now = monotonic()
+        events: list[Event] = []
+        for u in dict.fromkeys((*self._out, self._utterance)):
+            if u is None:
+                continue
+            if u.done is not None or u.cut:
+                events += self._unvoice(u)
+                continue
+            played = u.ledger.estimate(now)
+            whole = played > 0 and played + 1 >= u.ledger.sent_ms
+            events += self._over(u, u.ledger.heard(None if whole else played), not whole)
+        return events
 
     async def _close(
         self,
         reason: Literal["closed", "hung_up", "failed"],
         message: str | None,
         cause: Identity | None,
+        voices: list[Event],
     ) -> None:
         for u in self._waiting:
             self._let_go(u)
@@ -1138,7 +1163,7 @@ class Session:
         for queue in self._subscribers:
             queue.put_nowait(None)
         self._subscribers.clear()
-        reporting = asyncio.create_task(self._report(closed))
+        reporting = asyncio.create_task(self._report_all([*voices, closed]))
         sent, _ = await asyncio.wait({reporting}, timeout=CLOSE_GRACE)
         if not sent:
             logger.warning(

@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 
+from rfnry_senses import session as session_module
 from rfnry_senses.contracts import (
     AudioFrame,
     LiveAudio,
@@ -12,7 +13,7 @@ from rfnry_senses.contracts import (
     LiveStarted,
     LiveToolCall,
 )
-from rfnry_senses.errors import ConfigurationError, ModelError
+from rfnry_senses.errors import ConfigurationError, ModelError, TransportError
 from rfnry_senses.events import Closed, Informed, Interrupted, Said, Silent, Speaking
 from rfnry_senses.senses_tools import SensesTools
 from rfnry_senses.session import Session
@@ -676,7 +677,7 @@ async def test_a_hand_off_answered_silently() -> None:
     assert live.connection.results == [("c1", "the terrace is open", False, False)]
 
 
-async def test_a_session_closing_during_a_stretch_ends_cleanly() -> None:
+async def test_a_session_closing_during_a_stretch_reports_what_played() -> None:
     link, live = Loopback(ANA, "acme"), DuplexLive()
     s = duplex(link, live)
     await s.start()
@@ -689,19 +690,119 @@ async def test_a_session_closing_during_a_stretch_ends_cleanly() -> None:
     await s.close()
     await asyncio.wait_for(quiet, 1)
     told = [e async for e in events]
-    assert [type(e) for e in told] == [Speaking, Closed]
+    assert [type(e) for e in told] == [Speaking, Silent, Said, Closed]
+    said = told[2]
+    assert isinstance(said, Said)
+    assert (said.text, said.heard, said.interrupted) == ("hello ", "", True)
+    assert said.triggered_by is None
     assert isinstance(told[-1], Closed) and told[-1].reason == "closed"
 
 
-async def test_a_turn_based_session_closing_during_a_response_reports_no_said() -> None:
+async def test_a_stretch_played_whole_at_close_reads_whole() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    s = Session(link, live=live, voice_gap=5)
+    await s.start()
+    events = s.events()
+    live.connection.emit(
+        LiveSaid(text="hello "), LiveAudio(frame=voice(20)), LiveAudio(frame=pcm(20))
+    )
+    await until(lambda: len(link.audio) == 2)
+    await asyncio.sleep(0.06)
+    await s.close()
+    said = [e async for e in events if isinstance(e, Said)]
+    assert [(e.text, e.heard, e.interrupted) for e in said] == [("hello ", "hello ", False)]
+
+
+async def test_a_hang_up_during_a_stretch_reports_what_played() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    s = duplex(link, live)
+    await s.start()
+    events = s.events()
+    live.connection.emit(LiveSaid(text="hello "), LiveAudio(frame=voice(1000)))
+    await until(lambda: bool(link.audio))
+    await link.hang_up()
+    told = [e async for e in events]
+    assert [type(e) for e in told] == [Speaking, Silent, Said, Closed]
+    assert isinstance(told[-1], Closed) and told[-1].reason == "hung_up"
+
+
+async def test_a_response_open_at_close_reports_what_played() -> None:
     link, live = Loopback(ANA, "acme"), ScriptedLive()
     s = Session(link, live=live)
     await s.start()
     events = s.events()
-    live.connection.emit(LiveStarted(), LiveSaid(text="hello "), LiveAudio(frame=voice(100)))
+    live.connection.emit(
+        LiveStarted(requested=False), LiveSaid(text="hello "), LiveAudio(frame=voice(1000))
+    )
     await until(lambda: bool(link.audio))
     await s.close()
-    assert [type(e) async for e in events] == [Speaking, Closed]
+    told = [e async for e in events]
+    assert [type(e) for e in told] == [Speaking, Silent, Said, Closed]
+
+
+async def test_an_utterance_waiting_for_its_report_at_close_says_so() -> None:
+    link, live = Loopback(ANA, "acme", answer=False), ScriptedLive()
+    s = Session(link, live=live)
+    await s.start()
+    events = s.events()
+    live.connection.emit(
+        LiveStarted(requested=False), LiveSaid(text="hi "), LiveAudio(frame=voice(1000)), LiveDone()
+    )
+    await until(lambda: bool(edges(link, "silent")))
+    await s.close()
+    said = [e async for e in events if isinstance(e, Said)]
+    assert [(e.text, e.interrupted) for e in said] == [("hi ", True)]
+
+
+async def test_a_say_open_at_close_still_raises_and_reports_no_said() -> None:
+    link, live = Loopback(ANA, "acme"), ScriptedLive()
+    s = Session(link, live=live)
+    await s.start()
+    events = s.events()
+    saying = asyncio.create_task(s.say("exact words", triggered_by=HOST))
+    await until(lambda: ("say", "exact words") in live.connection.calls)
+    live.connection.emit(LiveStarted(), LiveAudio(frame=voice(1000)))
+    await until(lambda: bool(link.audio))
+    await s.close()
+    with pytest.raises(TransportError):
+        await saying
+    told = [type(e) async for e in events]
+    assert Said not in told and told.count(Speaking) == told.count(Silent)
+
+
+async def test_a_said_at_close_reaches_the_client_before_closed() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    s = duplex(link, live)
+    await s.start()
+    live.connection.emit(LiveSaid(text="hello "), LiveAudio(frame=voice(1000)))
+    await until(lambda: bool(link.audio))
+    await s.close()
+    kinds = [c["event"]["kind"] for c in link.controls if c["type"] == "event"]
+    assert kinds[-2:] == ["said", "closed"]
+
+
+async def test_a_stretch_that_never_goes_quiet_warns_once(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(session_module, "LONG_STRETCH", 0.05)
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live):
+        stream = asyncio.create_task(silence(live, tone(20, 500)))
+        await asyncio.sleep(0.3)
+        stream.cancel()
+    told = [r.message for r in caplog.records if "voice_floor" in r.message]
+    assert told == [
+        "session: a stretch of voice has run for 0.05 s; "
+        "if the model's silence is louder than voice_floor, raise it"
+    ]
+
+
+async def test_a_stretch_of_ordinary_length_does_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live):
+        live.connection.emit(LiveAudio(frame=voice(20)))
+        await until(lambda: bool(edges(link, "silent")))
+    assert "voice_floor" not in caplog.text
 
 
 @pytest.mark.parametrize("gap", [0, -1])
