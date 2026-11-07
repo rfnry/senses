@@ -157,9 +157,7 @@ async def test_say_speaks_a_stream_as_its_sentences_complete() -> None:
 
 async def test_an_empty_stream_and_a_failing_one_each_fail_only_their_say() -> None:
     async def empty() -> AsyncIterator[str]:
-        nothing: tuple[str, ...] = ()
-        for chunk in nothing:
-            yield chunk
+        yield "  "
 
     async def broken() -> AsyncIterator[str]:
         yield "One. "

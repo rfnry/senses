@@ -326,6 +326,22 @@ async def test_a_response_with_no_words_fails_its_prompt_and_the_session_goes_on
     assert [e.text for e in [e async for e in events] if isinstance(e, Said)] == ["Sunny. "]
 
 
+async def test_words_of_only_whitespace_are_no_words() -> None:
+    link, live = Loopback(ANA, "acme"), ScriptedLive()
+    s = Session(link, live=live)
+    await s.start()
+    events = s.events()
+    asking = asyncio.create_task(s.prompt("the news", triggered_by=HOST))
+    await until(lambda: bool(live.connection.calls))
+    live.connection.emit(LiveStarted(requested=True), LiveSaid(text=" \n"), LiveDone())
+    with pytest.raises(ModelError, match="^session: the model ended a prompt with no words$"):
+        await asyncio.wait_for(asking, 1)
+    live.connection.emit(LiveStarted(requested=False), LiveSaid(text="  "), LiveDone())
+    await asyncio.wait_for(s.quiet(), 1)
+    await s.close()
+    assert Said not in [type(e) async for e in events]
+
+
 async def test_a_blank_said_never_reaches_the_client() -> None:
     link, live = Loopback(ANA, "acme"), DuplexLive()
     async with duplex(link, live):

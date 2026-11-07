@@ -374,7 +374,7 @@ class Session:
             await self._finish(u, "", interrupted=True)
             return await done
         said = await self._ask(u, lambda: connection.send_text(text, respond=True))
-        if said is not None and not said.text and not said.interrupted:
+        if said is not None and not said.text.strip() and not said.interrupted:
             raise ModelError("session: the model ended a prompt with no words")
         return said
 
@@ -861,7 +861,7 @@ class Session:
             interrupted=interrupted,
             triggered_by=u.triggered_by,
         )
-        if u.text or heard:
+        if u.text.strip() or heard.strip():
             self._tell(said)
             events.append(said)
         elif u.spoke:
