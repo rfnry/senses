@@ -5,8 +5,8 @@ from typing import Any
 import pytest
 
 from rfnry_senses.contracts import AudioFrame
-from rfnry_senses.errors import ConfigurationError, ModelError, TransportError
-from rfnry_senses.events import Closed, Heard, Silent, Speaking, TurnEnded
+from rfnry_senses.errors import ConfigurationError, InputError, ModelError, TransportError
+from rfnry_senses.events import Closed, Heard, Said, Silent, Speaking, TurnEnded
 from rfnry_senses.session import Session
 from rfnry_senses.transport import Loopback
 
@@ -155,7 +155,7 @@ async def test_say_speaks_a_stream_as_its_sentences_complete() -> None:
     )
 
 
-async def test_an_empty_stream_says_nothing_and_a_failing_one_fails_only_its_say() -> None:
+async def test_an_empty_stream_and_a_failing_one_each_fail_only_their_say() -> None:
     async def empty() -> AsyncIterator[str]:
         nothing: tuple[str, ...] = ()
         for chunk in nothing:
@@ -167,12 +167,15 @@ async def test_an_empty_stream_says_nothing_and_a_failing_one_fails_only_its_say
 
     s, _, _, tts = cascaded()
     async with s:
-        nothing = await s.say(empty(), triggered_by=HOST)
+        events = s.events()
+        with pytest.raises(InputError, match="^session: text is empty$"):
+            await s.say(empty(), triggered_by=HOST)
         with pytest.raises(RuntimeError, match="^the writer failed$"):
             await s.say(broken(), triggered_by=HOST)
         after = await s.say("Still here.", triggered_by=HOST)
-    assert nothing.text == nothing.heard == "" and not nothing.interrupted
+        told = await next_of(events, Said)
     assert after.heard == "Still here." and tts.spoken == ["One. ", "Still here."]
+    assert told.text == "Still here."
 
 
 async def test_cascaded_utterances_each_start_and_end_the_voice() -> None:

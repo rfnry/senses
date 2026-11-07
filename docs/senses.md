@@ -351,7 +351,7 @@ said = await session.say(reply("Is the terrace open?", session.scope), triggered
 ```
 
 `Said.text` is what the voice was given and `Said.heard` what the person heard, as with a string. A
-stream that yields no text speaks nothing, returns an empty `Said` and reports none.
+stream that yields no text speaks nothing and raises `InputError`, as an empty string does.
 
 ### Speaking and being interrupted
 

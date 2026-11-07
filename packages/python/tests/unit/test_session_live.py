@@ -523,6 +523,17 @@ async def test_hanging_up_closes_the_session_and_its_verbs() -> None:
     assert closed.reason == "hung_up" and late == []
 
 
+async def test_an_empty_stream_fails_its_say_and_reaches_no_model() -> None:
+    async def blank() -> AsyncIterator[str]:
+        yield "  "
+
+    live = ScriptedLive()
+    async with Session(Loopback(ANA, "acme"), live=live) as s:
+        with pytest.raises(InputError, match="^session: text is empty$"):
+            await s.say(blank(), triggered_by=HOST)
+    assert live.connection.calls == []
+
+
 async def test_every_subscription_sees_every_event() -> None:
     live, link = ScriptedLive(), Loopback(ANA, "acme")
     async with session(link, live) as s:

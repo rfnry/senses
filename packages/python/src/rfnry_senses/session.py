@@ -357,10 +357,7 @@ class Session:
             connection = self._connection
             if not isinstance(text, str):
                 joined = "".join([chunk async for chunk in text])
-                self._check_open()
-                if not joined.strip():
-                    await self._finish(u, "", interrupted=False)
-                    return spoken(await done)
+                self._ready(joined)
                 u.text = joined
             return spoken(await self._ask(u, lambda: connection.say(u.text)))
         self._waiting.append(u)
@@ -1064,6 +1061,9 @@ class Session:
         finally:
             await pieces.aclose()
             await self._release(u)
+        if streamed and not u.text:
+            await self._abandon(u, InputError("session: text is empty"))
+            return
         await self._conclude(u)
 
     def _let_go(self, u: Utterance) -> None:

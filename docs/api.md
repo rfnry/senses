@@ -231,8 +231,8 @@ Raises `InputError` when a tool definition is not valid: `session: a tool defini
 async def say(self, text: str | AsyncIterator[str], *, triggered_by: IdentityLike) -> Said: ...
 ```
 
-Speaks exactly `text` and returns, when the utterance ends, the `Said` with what the person heard. Given an `AsyncIterator[str]`, a cascaded session speaks it sentence by sentence as it arrives and a live one joins it first; a stream with no text returns an empty `Said`. Calls queue; on a live model each is sent once no response is open and none is owed to the last one sent. On a duplex connection each is sent at once, held only by a cut that has not finished, and the adapter brackets the speech with `LiveStarted(requested=tag)` and `LiveDone`. While muted it returns at once with nothing heard.
-Raises `InputError` when `text` is empty or `triggered_by` does not fit.
+Speaks exactly `text` and returns, when the utterance ends, the `Said` with what the person heard. Given an `AsyncIterator[str]`, a cascaded session speaks it sentence by sentence as it arrives and a live one joins it first; a stream with no text raises `InputError`. Calls queue; on a live model each is sent once no response is open and none is owed to the last one sent. On a duplex connection each is sent at once, held only by a cut that has not finished, and the adapter brackets the speech with `LiveStarted(requested=tag)` and `LiveDone`. While muted it returns at once with nothing heard.
+Raises `InputError` when `text` is empty, a stream yields no text, or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
 Raises `TransportError` when the session is not started or is closed, or closes before the words are spoken.
 Raises `ModelError` when the speech model fails, the live model fails while the call waits, or a duplex connection returns no tag: `session: a say on a duplex model needs a tag`.
