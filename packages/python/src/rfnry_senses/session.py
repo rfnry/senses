@@ -66,7 +66,7 @@ from rfnry_senses.models import (
 )
 from rfnry_senses.tools import ToolsLike
 from rfnry_senses.transport import Played, Transport
-from rfnry_senses.voice import Ledger, sentences_from
+from rfnry_senses.voice import Ledger, peak, sentences_from
 from rfnry_senses.window import FrameWindow
 
 logger = logging.getLogger(__name__)
@@ -149,6 +149,7 @@ class Session:
         window_bytes: int = 8 * 1024 * 1024,
         tool_timeout: float | None = 30.0,
         voice_gap: float = 1.0,
+        voice_floor: int = 128,
     ) -> None:
         if live is not None and (transcription is not None or speech is not None):
             raise ConfigurationError(
@@ -165,6 +166,8 @@ class Session:
                 raise ConfigurationError(f"session: {name} must be positive")
         if tool_timeout is not None and tool_timeout <= 0:
             raise ConfigurationError("session: tool_timeout must be positive or None")
+        if not 0 <= voice_floor <= 32767:
+            raise ConfigurationError("session: voice_floor must be between 0 and 32767")
         if not transport.scope:
             raise InputError("session: scope is empty")
         self.scope = transport.scope
@@ -179,6 +182,7 @@ class Session:
         self._window = FrameWindow(window, window_bytes) if video else None
         self._tool_timeout = tool_timeout
         self._voice_gap = voice_gap
+        self._voice_floor = voice_floor
         self._connection: LiveConnection | None = None
         self._duplex = False
         self._stream: Transcription | None = None
@@ -651,7 +655,7 @@ class Session:
         assert self._connection is not None
         async for event in self._connection.events():
             if isinstance(event, LiveAudio):
-                voiced = bool(event.frame.data.strip(b"\0"))
+                voiced = self._duplex and peak(event.frame) > self._voice_floor
                 if voiced and self._stretch_free:
                     self._open_stretch()
                 u = self._utterance

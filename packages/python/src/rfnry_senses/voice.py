@@ -1,9 +1,18 @@
+import array
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 
 from rfnry_senses.contracts import AudioFrame
 
 SPACED = ".!?؟।"
 UNSPACED = "。！？"
+
+
+def peak(frame: AudioFrame) -> int:
+    samples = array.array("h", frame.data)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    return max(map(abs, samples), default=0)
 
 
 def ends_sentence(piece: str) -> bool:

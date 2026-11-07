@@ -56,7 +56,7 @@ class LiveAudio(BaseModel):
     frame: AudioFrame
 ```
 
-A piece of the model's voice. On a turn-based connection it plays only inside a response. On a duplex connection one with no response open starts a stretch of voice, with `triggered_by=None`, unless the session is muted or a cut has not finished, when it is dropped. There, a frame of pure silence, every sample zero, is not voice: outside a response it is dropped, and inside a stretch that already has voice it is sent, to keep the timing of the pauses, but does not extend the stretch. Inside a response it is sent as any frame is.
+A piece of the model's voice. On a turn-based connection it plays only inside a response. On a duplex connection one with no response open starts a stretch of voice, with `triggered_by=None`, unless the session is muted or a cut has not finished, when it is dropped. There, a frame whose loudest sample is at or below `voice_floor` is not voice: outside a response it is dropped, and inside a stretch that already has voice it is sent, to keep the timing of the pauses, but does not extend the stretch. Inside a response it is sent as any frame is.
 
 ### `LiveHeard`
 
@@ -204,13 +204,14 @@ class Session:
         window_bytes: int = 8 * 1024 * 1024,
         tool_timeout: float | None = 30.0,
         voice_gap: float = 1.0,
+        voice_floor: int = 128,
     ) -> None: ...
     async def __aenter__(self) -> Session: ...
     async def __aexit__(self, *exc: object) -> None: ...
 ```
 
-One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. On a duplex connection a stretch of voice ends `voice_gap` seconds after its last voice has played. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error, and when that start is cancelled, it closes the session with reason `closed`.
-Raises `ConfigurationError` when a live model is given with transcription or speech models, `instructions` without a live model, or a `window`, `window_bytes`, `tool_timeout` or `voice_gap` that is not positive: `session: voice_gap must be positive`.
+One person on one transport, and the models that hear, see and speak with them: live with `live=`, cascaded with `transcription=` and `speech=`, each optional. With `video=True` it keeps the camera's frames for `window` seconds and `window_bytes` bytes, whichever is smaller; `scope` and `person` come from the transport. On a duplex connection a stretch of voice ends `voice_gap` seconds after its last voice has played, and a frame whose loudest 16-bit sample is at or below `voice_floor` is not voice: 0 leaves only exact zeros as silence. `async with` starts it without tools if it has not started, and closes it at the end; when that start raises, it closes the session with reason `failed` and raises the error, and when that start is cancelled, it closes the session with reason `closed`.
+Raises `ConfigurationError` when a live model is given with transcription or speech models, `instructions` without a live model, a `window`, `window_bytes`, `tool_timeout` or `voice_gap` that is not positive: `session: voice_gap must be positive`, or a `voice_floor` outside 0 to 32767: `session: voice_floor must be between 0 and 32767`.
 Raises `InputError` when the transport's scope is empty or its identity does not fit.
 
 ### `Session.start`

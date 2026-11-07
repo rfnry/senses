@@ -218,13 +218,17 @@ async def test_a_connection_that_does_not_declare_duplex_does_not_start() -> Non
     await s.close()
 
 
+def tone(ms: int, level: int) -> AudioFrame:
+    return AudioFrame(data=level.to_bytes(2, "little", signed=True) * (16 * ms), sample_rate=16000)
+
+
 def voice(ms: int) -> AudioFrame:
-    return AudioFrame(data=b"\x01\x00" * (16 * ms), sample_rate=16000)
+    return tone(ms, 1000)
 
 
-async def silence(live: DuplexLive) -> None:
+async def silence(live: DuplexLive, frame: AudioFrame | None = None) -> None:
     while True:
-        live.connection.emit(LiveAudio(frame=pcm(20)))
+        live.connection.emit(LiveAudio(frame=frame or pcm(20)))
         await asyncio.sleep(0.02)
 
 
@@ -704,3 +708,96 @@ async def test_a_turn_based_session_closing_during_a_response_reports_no_said() 
 def test_voice_gap_must_be_positive(gap: float) -> None:
     with pytest.raises(ConfigurationError, match="^session: voice_gap must be positive$"):
         Session(Loopback(ANA, "acme"), live=DuplexLive(), voice_gap=gap)
+
+
+@pytest.mark.parametrize("level", [3, 69, 128, -128])
+async def test_faint_noise_starts_no_stretch(level: int) -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    s = duplex(link, live)
+    await s.start()
+    events = s.events()
+    before = list(link.controls)
+    live.connection.emit(*[LiveAudio(frame=tone(20, level)) for _ in range(5)])
+    await asyncio.sleep(0.1)
+    assert link.audio == [] and link.controls == before
+    await s.close()
+    assert [type(e) async for e in events] == [Closed]
+
+
+async def test_faint_noise_does_not_hold_a_stretch_open() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live) as s:
+        events = s.events()
+        live.connection.emit(LiveSaid(text="hello "), LiveAudio(frame=voice(20)))
+        stream = asyncio.create_task(silence(live, tone(20, 3)))
+        said = await asyncio.wait_for(next_of(events, Said), 1)
+        await asyncio.wait_for(s.quiet(), 1)
+        stream.cancel()
+    assert said.text == "hello " and said.heard == "hello "
+    assert edges(link, "speaking") == [1] and edges(link, "silent") == [1]
+
+
+async def test_faint_noise_inside_a_stretch_reaches_the_person() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    pause = tone(20, 40)
+    async with duplex(link, live):
+        live.connection.emit(
+            LiveAudio(frame=voice(20)), LiveAudio(frame=pause), LiveAudio(frame=voice(20))
+        )
+        await until(lambda: bool(edges(link, "silent")))
+    assert len(link.audio) == 3 and link.audio[1] == pause
+    assert edges(link, "speaking") == [1]
+
+
+async def test_a_negative_peak_counts_as_voice() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live):
+        live.connection.emit(LiveAudio(frame=tone(20, -129)))
+        await until(lambda: bool(edges(link, "silent")))
+    assert edges(link, "speaking") == [1]
+
+
+async def test_voice_floor_can_be_raised_for_a_noisy_model() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live, voice_floor=2000):
+        live.connection.emit(LiveAudio(frame=voice(20)))
+        await asyncio.sleep(0.1)
+        assert link.audio == []
+        live.connection.emit(LiveAudio(frame=tone(20, 3000)))
+        await until(lambda: bool(edges(link, "silent")))
+    assert edges(link, "speaking") == [1]
+
+
+async def test_a_floor_of_zero_leaves_only_exact_zeros_as_silence() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live, voice_floor=0):
+        live.connection.emit(LiveAudio(frame=pcm(20)))
+        await asyncio.sleep(0.1)
+        assert link.audio == []
+        live.connection.emit(LiveAudio(frame=tone(20, 1)))
+        await until(lambda: bool(edges(link, "silent")))
+    assert edges(link, "speaking") == [1]
+
+
+async def test_faint_audio_inside_a_response_is_sent() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live):
+        live.connection.emit(LiveStarted(requested=False), LiveAudio(frame=tone(20, 3)), LiveDone())
+        await until(lambda: bool(edges(link, "silent")))
+    assert len(link.audio) == 1
+
+
+async def test_a_turn_based_model_plays_faint_audio_as_it_always_did() -> None:
+    link, live = Loopback(ANA, "acme"), ScriptedLive()
+    async with Session(link, live=live):
+        live.connection.emit(LiveStarted(requested=False), LiveAudio(frame=tone(20, 3)), LiveDone())
+        await until(lambda: bool(edges(link, "silent")))
+    assert len(link.audio) == 1
+
+
+@pytest.mark.parametrize("floor", [-1, 32768])
+def test_voice_floor_must_fit_a_sample(floor: int) -> None:
+    with pytest.raises(
+        ConfigurationError, match="^session: voice_floor must be between 0 and 32767$"
+    ):
+        Session(Loopback(ANA, "acme"), live=DuplexLive(), voice_floor=floor)

@@ -145,10 +145,12 @@ On a duplex connection an adapter sends the voice as it comes, and the session m
 from each stretch of voice. `LiveAudio` with no response open starts one, with `triggered_by=None`.
 It ends `voice_gap` seconds after its last voice has played; `voice_gap` is a `Session` argument, 1.0
 by default. Audio can arrive ahead of playback, and a model may stream continuously, sending silence
-as zeros, so audio arriving says nothing about whether it is speaking. Only the session can tell: it
-reads voice from the samples, and what has played from its own count. A frame of pure silence is not
-voice: it starts no stretch and does not extend one, though once a stretch has voice its silence is
-still sent, to keep the timing of its pauses. Each stretch reports `Speaking`, `Silent` and `Said` as
+as zeros or as faint noise, so audio arriving says nothing about whether it is speaking. Only the
+session can tell: it reads voice from the samples, and what has played from its own count. A frame
+whose loudest sample is at or below `voice_floor`, a `Session` argument of 128 by default out of
+32767, is not voice: it starts no stretch and does not extend one, though once a stretch has voice
+such a frame is still sent, to keep the timing of its pauses. A model whose silence sits above the
+floor needs a higher one, or its stretches never end. Each stretch reports `Speaking`, `Silent` and `Said` as
 a response does, and `quiet` returns between stretches. A `LiveSaid` that comes after
 its stretch went quiet but before its `Said` still joins it, at its end, and one with no utterance
 open starts a stretch, so a model's words are never lost.
@@ -921,7 +923,7 @@ camera's `facing` or `deviceId`; the `Senses` it returns, with `SensesStatus`; `
 transcription or speech models; `instructions=` or `start(tools=)` without a live model; `start`
 on a session already started; `say` or `interrupt` without a voice, `prompt` or `inform` without a
 live model, `look` without `video=True`; a `window`, `window_bytes`, `tool_timeout` or `voice_gap` that is not
-positive. `InputError` for a call the library
+positive; a `voice_floor` outside 0 to 32767. `InputError` for a call the library
 refuses: empty text, `frames` below 1, a media part with both or neither of `data` and `url`, an
 audio frame whose sample rate is not positive, whose channels are not one or two, or whose bytes
 do not fill its samples, a tool called with bad arguments, an
