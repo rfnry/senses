@@ -247,10 +247,76 @@ async def test_a_turn_based_inform_goes_during_a_cut() -> None:
 
 
 async def test_a_connection_that_does_not_declare_duplex_does_not_start() -> None:
-    s = Session(Loopback(ANA, "acme"), live=Undeclared())
-    with pytest.raises(AttributeError, match="duplex"):
+    class Undeclared:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class Model:
+        async def open(self, *, tools: list[Any], instructions: str | None) -> Any:
+            return connection
+
+    connection = Undeclared()
+    s = Session(Loopback(ANA, "acme"), live=Model())
+    with pytest.raises(
+        ConfigurationError,
+        match="^session: a live connection must declare duplex, True or False$",
+    ):
         await s.start()
+    assert connection.closed
     await s.close()
+
+
+async def test_voice_with_no_words_reports_no_said() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    s = duplex(link, live)
+    await s.start()
+    events = s.events()
+    live.connection.emit(LiveAudio(frame=voice(20)))
+    await until(lambda: bool(edges(link, "silent")))
+    await asyncio.wait_for(s.quiet(), 1)
+    await s.close()
+    assert [type(e) async for e in events] == [Speaking, Silent, Closed]
+
+
+async def test_a_response_with_no_words_reports_no_said() -> None:
+    link, live = Loopback(ANA, "acme"), ScriptedLive()
+    s = Session(link, live=live)
+    await s.start()
+    events = s.events()
+    live.connection.emit(LiveStarted(requested=False), LiveAudio(frame=voice(20)), LiveDone())
+    await until(lambda: bool(edges(link, "silent")))
+    await asyncio.wait_for(s.quiet(), 1)
+    await s.close()
+    assert [type(e) async for e in events] == [Speaking, Silent, Closed]
+
+
+async def test_a_prompt_that_ended_before_any_words_says_so_without_a_blank_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    link, live = Loopback(ANA, "acme"), ScriptedLive()
+    s = Session(link, live=live)
+    await s.start()
+    events = s.events()
+    asking = asyncio.create_task(s.prompt("the news", triggered_by=HOST))
+    await until(lambda: bool(live.connection.calls))
+    live.connection.emit(LiveInterrupted())
+    said = await asyncio.wait_for(asking, 1)
+    await s.close()
+    assert said is not None and said.interrupted and said.heard == ""
+    assert Said not in [type(e) async for e in events]
+    assert "session: a prompt ended before the model said anything" in caplog.text
+
+
+async def test_a_blank_said_never_reaches_the_client() -> None:
+    link, live = Loopback(ANA, "acme"), DuplexLive()
+    async with duplex(link, live):
+        live.connection.emit(LiveAudio(frame=voice(20)))
+        await until(lambda: bool(edges(link, "silent")))
+        await asyncio.sleep(0.02)
+    kinds = [c["event"]["kind"] for c in link.controls if c["type"] == "event"]
+    assert "said" not in kinds
 
 
 def tone(ms: int, level: int) -> AudioFrame:

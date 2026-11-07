@@ -290,8 +290,15 @@ class Session:
                 with contextlib.suppress(Exception):
                     await connection.close()
                 raise TransportError("session: the session is closed")
+            duplex = getattr(connection, "duplex", None)
+            if not isinstance(duplex, bool):
+                with contextlib.suppress(Exception):
+                    await connection.close()
+                raise ConfigurationError(
+                    "session: a live connection must declare duplex, True or False"
+                )
             self._connection = connection
-            self._duplex = connection.duplex
+            self._duplex = duplex
             self._spawn(self._live_events())
             if self._window is not None:
                 self._spawn(self._forward_frames())
@@ -854,9 +861,11 @@ class Session:
             interrupted=interrupted,
             triggered_by=u.triggered_by,
         )
-        if u.done is not None or u.spoke or u.text:
+        if u.text or heard:
             self._tell(said)
             events.append(said)
+        elif u.done is not None:
+            logger.warning("session: a prompt ended before the model said anything")
         if u.done is not None and not u.done.done():
             u.done.set_result(said)
         self._settle()
