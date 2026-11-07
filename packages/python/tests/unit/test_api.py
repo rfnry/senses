@@ -161,6 +161,9 @@ def check_fields(cls: type, fields: list[ast.AnnAssign]) -> None:
             for f in dataclasses.fields(cls)
         }
         defaults = {f.name: f.default for f in dataclasses.fields(cls)}
+    elif is_protocol(cls):
+        assert names == list(annotations(cls))
+        required, defaults = dict.fromkeys(names, True), {}
     else:
         source = inspect.getsource(cls)
         assert [n for n in names if not re.search(rf"self\.{n}\s*[:=]", source)] == []

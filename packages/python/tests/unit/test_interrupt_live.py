@@ -198,7 +198,9 @@ async def test_the_person_cutting_in_ends_the_queued_says_and_a_late_answer_has_
         live.connection.emit(*response("Sure, what would you like?"))
         saids = [await next_of(events, Said) for _ in range(4)]
     assert said_first.heard == "Your table " and said_first.interrupted
-    assert all(q.heard == "" and q.interrupted and q.triggered_by == HOST for q in queued)
+    assert all(
+        q is not None and q.heard == "" and q.interrupted and q.triggered_by == HOST for q in queued
+    )
     assert saids[3].text == "Sure, what would you like?" and saids[3].triggered_by is None
     assert live.connection.calls == [("say", "Your table is ready.")]
 

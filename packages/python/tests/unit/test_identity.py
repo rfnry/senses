@@ -42,7 +42,8 @@ async def test_every_verb_reads_its_cause_by_its_fields() -> None:
         prompting = asyncio.create_task(s.prompt("Greet Ana.", triggered_by=host))
         await until(lambda: len(live.connection.calls) == 2)
         live.connection.emit(*response("Hi Ana."))
-        assert (await prompting).triggered_by == HOST
+        prompted = await prompting
+        assert prompted is not None and prompted.triggered_by == HOST
         await s.inform("Ana is vegetarian.", triggered_by=host)
         assert (await next_of(events, Informed)).triggered_by == HOST
         assert await s.interrupt(triggered_by=host) is None

@@ -150,6 +150,7 @@ async def test_prompt_returns_the_models_own_words_and_inform_asks_for_no_reply(
         said = await prompting
         await s.inform("The terrace closes at nine.", triggered_by=HOST)
         informed = await next_of(events, Informed)
+    assert said is not None
     assert said.text == "Ana, your table is ready." and said.triggered_by == HOST
     assert live.connection.calls == [
         ("text", "Tell Ana her table is ready.", True),
@@ -174,6 +175,7 @@ async def test_concurrent_say_and_prompt_keep_their_causes_in_order() -> None:
         said_first, said_second = await first, await second
         saids = [await next_of(events, Said) for _ in range(3)]
     assert live.connection.calls == [("say", "Hello."), ("text", "Greet Ana.", True)]
+    assert said_second is not None
     assert said_first.triggered_by == HOST and said_second.triggered_by == ANA
     assert said_second.text == "Hi Ana."
     assert saids[2].text == "By the way." and saids[2].triggered_by is None
@@ -246,6 +248,7 @@ async def test_a_tagged_late_answer_is_cut_and_the_next_request_keeps_its_own() 
         saids = [await next_of(events, Said) for _ in range(2)]
     assert ended.heard == "" and ended.interrupted
     assert live.connection.interrupts == [(0, "", "late")]
+    assert said is not None
     assert said.text == "Would you like the terrace?" and said.heard == said.text
     assert said.triggered_by == ANA and not said.interrupted
     assert saids == [ended, said] and len(link.audio) == 1

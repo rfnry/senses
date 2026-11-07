@@ -59,6 +59,8 @@ async def next_of[T](events: AsyncIterator[Any], kind: type[T], timeout: float =
 
 
 class ScriptedConnection:
+    duplex = False
+
     def __init__(self) -> None:
         self.calls: list[tuple[Any, ...]] = []
         self.audio: list[AudioFrame] = []
@@ -123,6 +125,20 @@ class ScriptedLive:
     async def open(self, *, tools: list[ToolSpec], instructions: str | None) -> ScriptedConnection:
         self.opened = {"tools": tools, "instructions": instructions}
         return self.connection
+
+
+class DuplexConnection(ScriptedConnection):
+    duplex = True
+
+    async def say(self, text: str) -> str | None:
+        await super().say(text)
+        return f"request-{len(self.calls)}"
+
+
+class DuplexLive(ScriptedLive):
+    def __init__(self) -> None:
+        super().__init__()
+        self.connection = DuplexConnection()
 
 
 class ScriptedTranscription:

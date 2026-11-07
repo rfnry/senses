@@ -46,7 +46,7 @@ class SensesTools(Tools):
             tools.append(
                 Tool(
                     "prompt",
-                    "Have the live voice say this, in its own words, now. Returns what it said and what was heard.",
+                    "Have the live voice say this, in its own words, now. Returns what it said and what was heard, or 'prompted' when its reply cannot be told from the rest of its speech.",
                     body=self._prompt,
                     args=TextArgs,
                 )
@@ -77,8 +77,10 @@ class SensesTools(Tools):
         said = await self.session.say(args["text"], triggered_by=self.triggered_by)
         return {"heard": said.heard, "interrupted": said.interrupted}
 
-    async def _prompt(self, args: dict[str, Any]) -> dict[str, Any]:
+    async def _prompt(self, args: dict[str, Any]) -> dict[str, Any] | str:
         said = await self.session.prompt(args["text"], triggered_by=self.triggered_by)
+        if said is None:
+            return "prompted"
         return {"said": said.text, "heard": said.heard, "interrupted": said.interrupted}
 
     async def _inform(self, args: dict[str, Any]) -> str:

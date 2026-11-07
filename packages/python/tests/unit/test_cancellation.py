@@ -768,7 +768,7 @@ async def test_a_mute_given_up_while_it_ends_the_queue_still_ends_all_of_it() ->
     ended = await asyncio.wait_for(asyncio.gather(first, second, third), 1)
     await asyncio.wait_for(s.quiet(), 1)
     await s.close()
-    assert all(said.interrupted and said.heard == "" for said in ended)
+    assert all(said is not None and said.interrupted and said.heard == "" for said in ended)
 
 
 class Blocking(ScriptedLive):

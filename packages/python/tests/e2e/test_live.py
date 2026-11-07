@@ -25,6 +25,7 @@ async def test_a_live_model_speaks_verbatim_and_in_its_own_words(adapters: Any) 
         prompted = await asyncio.wait_for(
             session.prompt("Say one short sentence about the weather.", triggered_by=HOST), 30
         )
+    assert prompted is not None
     print(
         f"\nlive: said {said.heard!r}, prompted {prompted.text!r} in {time.monotonic() - started:.1f} s"
     )

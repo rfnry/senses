@@ -91,12 +91,17 @@ def as_content(result: object) -> Content:
     )
 
 
+def spoken(said: Said | None) -> Said:
+    assert said is not None
+    return said
+
+
 @dataclass(eq=False)
 class Utterance:
     triggered_by: Identity | None
     text: str = ""
     verbatim: bool = False
-    done: asyncio.Future[Said] | None = None
+    done: asyncio.Future[Said | None] | None = None
     number: int = 0
     spoke: bool = False
     cut: bool = False
@@ -171,6 +176,7 @@ class Session:
         self._window = FrameWindow(window, window_bytes) if video else None
         self._tool_timeout = tool_timeout
         self._connection: LiveConnection | None = None
+        self._duplex = False
         self._stream: Transcription | None = None
         self._hearing = True
         self._subscribers: set[asyncio.Queue[Event | None]] = set()
@@ -227,6 +233,8 @@ class Session:
 
     @property
     def _turn_free(self) -> bool:
+        if self._duplex:
+            return not (self._closed or self._cutting)
         return not (self._closed or self._cutting or self._causes or self._responding)
 
     def _settle(self) -> None:
@@ -267,6 +275,7 @@ class Session:
                     await connection.close()
                 raise TransportError("session: the session is closed")
             self._connection = connection
+            self._duplex = connection.duplex
             self._spawn(self._live_events())
             if self._window is not None:
                 self._spawn(self._forward_frames())
@@ -309,7 +318,7 @@ class Session:
             self._check_open()
         if not self._voice:
             raise ConfigurationError("session: say needs a live model or a speech model")
-        done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
+        done: asyncio.Future[Said | None] = asyncio.get_running_loop().create_future()
         u = Utterance(
             cause,
             text if isinstance(text, str) else "",
@@ -320,7 +329,7 @@ class Session:
         if self._muted:
             self._let_go(u)
             await self._finish(u, "", interrupted=True)
-            return await done
+            return spoken(await done)
         if self._connection is not None:
             connection = self._connection
             if not isinstance(text, str):
@@ -328,28 +337,34 @@ class Session:
                 self._check_open()
                 if not joined.strip():
                     await self._finish(u, "", interrupted=False)
-                    return await done
+                    return spoken(await done)
                 u.text = joined
-            return await self._ask(u, lambda: connection.say(u.text))
+            return spoken(await self._ask(u, lambda: connection.say(u.text)))
         self._waiting.append(u)
         self._arrived.set()
-        return await done
+        return spoken(await done)
 
-    async def prompt(self, text: str, *, triggered_by: IdentityLike) -> Said:
+    async def prompt(self, text: str, *, triggered_by: IdentityLike) -> Said | None:
         cause = as_identity(triggered_by)
         self._ready(text)
         connection = self._need_live("prompt")
-        done: asyncio.Future[Said] = asyncio.get_running_loop().create_future()
+        done: asyncio.Future[Said | None] = asyncio.get_running_loop().create_future()
         u = Utterance(cause, done=done)
         if self._muted:
             await self._finish(u, "", interrupted=True)
             return await done
-        return await self._ask(u, lambda: connection.send_text(text, respond=True))
+        said = await self._ask(u, lambda: connection.send_text(text, respond=True))
+        if said is None:
+            await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
+        return said
 
     async def inform(self, text: str, *, triggered_by: IdentityLike) -> None:
         cause = as_identity(triggered_by)
         self._ready(text)
         connection = self._need_live("inform")
+        while self._duplex and self._cutting and not self._closed:
+            await self._settled.wait()
+        self._check_open()
         async with self._lock:
             await connection.send_text(text, respond=False)
         await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
@@ -800,7 +815,7 @@ class Session:
     async def _finish(self, u: Utterance, heard: str, interrupted: bool) -> None:
         await self._report_all(self._over(u, heard, interrupted))
 
-    async def _ask(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> Said:
+    async def _ask(self, u: Utterance, send: Callable[[], Awaitable[str | None]]) -> Said | None:
         assert u.done is not None
         u.send = send
         u.sent = asyncio.get_running_loop().create_future()
@@ -837,6 +852,8 @@ class Session:
             u.request = await u.send()
             if u.request is not None and u.done.done():
                 self._ended_tags.add(u.request)
+            elif u.request is None and self._duplex:
+                self._unpaired(u)
         except Exception as exc:
             if u.sent.done():
                 logger.warning("session: a request given up on failed to send: %s", exc)
@@ -845,6 +862,15 @@ class Session:
         finally:
             self._sending = None
             self._unblock(u)
+
+    def _unpaired(self, u: Utterance) -> None:
+        assert u.done is not None
+        if u.verbatim:
+            raise ModelError("session: a say on a duplex model needs a tag")
+        if u in self._causes and not u.done.done():
+            self._causes.remove(u)
+            u.done.set_result(None)
+            self._settle()
 
     async def _dispatch(self, call: LiveToolCall) -> object:
         if self._tools is None:

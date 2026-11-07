@@ -58,6 +58,8 @@ class LiveModel(Protocol):
     async def open(self, *, tools: list[ToolSpec], instructions: str | None) -> LiveConnection: ...
 
 class LiveConnection(Protocol):
+    duplex: bool
+
     async def send_audio(self, frame: AudioFrame) -> None: ...
     async def send_image(self, image: Image) -> None: ...
     async def send_text(self, text: str, *, respond: bool) -> str | None: ...
@@ -127,10 +129,22 @@ has returned: a `LiveStarted` that carries it sooner reads as the vendor's own, 
 warning, and the request waits for an answer that already came until the person cuts in, `mute` or
 `close`.
 
+A connection declares `duplex`, which says how its model converses: `False` for a model that takes
+turns, `True` for one that listens while it speaks and decides when to talk. It has no default, and
+`start` reads it once. A duplex connection takes input at any time: `say`, `prompt` and `inform` go
+at once, one at a time, held only by a cut that has not finished. A `send_text(respond=True)` that
+returns a tag is paired with the response carrying it, as above. One that returns `None` cannot be
+paired, because the model's reply cannot be told from the rest of its speech: `prompt` returns `None`
+once it is sent, and senses reports `Informed`, so the action still leaves an event naming its cause.
+`say` must return a tag, and the adapter brackets the speech with `LiveStarted(requested=tag)` and
+`LiveDone`, so `Said` is exact: a `say` that returns `None` raises `ModelError`, and an adapter with
+no way to speak exact words raises from `say`.
+
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
 to absorb. A connection implements every method; a vendor that cannot do one raises from its
-adapter, and the verb that needed it raises to its caller. There is no capability matrix.
+adapter, and the verb that needed it raises to its caller. `duplex` says how a model converses, not
+what it can do, so there is no capability matrix: every other limit raises from the adapter.
 
 A transcription stream reports `Transcript(text, final)` — the running words of the current
 segment, then the segment committed — and `UtteranceEnd()` when the person stops talking.
@@ -258,6 +272,10 @@ the next request's is in
 cuts in, `mute` or `close`. `inform` waits for no response, only for a send under way.
 A `say` or `prompt` awaited inside a tool body waits behind the response that made the call, and on a
 vendor that holds that response open until the result, the tool times out first: spawn it there.
+
+On a `duplex` connection none of this waiting applies. `say`, `prompt` and `inform` are held behind
+no speech and no answer, only behind a cut that has not finished, `inform` included, and they still
+go one at a time. A `prompt` the adapter cannot pair returns `None` once it is sent ([Models](#models)).
 
 ### Cascaded sessions
 
@@ -472,7 +490,8 @@ response started with the queue empty — the model answering what it heard, or 
 has `triggered_by=None`. So does one the adapter reports with `LiveStarted(requested=False)`, which
 the vendor started on its own while a request waited; the request keeps its place for the next. A
 response that carries a request's tag takes that request's cause instead, and one whose tag senses
-never handed out is the vendor's own. The client receives every event except `Informed`,
+never handed out is the vendor's own. A `prompt` that cannot be paired has no response to carry its
+cause, so `Informed` carries it. The client receives every event except `Informed`,
 `ToolCalled` and `Cancelled`, which are between you and the model.
 
 Every identity the library takes — `serve`, `accept_offer`, `Loopback`, a transport's `identity`,
@@ -502,6 +521,21 @@ consult: the full `SensesTools`, passed to its own `engine.run`, where `say` spe
 verbatim and `prompt` has the live voice say them in its own words. The transcript both minds read
 is the thread, mirrored from `events()` ([Storage](#storage)). A persona, a floor policy or a
 mandate gate stays in your product, built on `mute`, `unmute`, `interrupt` and tools of your own.
+
+A live model that hands work off, rather than calling a tool by name, fits the same shape. The
+adapter reports the hand-off as a `LiveToolCall` to `consult`; when the vendor sends no words with
+it, the adapter builds the call's input from the conversation it already reads. The result goes back
+through `submit_result`, spoken with `respond=True` and silent with `respond=False`, and a hand-off
+can happen many times in a call. The voice stays on the line while the other mind works, and the
+person can keep talking to it. Covering a slow tool is the model's job, steered by its instructions.
+
+There are only ever two minds, and each keeps its own instructions. The voice needs its role even
+when the other mind does the thinking: `instructions` reach `LiveModel.open`, and a voice given none
+falls back to its vendor's defaults and talks as a generic assistant. What a vendor requires around
+that role is the adapter's to add, so your role text stays neutral.
+
+Inside a call to a duplex model, `prompt` and `say` no longer wait behind the response, so they go at
+once from a tool body too.
 
 ### Three ways to use the screen
 
@@ -786,7 +820,7 @@ loop — pinned to one session and one cause:
 | --- | --- | --- |
 | `look(frames)` | the newest `frames`, at least 1 and at most what the window holds, as parts: `[Image, Text("frame at 12:03:04.200")]` | `video=True` |
 | `say(text)` | `{"heard": …, "interrupted": …}` — text only; a streamed `say` is for code | the session has a voice |
-| `prompt(text)` | `{"said": …, "heard": …, "interrupted": …}` | live |
+| `prompt(text)` | `{"said": …, "heard": …, "interrupted": …}`, or `"prompted"` when the adapter cannot pair the reply | live |
 | `inform(text)` | `"informed"` | live |
 | `interrupt()` | `{"heard": …}` — empty when nothing was being said | the session has a voice |
 
@@ -861,7 +895,8 @@ identity whose fields do not fit, an empty scope given to `serve` or `accept_off
 with an empty scope given to `Session`. `NotFoundError` when `look` finds no frame in the
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts, or starts before the last one is done — and the session closes; a
-`say` or `prompt` waiting on it raises it. A speech model that fails raises `ModelError` from the
+`say` or `prompt` waiting on it raises it. A `say` on a duplex connection that returns no tag raises
+`ModelError` from that one `say`, and the session goes on. A speech model that fails raises `ModelError` from the
 one `say` that needed it; a tool definition that is not valid raises `InputError` from `start`. `TransportError`
 for a send the transport failed (the session closes as `failed`), a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after
