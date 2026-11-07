@@ -15,6 +15,7 @@ pytest.importorskip("aiortc")
 import av
 from aiortc import (
     MediaStreamTrack,
+    RTCConfiguration,
     RTCPeerConnection,
     RTCRtpSender,
     RTCSessionDescription,
@@ -72,7 +73,7 @@ class Client:
         self.played = played
         self.opened = False
         self.stamped: list[tuple[float, dict[str, Any]]] = []
-        self.pc = RTCPeerConnection()
+        self.pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
         self.messages: list[dict[str, Any]] = []
         self.audio: list[Any] = []
         self.pc.addTrack(Silence())
@@ -369,7 +370,7 @@ async def test_an_offer_without_opus_is_refused(codec: str) -> None:
 
 
 async def test_an_offer_with_no_audio_is_refused_the_same_way() -> None:
-    pc = RTCPeerConnection()
+    pc = RTCPeerConnection(RTCConfiguration(iceServers=[]))
     pc.createDataChannel("senses")
     await pc.setLocalDescription(await pc.createOffer())
     try:
