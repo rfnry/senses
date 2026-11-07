@@ -468,3 +468,23 @@ async def test_overlapping_cuts_interrupt_the_model_once() -> None:
     await collector
     assert again is None and len(live.connection.interrupts) == 1
     assert sum(isinstance(e, Interrupted) for e in seen) == 1
+
+
+async def test_a_natural_end_that_read_short_says_so(caplog: pytest.LogCaptureFixture) -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme", played=lambda utterance, sent: 100)
+    async with Session(link, live=live) as s:
+        events = s.events()
+        live.connection.emit(*response("Hello there.", ms=300))
+        await next_of(events, Said)
+    assert "session: the voice reached the person short: 100 of 300 ms" in caplog.text
+
+
+async def test_a_natural_end_that_played_whole_says_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    live, link = ScriptedLive(), Loopback(ANA, "acme")
+    async with Session(link, live=live) as s:
+        events = s.events()
+        live.connection.emit(*response("Hello there."))
+        await next_of(events, Said)
+    assert "reached the person short" not in caplog.text

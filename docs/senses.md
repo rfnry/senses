@@ -656,9 +656,10 @@ Media has its own socket, apart from any thread socket. Audio and camera frames 
 behind a small header; control frames are JSON: `hello` (the protocol version) and `played` from
 the client; `ready`, `speaking`, `silent`, `stop`, `event` and `error` from the server. `silent`
 says an utterance has all been sent; `stop` names the newest utterance spoken and stops every one
-through it. Over WebRTC, `speaking` and `silent` also carry `sent_ms`: the milliseconds of voice this
-connection had handed to the sender when the frame left the queue, which for `speaking` is where the
-utterance's first frame starts and for `silent` where its last frame ends, always a multiple of 20.
+through it. Over WebRTC, `speaking`, `silent` and `stop` also carry `sent_ms`: the milliseconds of voice
+this connection had handed to the sender when the frame left the queue, which for `speaking` is where
+the utterance's first frame starts, for `silent` where its last frame ends, and for `stop` how far the
+voice had got, always a multiple of 20.
 Over a WebSocket they do not. The client answers each utterance once, with one `played`, when it has
 played all of it or been stopped. The frames are pinned by golden fixtures both clients' tests read.
 
@@ -800,20 +801,24 @@ Only audio that has played is counted, as
 far as the browser can tell. Over a WebSocket a stop counts up to `currentTime` less the context's
 `outputLatency`, what has reached the speakers. Over WebRTC the count is the receiver's
 `jitterBufferEmittedCount`, which leaves out the concealment it plays while no audio comes, and a stop
-subtracts the mean delay of the receiver's `media-playout` stats, in a browser that has them. An
-element the browser would not play counts nothing; no browser can see a muted output, so that counts
+subtracts the mean delay of the receiver's `media-playout` stats, in a browser that has them. A
+voice the browser refused to play counts nothing; no browser can see a muted output, so that counts
 as played. A loss too short to swallow a word, up to 300 ms at once, counts as
 played, so a lost packet does not cost a sentence. A longer hole ends `heard` where it began: `heard`
 is the start of what was said, so it never claims a word the person missed, though they may have heard
-some of what came after. A cut cannot tell a pause of a second or more from a hole, so it ends there
-too. The line between utterances is the server's stamp, exact on a busy page, and the first voice
+some of what came after, and the server logs a warning. A pause is no hole: a reply that goes quiet
+and carries on still reaches its stamp, and a cut sees from the stamp on its `stop` that nothing went
+missing. The line between utterances is the server's stamp, exact on a busy page, and the first voice
 after a second of quiet starts from its stamp, so a hole, or packets lost before the first one
 arrived, never reach the next stretch of voice. A count that stops within 100 ms of the end reads
 whole; one that stops further off reports what it reached after 600 ms, inside the second the server
 waits.
 `mute()`/`unmute()` silence the microphone, `pauseCamera()`/`resumeCamera()` the video, whichever
 source it comes from; `subscribe` receives the session's events and
-`{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. Device pickers,
+`{ kind: 'status', status: 'open' | 'closed' }`, and `senses.status` is the latest. A browser can
+refuse to play the voice on a page nobody has clicked, on either transport: `senses.audio` turns
+`'blocked'`, `subscribe` receives `{ kind: 'audio', status: 'blocked' }`, and the person hears nothing
+until `await senses.resumeAudio()` runs from a click. Device pickers,
 visualizers and framework bindings are yours.
 
 A connection has one stop. `close()` runs it, and so does every end from the far side: the session's
@@ -919,7 +924,7 @@ Everything the package exports, by role.
 - **Fail loudly:** `SensesException`, `ConfigurationError`, `InputError`, `NotFoundError`, `ModelError`, `TransportError`.
 
 The TypeScript package exports `connect` and its `ConnectOptions`, with `CameraChoice` for the
-camera's `facing` or `deviceId`; the `Senses` it returns, with `SensesStatus`; `SensesListener`,
+camera's `facing` or `deviceId`; the `Senses` it returns, with `SensesStatus` and `SensesAudio`; `SensesListener`,
 `SensesEvent`, `Identity` and `VideoSource` for what `subscribe` receives; and one error class,
 `SensesException`, whose messages have the same shape.
 

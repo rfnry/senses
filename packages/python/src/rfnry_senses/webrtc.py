@@ -319,6 +319,8 @@ class WebRTCTransport:
                     self._voice.mark(control_frame, with_next=False)
                 else:
                     self._deliver(control({**control_frame, "sent_ms": self._voice.sent_ms}))
+            case "stop":
+                self._deliver(control({**control_frame, "sent_ms": self._voice.sent_ms}))
             case _:
                 self._deliver(control(control_frame))
 

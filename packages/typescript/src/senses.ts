@@ -26,7 +26,14 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
   const room = new Listeners()
   const rate = options.sampleRate ?? 16000
   let link: WebSocketLink | null = null
-  const playback = new Playback(new AudioContext(), (utterance, ms) => link?.played(utterance, ms))
+  const context = new AudioContext()
+  const hearing = () => {
+    if (context.state === 'suspended') room.hearing('blocked')
+    if (context.state === 'running') room.hearing('playing')
+  }
+  context.addEventListener('statechange', hearing)
+  hearing()
+  const playback = new Playback(context, (utterance, ms) => link?.played(utterance, ms))
   const microphone = options.microphone === false ? null : new Microphone()
   microphone?.onChunk((pcm) => link?.sendAudio(pcm, rate))
   const frames = settings ? new Frames({ ...settings }, (jpeg) => link?.sendImage(jpeg)) : null
@@ -75,6 +82,10 @@ async function overWebSocket(options: ConnectOptions): Promise<Senses> {
     unmute: () => enable(true),
     pauseCamera: () => camera?.pause(),
     resumeCamera: () => camera?.resume(),
+    async resumeAudio() {
+      await context.resume()
+      hearing()
+    },
     setFps(fps) {
       checkFps(fps, camera)
       camera?.setFps(fps)

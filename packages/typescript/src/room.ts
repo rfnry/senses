@@ -20,16 +20,21 @@ export const ABORTED = 'senses: connect was aborted'
 
 export type SensesStatus = 'open' | 'closed'
 
+export type SensesAudio = 'playing' | 'blocked'
+
 export type SensesListener = (
   event:
     | SensesEvent
     | { kind: 'status'; status: SensesStatus }
+    | { kind: 'audio'; status: SensesAudio }
     | { kind: 'video'; source: VideoSource | null }
 ) => void
 
 export interface Senses {
   readonly status: SensesStatus
+  readonly audio: SensesAudio
   subscribe(listener: SensesListener): () => void
+  resumeAudio(): Promise<void>
   mute(): void
   unmute(): void
   shareScreen(): Promise<void>
@@ -70,11 +75,13 @@ export function checkFps(fps: number, camera: unknown): void {
 
 export class Listeners {
   status: SensesStatus = 'open'
+  audio: SensesAudio = 'playing'
   private readonly listeners = new Set<SensesListener>()
 
   subscribe(listener: SensesListener): () => void {
     this.listeners.add(listener)
     listener({ kind: 'status', status: this.status })
+    if (this.audio === 'blocked') listener({ kind: 'audio', status: 'blocked' })
     return () => this.listeners.delete(listener)
   }
 
@@ -88,6 +95,12 @@ export class Listeners {
         })
       }
     }
+  }
+
+  hearing(audio: SensesAudio): void {
+    if (audio === this.audio) return
+    this.audio = audio
+    this.tell({ kind: 'audio', status: audio })
   }
 
   end(): void {
@@ -148,11 +161,17 @@ export function handle(
   room: Listeners,
   ending: Ending,
   camera: Camera | null,
-  controls: Pick<Senses, 'mute' | 'unmute' | 'pauseCamera' | 'resumeCamera' | 'setFps'>
+  controls: Pick<
+    Senses,
+    'mute' | 'unmute' | 'pauseCamera' | 'resumeCamera' | 'setFps' | 'resumeAudio'
+  >
 ): Senses {
   return {
     get status() {
       return room.status
+    },
+    get audio() {
+      return room.audio
     },
     subscribe: (listener) => room.subscribe(listener),
     async shareScreen() {

@@ -1,6 +1,6 @@
 import { SensesException } from './errors.js'
 
-export const PROTOCOL = 2
+export const PROTOCOL = 3
 const AUDIO = 1
 const IMAGE = 2
 const HEADER = 10
@@ -38,8 +38,7 @@ export type SensesEvent =
 
 export type ServerControl =
   | { type: 'ready' }
-  | { type: 'speaking' | 'silent'; utterance: number; sent_ms?: number }
-  | { type: 'stop'; utterance: number }
+  | { type: 'speaking' | 'silent' | 'stop'; utterance: number; sent_ms?: number }
   | { type: 'event'; event: SensesEvent }
   | { type: 'error'; message: string }
 

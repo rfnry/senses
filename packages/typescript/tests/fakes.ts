@@ -37,7 +37,16 @@ export class Context {
   gains: Gain[] = []
   closed = false
   closes = 0
+  state: AudioContextState = 'running'
+  listeners: Array<() => void> = []
   audioWorklet = { addModule: async (_url: string) => {} }
+  addEventListener(_type: string, listener: () => void): void {
+    this.listeners.push(listener)
+  }
+  async resume(): Promise<void> {
+    this.state = 'running'
+    for (const listener of this.listeners) listener()
+  }
   constructor() {
     Context.made.push(this)
   }

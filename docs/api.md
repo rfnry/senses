@@ -1070,7 +1070,9 @@ Where the video comes from.
 ```ts
 interface Senses {
   readonly status: SensesStatus
+  readonly audio: SensesAudio
   subscribe(listener: SensesListener): () => void
+  resumeAudio(): Promise<void>
   mute(): void
   unmute(): void
   shareScreen(): Promise<void>
@@ -1082,7 +1084,7 @@ interface Senses {
 }
 ```
 
-A connection, from `connect`. `status` is the latest status.
+A connection, from `connect`. `status` is the latest status, and `audio` whether the browser is playing the voice.
 
 ### `Senses.subscribe`
 
@@ -1134,6 +1136,15 @@ pauseCamera(): void
 
 Stops sending video, from either source, until `resumeCamera`.
 
+### `Senses.resumeAudio`
+
+```ts
+resumeAudio(): Promise<void>
+```
+
+Plays a voice the browser refused to start, and sets `audio` to `'playing'`. Call it from a click or a key press: a browser needs one to allow it.
+Rejects with `SensesException` when the browser still refuses.
+
 ### `Senses.resumeCamera`
 
 ```ts
@@ -1169,6 +1180,14 @@ type SensesStatus = 'open' | 'closed'
 
 `'open'` until the connection ends, by `close()` or from the far side. When it turns `'closed'` the microphone and the video have stopped.
 
+### `SensesAudio`
+
+```ts
+type SensesAudio = 'playing' | 'blocked'
+```
+
+`'blocked'` when the browser refused to play the voice, as it can on a page nobody has clicked: the person hears nothing until `resumeAudio`.
+
 ### `SensesListener`
 
 ```ts
@@ -1176,11 +1195,12 @@ type SensesListener = (
   event:
     | SensesEvent
     | { kind: 'status'; status: SensesStatus }
+    | { kind: 'audio'; status: SensesAudio }
     | { kind: 'video'; source: VideoSource | null }
 ) => void
 ```
 
-What `subscribe` takes: the session's events, status changes, and each switch of the video source, `null` when no video is sent.
+What `subscribe` takes: the session's events, status changes, the voice being blocked or playing again, told at once to a listener that subscribes while it is blocked, and each switch of the video source, `null` when no video is sent.
 
 ### `SensesEvent`
 

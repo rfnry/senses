@@ -27,9 +27,12 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
   const room = new Listeners()
   const pc = new RTCPeerConnection({ iceServers: options.iceServers ?? [] })
   const channel = pc.createDataChannel('senses', { ordered: true })
-  const remote = new RemotePlayback((utterance, ms) => {
-    if (channel.readyState === 'open') channel.send(played(utterance, ms))
-  })
+  const remote = new RemotePlayback(
+    (utterance, ms) => {
+      if (channel.readyState === 'open') channel.send(played(utterance, ms))
+    },
+    (audio) => room.hearing(audio)
+  )
   const streams: MediaStream[] = []
   const microphone = () => streams.flatMap((stream) => stream.getAudioTracks())
   let sender: RTCRtpSender | null = null
@@ -56,7 +59,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       else if (frame.type === 'error') reject(new SensesException(frame.message))
       else if (frame.type === 'speaking') remote.speaking(frame.utterance, sentMs(frame))
       else if (frame.type === 'silent') remote.silent(frame.utterance, sentMs(frame))
-      else if (frame.type === 'stop') void remote.stop(frame.utterance)
+      else if (frame.type === 'stop') void remote.stop(frame.utterance, sentMs(frame))
       else if (frame.type === 'event') ending.tell(frame.event)
     }
   })
@@ -123,6 +126,7 @@ export async function overWebRTC(options: ConnectOptions): Promise<Senses> {
       camera?.resume()
       if (room.status === 'open') void sender?.replaceTrack(camera?.track ?? null)
     },
+    resumeAudio: () => remote.resume(),
     setFps(fps) {
       checkFps(fps, camera)
       camera?.setFps(fps)

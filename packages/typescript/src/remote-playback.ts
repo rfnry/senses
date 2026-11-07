@@ -1,3 +1,6 @@
+import { SensesException } from './errors.js'
+import type { SensesAudio } from './room.js'
+
 type Spoken = { start: number; end: number | null; hole: number | null; stalled: number | null }
 
 const POLL_MS = 100
@@ -35,15 +38,27 @@ export class RemotePlayback {
   private readonly spoken = new Map<number, Spoken>()
   private readonly reported = new Set<number>()
 
-  constructor(private readonly report: (utterance: number, ms: number) => void) {}
+  constructor(
+    private readonly report: (utterance: number, ms: number) => void,
+    private readonly hearing: (audio: SensesAudio) => void = () => {}
+  ) {}
 
   start(stream: MediaStream, receiver: RTCRtpReceiver): void {
     this.receiver = receiver
     const element = new Audio()
     element.autoplay = true
     element.srcObject = stream
-    void Promise.resolve(element.play()).catch(() => {})
     this.element = element
+    void Promise.resolve(element.play()).catch(() => this.hearing('blocked'))
+  }
+
+  async resume(): Promise<void> {
+    try {
+      await this.element?.play()
+    } catch {
+      throw new SensesException('senses: the browser would not play the voice')
+    }
+    this.hearing('playing')
   }
 
   speaking(utterance: number, sentMs: number): void {
@@ -65,7 +80,7 @@ export class RemotePlayback {
     void this.watch()
   }
 
-  async stop(utterance: number): Promise<void> {
+  async stop(utterance: number, sentMs: number): Promise<void> {
     this.fenced = Math.max(this.fenced, utterance)
     this.rest = null
     void this.watch()
@@ -79,7 +94,9 @@ export class RemotePlayback {
       .sort((a, b) => a - b)
     if (ending.length === 0) return
     const now = await this.position()
-    for (const number of ending) this.finish(number, now === null ? null : now - this.output, true)
+    const behind = now !== null && sentMs - now >= STILL_POLLS * POLL_MS
+    for (const number of ending)
+      this.finish(number, now === null ? null : now - this.output, behind)
   }
 
   silent(utterance: number, sentMs: number): void {
@@ -161,8 +178,9 @@ export class RemotePlayback {
     if (spoken === undefined) return
     this.spoken.delete(utterance)
     this.reported.add(utterance)
+    if (at === null) return
     const { start, end, hole, stalled } = spoken
-    const stops = [at ?? start, end, hole, short ? stalled : null]
+    const stops = [at, end, hole, short ? stalled : null]
     const reached = Math.min(...stops.filter((ms) => ms !== null))
     this.report(utterance, Math.max(0, Math.round(reached - start)))
   }
@@ -170,7 +188,7 @@ export class RemotePlayback {
   private async position(): Promise<number | null> {
     const stats = await this.receiver?.getStats().catch(() => null)
     if (stats === null || stats === undefined) return null
-    if (this.element?.paused === true) return 0
+    if (this.element?.paused === true) return this.shift
     const entries = Array.from(stats.values()) as Array<Record<string, unknown>>
     const inbound = entries.find((entry) => entry.type === 'inbound-rtp')
     if (inbound === undefined) return this.shift

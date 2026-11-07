@@ -13,7 +13,7 @@ from rfnry_senses.wire import decode, encode_audio
 
 from .fakes import ANA, HOST, ScriptedTranscription, Tone, next_of, pcm, until
 
-HELLO = json.dumps({"type": "hello", "protocol": 2})
+HELLO = json.dumps({"type": "hello", "protocol": 3})
 
 
 class Socket:
@@ -60,7 +60,7 @@ async def test_serve_reads_the_hello_and_carries_the_person_and_their_scope() ->
     [
         (
             json.dumps({"type": "hello", "protocol": 1}),
-            "transport: protocol 1 is not supported; this server speaks 2",
+            "transport: protocol 1 is not supported; this server speaks 3",
         ),
         (b"\x01", "wire: the first frame must be a hello"),
     ],

@@ -838,6 +838,12 @@ class Session:
         if self._utterance is u:
             self._utterance = None
         whole = played > 0 and played + 1 >= u.ledger.sent_ms
+        if u.spoke and not whole:
+            logger.warning(
+                "session: the voice reached the person short: %d of %d ms",
+                played,
+                u.ledger.sent_ms,
+            )
         heard = u.ledger.heard(None if whole else played) if u.spoke else ""
         await self._finish(u, heard, interrupted=False)
 

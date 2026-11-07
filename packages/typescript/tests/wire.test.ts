@@ -41,6 +41,7 @@ describe('the wire', () => {
       'speaking-webrtc',
       'silent-webrtc',
       'stop',
+      'stop-webrtc',
       'error',
     ]) {
       expect(parseControl(JSON.stringify(json(name)))).toEqual(json(name))

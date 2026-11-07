@@ -766,7 +766,7 @@ describe('when the connection ends over WebRTC', () => {
   it('leaves no fade running once the connection has ended', async () => {
     const { channel } = await playing()
     channel.deliver({ type: 'speaking', utterance: 1, sent_ms: 0 })
-    channel.deliver({ type: 'stop', utterance: 1 })
+    channel.deliver({ type: 'stop', utterance: 1, sent_ms: 0 })
     await vi.advanceTimersByTimeAsync(10)
     expect(vi.getTimerCount()).toBe(2)
     channel.deliver(event)
@@ -898,11 +898,11 @@ describe('remote playback', () => {
     await Promise.resolve()
     counts.emitted += 9600
     counts.concealed += 480
-    await playback.stop(1)
+    await playback.stop(1, 0)
     playback.speaking(2, 200)
     await Promise.resolve()
     counts.emitted += 4800
-    await playback.stop(2)
+    await playback.stop(2, 0)
     expect(reports).toEqual([
       [1, 200],
       [2, 100],
@@ -916,7 +916,7 @@ describe('remote playback', () => {
     playback.start({} as MediaStream, receiver({ emitted: 0, concealed: 0 }))
     const element = (playback as unknown as { element: Element }).element
     playback.speaking(1, 0)
-    await playback.stop(1)
+    await playback.stop(1, 0)
     expect([element.volume, element.muted]).toEqual([1, false])
     await vi.advanceTimersByTimeAsync(30)
     expect(element.volume).toBe(0.5)
@@ -925,7 +925,7 @@ describe('remote playback', () => {
     expect([element.volume, element.muted]).toEqual([0, true])
     playback.speaking(2, 0)
     expect([element.volume, element.muted]).toEqual([1, false])
-    await playback.stop(2)
+    await playback.stop(2, 0)
     await vi.advanceTimersByTimeAsync(20)
     playback.speaking(3, 0)
     await vi.advanceTimersByTimeAsync(100)
@@ -1119,7 +1119,7 @@ describe('remote playback', () => {
     await Promise.resolve()
     counts.emitted = 9600
     counts.lost = -1
-    await playback.stop(1)
+    await playback.stop(1, 0)
     expect(reports).toEqual([[1, 200]])
   })
 
@@ -1135,7 +1135,7 @@ describe('remote playback', () => {
         [5000, (p) => p.speaking(2, 300)],
         [6860, (p) => p.silent(2, 2300)],
         [6880, (p) => p.speaking(3, 2300)],
-        [8020, (p) => p.stop(3)],
+        [8020, (p) => p.stop(3, 8020)],
       ],
       9000
     )
@@ -1226,9 +1226,9 @@ describe('remote playback', () => {
       ],
       [
         [0, (p) => p.speaking(1, 0)],
-        [1000, (p) => p.stop(1)],
+        [1000, (p) => p.stop(1, 1000)],
         [1020, (p) => p.speaking(2, 1100)],
-        [1500, (p) => p.stop(2)],
+        [1500, (p) => p.stop(2, 1500)],
       ],
       3000
     )
@@ -1246,9 +1246,9 @@ describe('remote playback', () => {
       [
         [0, (p) => p.speaking(1, 0)],
         [160, (p) => p.silent(1, 300)],
-        [5000, (p) => p.stop(2)],
+        [5000, (p) => p.stop(2, 5000)],
         [6000, (p) => p.speaking(3, 360)],
-        [7000, (p) => p.stop(3)],
+        [7000, (p) => p.stop(3, 7000)],
       ],
       8000
     )
@@ -1277,7 +1277,7 @@ describe('remote playback', () => {
         [0, (p) => p.speaking(1, 0)],
         [1860, (p) => p.silent(1, 2000)],
         [1880, (p) => p.speaking(2, 2000)],
-        [1920, (p) => p.stop(2)],
+        [1920, (p) => p.stop(2, 1920)],
       ],
       3000
     )
@@ -1327,7 +1327,7 @@ describe('remote playback', () => {
       [
         [0, (p) => p.speaking(1, 0)],
         [1980, (p) => p.speaking(2, 1800)],
-        [2100, (p) => p.stop(2)],
+        [2100, (p) => p.stop(2, 2100)],
       ],
       2500
     )
@@ -1469,7 +1469,7 @@ describe('remote playback', () => {
         [0, (p) => p.speaking(1, 0)],
         [5900, (p) => p.silent(1, 6000)],
         [8000, (p) => p.speaking(2, 6000)],
-        [9000, (p) => p.stop(2)],
+        [9000, (p) => p.stop(2, 9000)],
       ],
       9500
     )
@@ -1499,11 +1499,26 @@ describe('remote playback', () => {
       ],
       [
         [0, (p) => p.speaking(1, 0)],
-        [5000, (p) => p.stop(1)],
+        [5000, (p) => p.stop(1, 5000)],
       ],
       5500
     )
     expect(reports.get(1)).toBe(1000)
+  })
+
+  it('a pause before a cut is no hole: the stamp shows nothing went missing', async () => {
+    const reports = await play(
+      [
+        { at: 0, ms: 1000 },
+        { at: 3000, ms: 2000 },
+      ],
+      [
+        [0, (p) => p.speaking(1, 0)],
+        [4000, (p) => p.stop(1, 2120)],
+      ],
+      4500
+    )
+    expect(reports.get(1)).toBe(1980)
   })
 
   it('heard ends where a hole the browser counted as lost began', async () => {
@@ -1523,7 +1538,7 @@ describe('remote playback', () => {
       [{ at: 0, ms: 6000, lost: 25 }],
       [
         [0, (p) => p.speaking(1, 0)],
-        [5000, (p) => p.stop(1)],
+        [5000, (p) => p.stop(1, 5000)],
       ],
       5500
     )
@@ -1567,7 +1582,7 @@ describe('remote playback', () => {
         [0, (p) => p.speaking(1, 0)],
         [1640, (p) => p.silent(1, 1800)],
         [5000, (p) => p.speaking(2, 1800)],
-        [6000, (p) => p.stop(2)],
+        [6000, (p) => p.stop(2, 6000)],
       ],
       6500
     )
@@ -1587,7 +1602,7 @@ describe('remote playback', () => {
         [5000, (p) => p.speaking(2, 1800)],
         [6640, (p) => p.silent(2, 3600)],
         [10000, (p) => p.speaking(3, 3600)],
-        [11000, (p) => p.stop(3)],
+        [11000, (p) => p.stop(3, 11000)],
       ],
       11500
     )
@@ -1606,13 +1621,41 @@ describe('remote playback', () => {
         [0, (p) => p.speaking(1, 0)],
         [1640, (p) => p.silent(1, 1800)],
         [3000, (p) => p.speaking(2, 1800)],
-        [4000, (p) => p.stop(2)],
+        [4000, (p) => p.stop(2, 4000)],
       ],
       4500,
       30
     )
     expect(reports.get(1)).toBe(1800)
     expect(reports.get(2)).toBe(950)
+  })
+
+  it('a read that fails sends no report, so the server estimates instead of hearing zero', async () => {
+    vi.useFakeTimers({ now: 0 })
+    vi.stubGlobal('Audio', Element)
+    const reports: Array<[number, number]> = []
+    const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
+    const reader = { getStats: async () => Promise.reject(new Error('gone')) }
+    playback.start({} as MediaStream, reader as unknown as RTCRtpReceiver)
+    playback.speaking(1, 0)
+    playback.silent(1, 1800)
+    await vi.advanceTimersByTimeAsync(400)
+    await playback.stop(2, 1800)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(reports).toEqual([[2, 0]])
+  })
+
+  it('a browser with no count sends no report either', async () => {
+    vi.useFakeTimers({ now: 0 })
+    vi.stubGlobal('Audio', Element)
+    const reports: Array<[number, number]> = []
+    const playback = new RemotePlayback((u, ms) => reports.push([u, ms]))
+    const stats = new Map([['in', { type: 'inbound-rtp', codecId: 'c' }]])
+    playback.start({} as MediaStream, { getStats: async () => stats } as unknown as RTCRtpReceiver)
+    playback.speaking(1, 0)
+    playback.silent(1, 1800)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(reports).toEqual([])
   })
 
   it('counts nothing from an element the browser would not play', async () => {
@@ -1642,11 +1685,11 @@ describe('remote playback', () => {
     playback.start({} as MediaStream, receiver(counts))
     playback.speaking(1, 0)
     counts.emitted = 400 * 48
-    await playback.stop(1)
+    await playback.stop(1, 0)
     playback.speaking(2, 500)
     await playback.silent(1, 900)
     counts.emitted = 700 * 48
-    await playback.stop(2)
+    await playback.stop(2, 0)
     expect(reports).toEqual([
       [1, 400],
       [2, 200],
@@ -1671,7 +1714,7 @@ describe('remote playback', () => {
       [{ at: 0, ms: 1000 }],
       [
         [0, (p) => p.speaking(1, 0)],
-        [500, (p) => p.stop(3)],
+        [500, (p) => p.stop(3, 500)],
         [510, (p) => p.speaking(2, 500)],
         [520, (p) => p.silent(2, 500)],
       ],
@@ -1681,6 +1724,71 @@ describe('remote playback', () => {
       [1, 480],
       [3, 0],
     ])
+  })
+})
+
+describe('when the browser will not play the voice', () => {
+  class Refusing extends Element {
+    paused = true
+    allowed = false
+    override async play(): Promise<void> {
+      if (!this.allowed) throw new Error('NotAllowedError')
+      this.paused = false
+    }
+  }
+
+  async function refused() {
+    const made: Refusing[] = []
+    const Tracked = class extends Refusing {
+      constructor() {
+        super()
+        made.push(this)
+      }
+    }
+    vi.stubGlobal('Audio', Tracked)
+    vi.stubGlobal('fetch', server().fetch)
+    const { senses, peer } = await connected({ microphone: false })
+    peer.ontrack?.({ streams: [{}], receiver: receiver({ emitted: 0, concealed: 0 }), track: {} })
+    await vi.waitFor(() => expect(senses.audio).toBe('blocked'))
+    return { senses, element: made[0] as Refusing }
+  }
+
+  it('tells the app, and tells a subscriber that comes later', async () => {
+    const { senses } = await refused()
+    const told: unknown[] = []
+    senses.subscribe((event) => told.push(event))
+    expect(told).toContainEqual({ kind: 'audio', status: 'blocked' })
+  })
+
+  it('plays once the app resumes it from a click', async () => {
+    const { senses, element } = await refused()
+    const told: unknown[] = []
+    senses.subscribe((event) => told.push(event))
+    element.allowed = true
+    await senses.resumeAudio()
+    expect(element.paused).toBe(false)
+    expect(senses.audio).toBe('playing')
+    expect(told).toContainEqual({ kind: 'audio', status: 'playing' })
+  })
+
+  it('says so when the browser still refuses', async () => {
+    const { senses } = await refused()
+    await expect(senses.resumeAudio()).rejects.toThrow(
+      new SensesException('senses: the browser would not play the voice')
+    )
+    expect(senses.audio).toBe('blocked')
+  })
+
+  it('tells nothing while the voice plays', async () => {
+    vi.stubGlobal('Audio', Element)
+    vi.stubGlobal('fetch', server().fetch)
+    const { senses, peer } = await connected({ microphone: false })
+    peer.ontrack?.({ streams: [{}], receiver: receiver({ emitted: 0, concealed: 0 }), track: {} })
+    const told: unknown[] = []
+    senses.subscribe((event) => told.push(event))
+    await Promise.resolve()
+    expect(senses.audio).toBe('playing')
+    expect(told).toEqual([{ kind: 'status', status: 'open' }])
   })
 })
 

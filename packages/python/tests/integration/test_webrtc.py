@@ -65,7 +65,7 @@ class Silence(MediaStreamTrack):
 class Client:
     def __init__(
         self,
-        protocol: int = 2,
+        protocol: int = 3,
         played: Callable[[dict[str, Any]], int] | None = None,
         codecs: tuple[str, ...] = (),
         greets: bool = True,
@@ -153,7 +153,7 @@ async def test_a_wrong_protocol_on_the_channel_ends_the_transport() -> None:
         assert closed.reason == "hung_up"
         await until(lambda: any(m["type"] == "error" for m in client.messages), timeout=5)
         error = next(m for m in client.messages if m["type"] == "error")
-        assert error["message"] == "transport: protocol 1 is not supported; this server speaks 2"
+        assert error["message"] == "transport: protocol 1 is not supported; this server speaks 3"
     finally:
         await client.pc.close()
 
@@ -609,6 +609,20 @@ async def test_a_silent_filled_after_its_marker_left_keeps_the_stamp_of_its_last
         await link.close()
 
 
+async def test_a_stop_carries_what_the_voice_has_sent() -> None:
+    link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
+    rate = link._voice.RATE
+    try:
+        await link.send_control({"type": "speaking", "utterance": 1})
+        await link.send_audio(tone(100, 100, rate), 1)
+        for _ in range(3):
+            await link._voice.recv()
+        await link.send_control({"type": "stop", "utterance": 1})
+        assert json.loads(link._unsent[-1]) == {"type": "stop", "utterance": 1, "sent_ms": 60}
+    finally:
+        await link.close()
+
+
 async def test_a_silent_for_an_utterance_a_cut_took_still_carries_a_stamp() -> None:
     link = await accept_offer(await Client().offer(), identity=ANA, scope="acme")
     rate = link._voice.RATE
@@ -672,6 +686,17 @@ async def test_a_refused_hello_sends_no_ready() -> None:
         await client.pc.close()
 
 
+async def greeted(link: Any, client: Client) -> bool:
+    try:
+        return bool(await asyncio.wait_for(link.greeted(), 10))
+    except TimeoutError:
+        pytest.fail(
+            f"no hello in 10 s: client {client.pc.connectionState}/{client.pc.iceConnectionState}, "
+            f"channel {client.channel.readyState}, opened {client.opened}, "
+            f"server {link._pc.connectionState}/{link._pc.iceConnectionState}"
+        )
+
+
 async def answered(client: Client) -> Any:
     link = await accept_offer(await client.offer(), identity=ANA, scope="acme")
     await client.pc.setRemoteDescription(RTCSessionDescription(sdp=link.answer, type="answer"))
@@ -682,7 +707,7 @@ async def test_greeted_is_true_once_the_hello_is_accepted() -> None:
     client = Client()
     link = await answered(client)
     try:
-        assert await asyncio.wait_for(link.greeted(), 10) is True
+        assert await greeted(link, client) is True
         async with Session(link) as s:
             await until(lambda: {"type": "ready"} in client.messages, timeout=5)
             await s.close()
@@ -694,7 +719,7 @@ async def test_greeted_is_false_for_a_refused_hello_and_the_client_is_told_why()
     client = Client(protocol=1)
     link = await answered(client)
     try:
-        assert await asyncio.wait_for(link.greeted(), 10) is False
+        assert await greeted(link, client) is False
         await until(lambda: any(m["type"] == "error" for m in client.messages), timeout=5)
         assert [m["type"] for m in client.messages] == ["error"]
         assert [item async for item in link.inbound()] == []
@@ -732,7 +757,7 @@ async def test_a_refused_hello_opens_no_live_model_when_greeted_comes_first() ->
     client, live = Client(protocol=1), ScriptedLive()
     link = await answered(client)
     try:
-        if await asyncio.wait_for(link.greeted(), 10):
+        if await greeted(link, client):
             async with Session(link, live=live):
                 pass
         assert live.opened == {}

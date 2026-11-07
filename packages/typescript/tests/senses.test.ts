@@ -51,6 +51,42 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('when the browser will not play the voice over a WebSocket', () => {
+  class Suspended extends Context {
+    override state: AudioContextState = 'suspended'
+  }
+
+  async function suspended() {
+    vi.stubGlobal('AudioContext', Suspended)
+    return opened()
+  }
+
+  it('tells the app, and tells a subscriber that comes later', async () => {
+    const { senses } = await suspended()
+    expect(senses.audio).toBe('blocked')
+    const told: unknown[] = []
+    senses.subscribe((event) => told.push(event))
+    expect(told).toContainEqual({ kind: 'audio', status: 'blocked' })
+  })
+
+  it('plays once the app resumes it from a click', async () => {
+    const { senses } = await suspended()
+    const told: unknown[] = []
+    senses.subscribe((event) => told.push(event))
+    await senses.resumeAudio()
+    expect(senses.audio).toBe('playing')
+    expect(told).toContainEqual({ kind: 'audio', status: 'playing' })
+  })
+
+  it('tells nothing while the voice plays', async () => {
+    const { senses } = await opened()
+    expect(senses.audio).toBe('playing')
+    const told: unknown[] = []
+    senses.subscribe((event) => told.push(event))
+    expect(told).toEqual([{ kind: 'status', status: 'open' }])
+  })
+})
+
 describe('connect over a WebSocket', () => {
   it('opens with the subprotocols, says hello and waits for ready', async () => {
     let done = false

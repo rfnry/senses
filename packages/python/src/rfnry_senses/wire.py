@@ -9,7 +9,7 @@ from rfnry_senses.errors import InputError
 from rfnry_senses.models import Image
 from rfnry_senses.transport import Played
 
-PROTOCOL = 2
+PROTOCOL = 3
 AUDIO = 1
 IMAGE = 2
 _AUDIO = struct.Struct("<BBII")
