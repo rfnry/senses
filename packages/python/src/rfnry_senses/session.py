@@ -537,6 +537,8 @@ class Session:
     def _next(self) -> None:
         if self._held and self._turn_free:
             self._spawn(self._deliver())
+        if self._waiting:
+            self._arrived.set()
 
     def _check_open(self) -> None:
         if self._closed:
@@ -1007,7 +1009,7 @@ class Session:
 
     async def _speak(self) -> None:
         while True:
-            while not self._waiting:
+            while not self._waiting or self._cutting:
                 self._arrived.clear()
                 await self._arrived.wait()
             playing = self._playing = asyncio.create_task(self._play())

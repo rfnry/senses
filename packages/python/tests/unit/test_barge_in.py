@@ -43,6 +43,35 @@ async def test_the_person_talking_over_the_voice_cuts_it_and_the_queue() -> None
     assert {"type": "stop", "utterance": 1} in link.controls
 
 
+async def test_a_say_during_a_barge_in_cut_ends_with_it_and_speaks_nothing() -> None:
+    link, stt, tts = Loopback(ANA, "acme", answer=False), ScriptedTranscription(), Tone()
+    tts.held = "Three four."
+    async with Session(link, transcription=stt, speech=tts) as s:
+        first = asyncio.create_task(s.say("One two. Three four.", triggered_by=HOST))
+        await until(lambda: len(link.audio) == 2 and "Three four." in tts.spoken)
+        stt.hear("wait", final=False, end=False)
+        await until(lambda: {"type": "stop", "utterance": 1} in link.controls)
+        late = await asyncio.wait_for(s.say("Five.", triggered_by=HOST), 1)
+        await first
+    assert late.interrupted and late.heard == "" and "Five." not in tts.spoken
+
+
+async def test_a_say_during_a_cut_from_code_speaks_once_the_cut_is_over() -> None:
+    link, stt, tts = Loopback(ANA, "acme", answer=False), ScriptedTranscription(), Tone()
+    tts.held = "Three four."
+    async with Session(link, transcription=stt, speech=tts) as s:
+        first = asyncio.create_task(s.say("One two. Three four.", triggered_by=HOST))
+        await until(lambda: len(link.audio) == 2 and "Three four." in tts.spoken)
+        cutting = asyncio.create_task(s.interrupt(triggered_by=HOST))
+        await until(lambda: {"type": "stop", "utterance": 1} in link.controls)
+        next_line = asyncio.create_task(s.say("Five.", triggered_by=HOST))
+        await asyncio.sleep(0.02)
+        assert "Five." not in tts.spoken
+        await cutting, await first
+        said = await asyncio.wait_for(next_line, 2)
+    assert said.heard == "Five." and not said.interrupted
+
+
 async def test_a_sentence_finished_after_barge_in_is_never_sent() -> None:
     link, stt, tts = Loopback(ANA, "acme"), ScriptedTranscription(), Tone()
     tts.held = "Three four."
