@@ -58,7 +58,7 @@ from rfnry_senses.tools import Tool, Tools
 from rfnry_senses.transport import Loopback, Played, Transport
 from rfnry_senses.websocket import Connection, serve
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 __all__ = [
     "Session",
