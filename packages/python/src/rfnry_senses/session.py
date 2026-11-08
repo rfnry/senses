@@ -4,7 +4,7 @@ import json
 import logging
 import weakref
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Coroutine, Iterator
 from dataclasses import dataclass, field
 from itertools import count
 from time import monotonic
@@ -95,6 +95,16 @@ def as_content(result: object) -> Content:
 def spoken(said: Said | None) -> Said:
     assert said is not None
     return said
+
+
+@contextlib.contextmanager
+def model_errors(model: str) -> Iterator[None]:
+    try:
+        yield
+    except SensesException:
+        raise
+    except Exception as exc:
+        raise ModelError(f"session: the {model} model failed: {exc}") from exc
 
 
 @dataclass(eq=False)
@@ -285,7 +295,8 @@ class Session:
         self._tools = tools
         self._informs = frozenset(inform)
         if self._live is not None:
-            connection = await self._live.open(tools=specs, instructions=self._instructions)
+            with model_errors("live"):
+                connection = await self._live.open(tools=specs, instructions=self._instructions)
             if self._closed:
                 with contextlib.suppress(Exception):
                     await connection.close()
@@ -303,7 +314,8 @@ class Session:
             if self._window is not None:
                 self._spawn(self._forward_frames())
         if self._transcription is not None:
-            self._stream = self._transcription.stream()
+            with model_errors("transcription"):
+                self._stream = self._transcription.stream()
             self._spawn(self._transcripts())
         if self._speech is not None:
             self._spawn(self._speak())
@@ -383,7 +395,8 @@ class Session:
         self._ready(text)
         connection = self._need_live("inform")
         async with self._lock:
-            await connection.send_text(text, respond=False)
+            with model_errors("live"):
+                await connection.send_text(text, respond=False)
         await self._emit(Informed(scope=self.scope, text=text, triggered_by=cause))
 
     async def cancel(self, *, triggered_by: IdentityLike) -> Cancelled | None:
@@ -889,7 +902,8 @@ class Session:
         self._held.append(u)
         self._next()
         try:
-            await u.sent
+            with model_errors("live"):
+                await u.sent
         except BaseException:
             u.done.cancel()
             if u in self._held:
@@ -1041,7 +1055,7 @@ class Session:
             async for sentence in pieces:
                 if streamed:
                     u.text += sentence
-                frames = aiter(self._speech.speak(sentence))
+                frames = self._frames(sentence)
                 while True:
                     try:
                         frame = await anext(frames)
@@ -1049,9 +1063,9 @@ class Session:
                         break
                     except Exception as exc:
                         logger.warning("session: the speech model failed: %s", exc)
-                        await self._abandon(
-                            u, ModelError(f"session: the speech model failed: {exc}")
-                        )
+                        failure = ModelError(f"session: the speech model failed: {exc}")
+                        failure.__cause__ = exc
+                        await self._abandon(u, failure)
                         return
                     if self._utterance is not u:
                         return
@@ -1073,6 +1087,11 @@ class Session:
             await self._abandon(u, InputError("session: text is empty"))
             return
         await self._conclude(u)
+
+    async def _frames(self, sentence: str) -> AsyncIterator[AudioFrame]:
+        assert self._speech is not None
+        async for frame in self._speech.speak(sentence):
+            yield frame
 
     def _let_go(self, u: Utterance) -> None:
         if not isinstance(u.source, str):

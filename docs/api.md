@@ -29,7 +29,7 @@ class LiveConnection(Protocol):
     async def close(self) -> None: ...
 ```
 
-One open live model. `duplex` says how it converses, and `Session.start` reads it once: `False` for a model that takes turns, `True` for one that listens while it speaks and decides when to talk. It has no default, so a connection without it fails `start` with `ConfigurationError`: `session: a live connection must declare duplex, True or False`. A `send_image` that raises is logged once and frames stop going to the model; the window and `look` go on, and so does the session. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`. Both may return a tag for the response they asked for — the vendor's id for the request, or the adapter's own — which the adapter then puts on that response's `LiveStarted(requested=tag)`, reported only once the call has returned it; an adapter that cannot tag returns `None`, and `respond=False` always does. The session sends one at a time and never cancels the `say` or `send_text(respond=True)` of a call whose caller gave up: it runs to its end, so one that never returns holds every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. `send_text(respond=False)` runs in the task of the `inform` that called it, and is cancelled with it. `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller. On a duplex connection `say` must return a tag, and a `send_text(respond=True)` that returns `None` is one the adapter cannot pair with a response.
+One open live model. `duplex` says how it converses, and `Session.start` reads it once: `False` for a model that takes turns, `True` for one that listens while it speaks and decides when to talk. It has no default, so a connection without it fails `start` with `ConfigurationError`: `session: a live connection must declare duplex, True or False`. A `send_image` that raises is logged once and frames stop going to the model; the window and `look` go on, and so does the session. `send_text(text, respond=True)` asks for an answer in the model's own words and `respond=False` adds context without one; `say` speaks exactly `text`. Both may return a tag for the response they asked for — the vendor's id for the request, or the adapter's own — which the adapter then puts on that response's `LiveStarted(requested=tag)`, reported only once the call has returned it; an adapter that cannot tag returns `None`, and `respond=False` always does. The session sends one at a time and never cancels the `say` or `send_text(respond=True)` of a call whose caller gave up: it runs to its end, so one that never returns holds every later `say`, `prompt` and `inform` until `close`, and an adapter bounds its own send. `send_text(respond=False)` runs in the task of the `inform` that called it, and is cancelled with it. `interrupt(played_ms, heard=, response=)` stops what the model is saying and cuts its context to what the person heard: the response the cut landed in — named by the `id` its `LiveStarted` carried, `None` without one — keeps `heard`, the first `played_ms` of its audio, and nothing the model said after it was heard; `submit_result` answers a tool call, and `respond=False` adds the result without asking for a reply, as `send_text` does. The text of `send_text` and `say` is your code addressing the model, whoever caused it; an adapter sends it on the vendor's operator channel where there is one. `events()` reports what happens as `LiveEvent`s; a method the vendor cannot do raises from the adapter, and the verb that needed it raises to its caller: an error of the library's own as it is, anything else as `ModelError`, `session: the live model failed: ...`, with what the adapter raised as its cause. On a duplex connection `say` must return a tag, and a `send_text(respond=True)` that returns `None` is one the adapter cannot pair with a response.
 
 ### `LiveEvent`
 
@@ -180,7 +180,7 @@ class SpeechModel(Protocol):
     def speak(self, text: str) -> AsyncIterator[AudioFrame]: ...
 ```
 
-A model that turns text into speech. The session calls `speak` once per sentence and plays the frames as they arrive; one that fails raises `ModelError` from the `say` that needed it.
+A model that turns text into speech. The session calls `speak` once per sentence and plays the frames as they arrive; one that fails, as it is called or as it yields, raises `ModelError` from the `say` that needed it, with what it raised as its cause.
 
 ## Session
 
@@ -224,6 +224,7 @@ Opens the live model with the definitions of `tools` and the instructions, start
 Raises `TransportError` when the session is closed, or closes while the live model opens; the connection it opened is then closed. A `ready` the transport fails closes the session with reason `failed`, and raises `TransportError` too.
 Raises `ConfigurationError` when the session has already started, `tools` is given without a live model, or `inform` names something that is not one of the tools.
 Raises `InputError` when a tool definition is not valid: `session: a tool definition is not valid`.
+Raises `ModelError` when the live model's `open` or the transcription model's `stream` raises: `session: the live model failed: ...`, `session: the transcription model failed: ...`, with what it raised as its cause; an error of the library's own passes as it is.
 
 ### `Session.say`
 
@@ -235,7 +236,7 @@ Speaks exactly `text` and returns, when the utterance ends, the `Said` with what
 Raises `InputError` when `text` is empty, a stream yields no text, or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
 Raises `TransportError` when the session is not started or is closed, or closes before the words are spoken.
-Raises `ModelError` when the speech model fails, the live model fails while the call waits, or a duplex connection returns no tag: `session: a say on a duplex model needs a tag`.
+Raises `ModelError` when the speech model fails, the connection's `say` raises (`session: the live model failed: ...`, with what it raised as its cause; an error of the library's own passes as it is), the live model fails while the call waits, or a duplex connection returns no tag: `session: a say on a duplex model needs a tag`.
 
 ### `Session.prompt`
 
@@ -247,7 +248,7 @@ Asks the live model to speak now, in its own words, and returns the `Said`: `tex
 Raises `InputError` when `text` is empty or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has no live model.
 Raises `TransportError` when the session is not started or is closed, or closes before the words are spoken.
-Raises `ModelError` when the live model fails while the call waits, or ends its response with no words.
+Raises `ModelError` when the connection's `send_text` raises (`session: the live model failed: ...`, with what it raised as its cause; an error of the library's own passes as it is), the live model fails while the call waits, or it ends its response with no words.
 
 ### `Session.inform`
 
@@ -259,6 +260,7 @@ Gives the live model `text` to know, without a reply, and reports `Informed`.
 Raises `InputError` when `text` is empty or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has no live model.
 Raises `TransportError` when the session is not started or is closed.
+Raises `ModelError` when the connection's `send_text` raises: `session: the live model failed: ...`, with what it raised as its cause; an error of the library's own passes as it is.
 
 ### `Session.interrupt`
 
@@ -1008,7 +1010,7 @@ class NotFoundError(SensesException): ...
 class ModelError(SensesException): ...
 ```
 
-A model failed: a live model reported `LiveFailed`, ended its events or broke the response contract, and the session closed; or a speech model failed during the `say` that needed it.
+A model failed: a live model reported `LiveFailed`, ended its events or broke the response contract, and the session closed; a speech model failed during the `say` that needed it; or an adapter raised, from a call a verb made, something other than the library's own error, and that verb raises it with what the adapter raised as its cause.
 
 ### `TransportError`
 

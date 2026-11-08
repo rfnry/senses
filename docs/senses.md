@@ -165,7 +165,9 @@ a gap in the voice brackets the speech. Silence inside a response is sent as any
 The person's final `LiveHeard` comes before the `LiveToolCall` it led to, so a tool reads what they
 said. `LiveFailed` means the connection is over; a vendor error that ends nothing is the adapter's
 to absorb. A connection implements every method; a vendor that cannot do one raises from its
-adapter, and the verb that needed it raises to its caller. `duplex` says how a model converses, not
+adapter, and the verb that needed it raises to its caller: an error of the library's own as it is,
+anything else as `ModelError`, `session: the live model failed: ...`, with what the adapter raised
+as its cause. `duplex` says how a model converses, not
 what it can do, so there is no capability matrix: every other limit raises from the adapter.
 
 A transcription stream reports `Transcript(text, final)` — the running words of the current
@@ -943,8 +945,14 @@ with an empty scope given to `Session`. `NotFoundError` when `look` finds no fra
 window. `ModelError` when a live model reports `LiveFailed` or breaks the contract — a response
 that ends before it starts on a turn-based connection, or starts before the last one is done — and the session closes; a
 `say` or `prompt` waiting on it raises it. A `say` on a duplex connection that returns no tag raises
-`ModelError` from that one `say`, and a response that ends a `prompt` with no words raises it from that one `prompt`; the session goes on. A speech model that fails raises `ModelError` from the
-one `say` that needed it; a tool definition that is not valid raises `InputError` from `start`. `TransportError`
+`ModelError` from that one `say`, and a response that ends a `prompt` with no words raises it from that one `prompt`; the session goes on. An adapter that raises from a call a verb made — the live
+model's `open` or the transcription model's `stream` in `start`, the connection's `say` for `say`,
+its `send_text` for `prompt` and `inform` — raises `ModelError` from that one verb, `session: the
+live model failed: ...` or `session: the transcription model failed: ...`, with what the adapter
+raised as its cause, unless that was an error of the library's own, which passes as it is; the
+session goes on. A speech model that fails raises
+`ModelError` from the one `say` that needed it, with what it raised as its cause; a tool definition
+that is not valid raises `InputError` from `start`. `TransportError`
 for a send the transport failed (the session closes as `failed`), a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after
 its hello has the frame dropped with a warning, never the session.

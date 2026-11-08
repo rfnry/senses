@@ -230,12 +230,15 @@ async def test_a_failed_start_in_async_with_closes_the_transport() -> None:
     link = Loopback(ANA, "acme")
     s = Session(link, live=Down())
     seen, recorder = recording(s)
-    with pytest.raises(ConnectionError, match="^vendor unreachable$"):
+    with pytest.raises(
+        ModelError, match="^session: the live model failed: vendor unreachable$"
+    ) as raised:
         async with s:
             pass
     await asyncio.wait_for(recorder, 1)
-    assert link.closed
+    assert link.closed and isinstance(raised.value.__cause__, ConnectionError)
     assert isinstance(seen[-1], Closed) and seen[-1].reason == "failed"
+    assert seen[-1].message == "session: the live model failed: vendor unreachable"
 
 
 class DownOnce(ScriptedLive):
@@ -253,7 +256,7 @@ class DownOnce(ScriptedLive):
 async def test_an_explicit_start_that_raises_can_be_retried() -> None:
     live, link = DownOnce(), Loopback(ANA, "acme")
     s = Session(link, live=live)
-    with pytest.raises(ConnectionError):
+    with pytest.raises(ModelError):
         await s.start()
     assert not link.closed
     await s.start()

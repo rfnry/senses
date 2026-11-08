@@ -13,6 +13,7 @@ from rfnry_senses.contracts import (
     LiveStarted,
     LiveToolCall,
 )
+from rfnry_senses.errors import ModelError
 from rfnry_senses.events import Event, Heard, Interrupted, Muted, Said, Silent, Speaking, ToolCalled
 from rfnry_senses.session import Session
 from rfnry_senses.tools import Tool, Tools
@@ -247,17 +248,21 @@ async def test_a_barge_in_does_not_wait_on_a_say_the_vendor_has_not_answered() -
     assert said_unanswered.heard == "" and said_unanswered.interrupted
 
 
-async def test_a_say_the_vendor_refuses_after_a_barge_in_raises_the_vendors_error() -> None:
+async def test_a_say_the_vendor_refuses_after_a_barge_in_raises_it_as_a_model_error() -> None:
     live, link = ScriptedLive(), Client(stops={1: 100})
     live.connection = connection = Unanswered()
     async with Session(link, live=live) as s:
         events = s.events()
         _, unanswered = await cut_in_while_a_say_is_unanswered(s, connection)
         await next_of(events, Heard)
-        connection.refusal = RuntimeError("the vendor refused")
+        refusal = RuntimeError("the vendor refused")
+        connection.refusal = refusal
         connection.answer.set()
-        with pytest.raises(RuntimeError, match="^the vendor refused$"):
+        with pytest.raises(
+            ModelError, match="^session: the live model failed: the vendor refused$"
+        ) as raised:
             await unanswered
+    assert raised.value.__cause__ is refusal
 
 
 class Client(Loopback):
