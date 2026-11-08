@@ -236,7 +236,7 @@ Speaks exactly `text` and returns, when the utterance ends, the `Said` with what
 Raises `InputError` when `text` is empty, a stream yields no text, or `triggered_by` does not fit.
 Raises `ConfigurationError` when the session has neither a live model nor a speech model.
 Raises `TransportError` when the session is not started or is closed, or closes before the words are spoken.
-Raises `ModelError` when the speech model fails, the connection's `say` raises (`session: the live model failed: ...`, with what it raised as its cause; an error of the library's own passes as it is), the live model fails while the call waits, or a duplex connection returns no tag: `session: a say on a duplex model needs a tag`.
+Raises `ModelError` when the speech model fails (with what it raised as its cause; an error of the library's own passes as it is), the connection's `say` raises (`session: the live model failed: ...`, with what it raised as its cause; an error of the library's own passes as it is), the live model fails while the call waits, or a duplex connection returns no tag: `session: a say on a duplex model needs a tag`.
 
 ### `Session.prompt`
 
@@ -1010,7 +1010,7 @@ class NotFoundError(SensesException): ...
 class ModelError(SensesException): ...
 ```
 
-A model failed: a live model reported `LiveFailed`, ended its events or broke the response contract, and the session closed; a speech model failed during the `say` that needed it; or an adapter raised, from a call a verb made, something other than the library's own error, and that verb raises it with what the adapter raised as its cause.
+A model failed: a live model reported `LiveFailed`, ended its events or broke the response contract, and the session closed; an adapter raised in the background, and the session closed with what it raised as the cause; a speech model failed during the `say` that needed it; or an adapter raised, from a call a verb made, something other than the library's own error, and that verb raises it with what the adapter raised as its cause.
 
 ### `TransportError`
 

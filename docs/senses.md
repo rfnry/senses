@@ -951,7 +951,11 @@ its `send_text` for `prompt` and `inform` — raises `ModelError` from that one 
 live model failed: ...` or `session: the transcription model failed: ...`, with what the adapter
 raised as its cause, unless that was an error of the library's own, which passes as it is; the
 session goes on. A speech model that fails raises
-`ModelError` from the one `say` that needed it, with what it raised as its cause; a tool definition
+`ModelError` from the one `say` that needed it, with what it raised as its cause, unless that was an
+error of the library's own, which passes as it is. An adapter that fails in the background, while
+the session reads its events or sends it audio or a tool's result, closes the session as `failed`,
+and the `ModelError` a waiting `say` or `prompt` raises carries what the adapter raised as its
+cause; a tool definition
 that is not valid raises `InputError` from `start`. `TransportError`
 for a send the transport failed (the session closes as `failed`), a verb on a session not yet started or closed, `start` on a closed one, for a `say` or `prompt` whose session closed before it was
 spoken, and for an offer `accept_offer` cannot answer. A client that sends a malformed frame after

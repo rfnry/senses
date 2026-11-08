@@ -595,7 +595,9 @@ class Session:
         if isinstance(exc, SensesException):
             await self._end("failed", str(exc), exc)
         else:
-            await self._end("failed", f"session: {exc}", ModelError(f"session: {exc}"))
+            failure = ModelError(f"session: {exc}")
+            failure.__cause__ = exc
+            await self._end("failed", f"session: {exc}", failure)
 
     def _tell(self, event: Event) -> None:
         for queue in list(self._subscribers):
@@ -1063,9 +1065,12 @@ class Session:
                         break
                     except Exception as exc:
                         logger.warning("session: the speech model failed: %s", exc)
-                        failure = ModelError(f"session: the speech model failed: {exc}")
-                        failure.__cause__ = exc
-                        await self._abandon(u, failure)
+                        if isinstance(exc, SensesException):
+                            await self._abandon(u, exc)
+                        else:
+                            failure = ModelError(f"session: the speech model failed: {exc}")
+                            failure.__cause__ = exc
+                            await self._abandon(u, failure)
                         return
                     if self._utterance is not u:
                         return

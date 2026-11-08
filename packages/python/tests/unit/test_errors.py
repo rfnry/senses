@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
@@ -170,5 +171,46 @@ async def test_a_speech_model_that_fails_raises_model_error_from_say(
         with pytest.raises(
             ModelError, match="^session: the speech model failed: the vendor hung up$"
         ) as raised:
+            await s.say("Your table is ready.", triggered_by=HOST)
+    assert raised.value.__cause__ is refusal
+
+
+@pytest.mark.parametrize("speech", [Voiceless, Breaking])
+async def test_a_library_error_a_speech_model_raises_reaches_say_unchanged(
+    speech: type[Voiceless | Breaking],
+) -> None:
+    refusal = InputError("speech: the voice is not known")
+    s = Session(
+        Loopback(ANA, "acme"), transcription=ScriptedTranscription(), speech=speech(refusal)
+    )
+    async with s:
+        with pytest.raises(InputError) as raised:
+            await s.say("Your table is ready.", triggered_by=HOST)
+    assert raised.value is refusal
+
+
+class Dropping(ScriptedConnection):
+    def __init__(self, refusal: Exception) -> None:
+        super().__init__()
+        self.refusal = refusal
+        self.asked = asyncio.Event()
+
+    async def say(self, text: str) -> str | None:
+        self.asked.set()
+        return await super().say(text)
+
+    async def events(self) -> AsyncIterator[Any]:
+        await self.asked.wait()
+        raise self.refusal
+        yield
+
+
+async def test_a_live_model_that_fails_in_the_background_ends_the_say_with_its_cause() -> None:
+    refusal = ConnectionError("the vendor hung up")
+    live = ScriptedLive()
+    live.connection = Dropping(refusal)
+    s = Session(Loopback(ANA, "acme"), live=live)
+    async with s:
+        with pytest.raises(ModelError, match="^session: the vendor hung up$") as raised:
             await s.say("Your table is ready.", triggered_by=HOST)
     assert raised.value.__cause__ is refusal
