@@ -2,7 +2,7 @@
 
 ## Description
 
-Vision and speech interfaces for human-machine interaction.
+Vision and voice interfaces for human-machine interaction.
 
 It is a library, not a framework. The consumer brings the models, authentication, the signalling endpoint and any record they want to keep. The library stores nothing, never sees a credential, and never writes to disk. Tenancy is by construction: every session names its scope and every event carries it.
 

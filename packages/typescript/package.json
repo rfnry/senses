@@ -1,7 +1,7 @@
 {
   "name": "@rfnry/senses",
   "version": "0.1.6",
-  "description": "Vision and speech interfaces for human-machine interaction",
+  "description": "Vision and voice interfaces for human-machine interaction",
   "license": "MIT",
   "repository": {
     "type": "git",

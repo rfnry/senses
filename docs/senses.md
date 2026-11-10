@@ -1,6 +1,6 @@
 # rfnry-senses
 
-rfnry-senses provides vision and speech interfaces for human-machine interaction.
+rfnry-senses provides vision and voice interfaces for human-machine interaction.
 
 It is the microphone, camera and voice between a person and a model — a model that hears and speaks
 natively, or transcription and speech models around any text model — and only that: it never decides
